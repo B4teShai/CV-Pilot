@@ -90,6 +90,40 @@ finished run), an unknown run, a snapshot whose digest does not match, or an exi
 of range). `--max-memory-mb` caps the address space on Linux. Optional `--checkpoint-sha256` and
 `--git-commit` are stored with the snapshot. Values are fractions in [0, 1].
 
+## GitHub Action
+
+`action.yml` is a composite action around `cvpilot gate`. It expects `cvpilot` to be installed in
+the job's Python and the project store to be on the runner (a checked-out or mounted copy).
+Inputs reach the script only through `env:` and are used only inside double quotes, so a branch
+name or a pull request title can not become shell code; the action uses no third-party action.
+Give the job read-only permissions:
+
+```yaml
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./
+        with:
+          run-id: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+          baseline: tag:prod
+          project: demo
+          store-dir: ci-store
+          max-drop: |
+            mAP50_95=0.5
+          slice-max-drop: |
+            camera=*:1.5
+          min-images: "30"
+```
+
+`tests/unit/test_action.py` parses `action.yml`, every workflow and the example above and
+rejects any `${{ ... }}` expression inside a `run:` script, an unpinned third-party action,
+write permissions, unquoted variables, and runs the real script with hostile input values.
+
 ## Planned usage
 
 Nothing in this section runs yet. The examples fix the public interface that the planned

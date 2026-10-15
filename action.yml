@@ -1,0 +1,100 @@
+name: CV-Pilot gate
+description: >-
+  Fail the job when a run regresses against a pinned baseline. Runs "cvpilot gate" on a project
+  store that is already on the runner; cvpilot must be installed in the job's Python first.
+inputs:
+  run-id:
+    description: Run id (ULID) of the candidate run.
+    required: true
+  baseline:
+    description: "tag:NAME of a pinned baseline, or a baseline run id."
+    required: true
+  project:
+    description: Project name; defaults to CVPILOT_PROJECT of the job.
+    required: false
+  store-dir:
+    description: Store root; defaults to CVPILOT_STORE_DIR of the job or ~/.cvpilot.
+    required: false
+  eval-set:
+    description: Eval set hash or prefix (8 or more hex characters), when the run has several.
+    required: false
+  max-drop:
+    description: "Headline limits in points on the 0..100 scale, one NAME=POINTS per line."
+    required: false
+  per-class-max-drop:
+    description: "Per-class limits in points, one NAME=POINTS per line."
+    required: false
+  slice-max-drop:
+    description: "Slice limits in points, one KEY=VALUE:POINTS or KEY=*:POINTS per line."
+    required: false
+  min-images:
+    description: Fewest images in the evaluation set and in a gated slice.
+    required: false
+    default: "30"
+  skip-small-slices:
+    description: 'Set to "true" to list slices below min-images as skipped instead of failing.'
+    required: false
+    default: "false"
+  report:
+    description: Path of the static HTML report to write.
+    required: false
+  report-json:
+    description: Path of the JSON report to write.
+    required: false
+outputs:
+  exit-code:
+    description: Exit code of cvpilot gate (0 passed, 1 regression or unverifiable, 2 usage).
+    value: ${{ steps.gate.outputs.exit_code }}
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        GATE_RUN_ID: ${{ inputs.run-id }}
+        GATE_BASELINE: ${{ inputs.baseline }}
+        GATE_PROJECT: ${{ inputs.project }}
+        GATE_STORE_DIR: ${{ inputs.store-dir }}
+        GATE_EVAL_SET: ${{ inputs.eval-set }}
+        GATE_MAX_DROP: ${{ inputs.max-drop }}
+        GATE_PER_CLASS_MAX_DROP: ${{ inputs.per-class-max-drop }}
+        GATE_SLICE_MAX_DROP: ${{ inputs.slice-max-drop }}
+        GATE_MIN_IMAGES: ${{ inputs.min-images }}
+        GATE_SKIP_SMALL_SLICES: ${{ inputs.skip-small-slices }}
+        GATE_REPORT: ${{ inputs.report }}
+        GATE_REPORT_JSON: ${{ inputs.report-json }}
+      run: |
+        # Every input arrives as an environment variable and is only ever used inside double
+        # quotes, as a single argv entry; nothing here is interpreted by the shell.
+        set -uo pipefail
+        out="${GITHUB_OUTPUT:-/dev/null}"
+        if ! command -v cvpilot >/dev/null 2>&1; then
+          echo "cvpilot is not installed in this job; install it before this step" >&2
+          echo "exit_code=2" >> "$out"
+          exit 2
+        fi
+        case "$GATE_SKIP_SMALL_SLICES" in
+          true|false) ;;
+          *) echo "skip-small-slices must be true or false" >&2; echo "exit_code=2" >> "$out"; exit 2 ;;
+        esac
+        args=(gate "--baseline=$GATE_BASELINE")
+        if [ -n "$GATE_PROJECT" ]; then args+=("--project=$GATE_PROJECT"); fi
+        if [ -n "$GATE_EVAL_SET" ]; then args+=("--eval-set=$GATE_EVAL_SET"); fi
+        add_lines() {
+          local line
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then args+=("$1=$line"); fi
+          done <<< "$2"
+        }
+        add_lines --max-drop "$GATE_MAX_DROP"
+        add_lines --per-class-max-drop "$GATE_PER_CLASS_MAX_DROP"
+        add_lines --slice-max-drop "$GATE_SLICE_MAX_DROP"
+        args+=("--min-images=$GATE_MIN_IMAGES")
+        if [ "$GATE_SKIP_SMALL_SLICES" = "true" ]; then args+=(--skip-small-slices); fi
+        if [ -n "$GATE_REPORT" ]; then args+=("--report=$GATE_REPORT"); fi
+        if [ -n "$GATE_REPORT_JSON" ]; then args+=("--report-json=$GATE_REPORT_JSON"); fi
+        if [ -n "$GATE_STORE_DIR" ]; then export CVPILOT_STORE_DIR="$GATE_STORE_DIR"; fi
+        cvpilot "${args[@]}" -- "$GATE_RUN_ID"
+        code=$?
+        echo "exit_code=$code" >> "$out"
+        exit "$code"

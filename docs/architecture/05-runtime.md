@@ -9,7 +9,7 @@
 | Training process (built: `api.py`, `runs/`, store and capture in-process; planned: hooks, `eval/`, `ckpt/`, forwarders, alerts) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training and the hook callbacks; `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; signal handlers for SIGTERM/SIGUSR1 set a flag only. No subprocess except `git` once at `init`. |
 | `cvpilot` CLI (built: `--version`, `doctor`, `runs`, `repro`) | one command per invocation, single-threaded | none; planned `compare` uses a `ThreadPoolExecutor` of `min(4, cpu_count)` for bootstrap resamples |
 | Server container (planned) | Uvicorn with one FastAPI worker per CPU, websocket broadcaster, alert delivery worker | each worker is a process; alert delivery is an asyncio task; SQLite requires one worker, Postgres allows several |
-| CI runner (planned) | `cvpilot gate` as a step; exit code gates the job | same as CLI |
+| CI runner (built) | `cvpilot gate` as a step, or the composite action `action.yml` that wraps it; the exit code gates the job | same as CLI; the action starts one `bash` |
 
 The hook never blocks training on I/O: `log()` appends to an in-memory buffer bounded at
 10 000 points; the store flush happens on the caller's thread when the buffer is full or 2 s
@@ -23,7 +23,7 @@ not raised; forwarders run on their own daemon threads behind bounded queues (`r
 |---|---|---|---|
 | Developer machine | `cvpilot` CLI (built), Python API in notebooks (planned) | local run store, checkpoint dirs, optional server over HTTPS | local run store, reports |
 | GPU training machine (spot, SLURM node, workstation) | training process with hooks, sync thread, NVML sampler, checkpoint manager | dataset, DataCopilot `manifest.json`, NVML, preemption metadata endpoint | local run store, `/checkpoint`, object storage (via fsspec), tracker, server (via sync), channels (client-side alerts) |
-| CI runner | `cvpilot gate`, `cvpilot compare --report` | project store (checked-out copy or mounted bucket) or server snapshots over HTTPS | report artifact uploaded by the CI job |
+| CI runner | `cvpilot gate`, `cvpilot compare --report`, or the composite action `action.yml` (built) | project store (checked-out copy or mounted bucket) or server snapshots over HTTPS | report artifact uploaded by the CI job |
 | Object storage (S3, GCS, any fsspec backend) | nothing | — | checkpoint mirror (`<remote>/<run_id>/{last,best}/...`), exported artifacts |
 | Server host (optional) | `cvpilot-server` Docker image behind a TLS reverse proxy; SQLite file volume or Postgres | ingest from sync clients, snapshots for CI and browsers | server DB, alert deliveries, share links |
 | Notification channels | Telegram Bot API, Slack, webhook endpoints, SMTP relay | — | — |

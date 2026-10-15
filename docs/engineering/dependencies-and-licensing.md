@@ -46,5 +46,6 @@ bundled third-party material lives in `NOTICE`.
 
 - Lockfile committed; CI installs with `uv sync --locked`.
 - Direct dependencies carry a lower bound; upper bounds only when a known break exists.
-- GitHub Actions are pinned to a major version at minimum; pinning to a SHA is preferred
-  before the first public release.
+- GitHub Actions are pinned to a full commit SHA (with the tag in a trailing comment); a test
+  (`tests/unit/test_action.py`) fails on any tag-pinned third-party action, any `${{ ... }}`
+  expression inside a `run:` script and any write permission in the shipped workflows.

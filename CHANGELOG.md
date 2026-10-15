@@ -7,6 +7,12 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- GitHub Action: `action.yml`, a composite action around `cvpilot gate`. Inputs reach the script only
+  through `env:` and are quoted, options are passed as `--name=value` and the run id after `--`; no
+  third-party action. `tests/unit/test_action.py` parses the YAML, rejects any `${{ ... }}` in a
+  `run:` block, unpinned actions, write permissions and unquoted variables, and runs the real script
+  with hostile inputs. The repository workflow now pins its actions to full SHAs. `pyyaml` joins
+  the dev dependencies.
 - Hooks: `cvpilot.autolog(target, project=..., task=...)` attaches a Lightning logger and callback
   (`cvpilot[lightning]`) or Ultralytics callbacks (`cvpilot[ultralytics]`, AGPL-3.0: the notice is
   in the adapter, in the `hook_attached` event and in the docs; the package is never imported by
