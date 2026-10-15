@@ -91,8 +91,13 @@ Option C, implemented by `ckpt/` with the following rules.
    as a new run with `parent_run_id` set to the preempted run and continues its step
    timeline.
 7. **Framework adapters** resolve resume paths through the manager: `resume_path()` returns
-   the latest *verified* `last` file or `None`, which Lightning receives as `ckpt_path` and
-   Ultralytics as the `resume=` target. Adapters never pass the string `"last"`.
+   the latest *verified* `last` file or `None`. The adapters pass it on (Lightning `ckpt_path`,
+   Ultralytics `resume=` target) only for a `pt` checkpoint that this process verified: never
+   the string `"last"`, an arbitrary path or a safetensors file, which is the manager's own
+   format. A `pt` file skipped by the strict scan is reported (`resume_point_skipped`,
+   `resume_point_unavailable`), not silently dropped. Whether a particular framework file
+   scans clean is a property of that file: Ultralytics `last.pt` pickles the model object and
+   does not.
 8. **Save overhead budget.** Hashing and manifest writing add at most 5 % to the wall time of
    `torch.save` for the same state on local SSD; measured by `benchmarks/ckpt_save.py`.
 

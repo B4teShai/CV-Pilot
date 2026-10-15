@@ -16,7 +16,6 @@ from __future__ import annotations
 import atexit
 import importlib
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 from cvpilot.core.errors import CvpilotError, MissingExtraError
@@ -30,7 +29,7 @@ PACKAGES = ("lightning." + "py" + "to" + "rch", "py" + "to" + "rch_lightning")
 EXTRA = "lightning"
 
 
-def resume_arguments(path: str | Path | None) -> dict[str, str]:
+def resume_arguments(path: Any) -> dict[str, str]:
     """Keyword arguments for ``Trainer.fit``/``validate``/``test`` that resume from a verified
     checkpoint: ``{"ckpt_path": <absolute path>}``, or ``{}`` when there is nothing to resume.
     Use with ``cvpilot.resume_path``; the string ``"last"`` is refused.

@@ -511,7 +511,7 @@ class Hook(Protocol):
 | `hooks/hf_trainer.py` | `TrainerCallback`: `on_log`, `on_evaluate`, `on_save` | scalars, eval, checkpoints | planned |
 | `hooks/mmengine.py` | MMEngine hook plus `VisBackend` | scalars, COCO metrics, checkpoints | planned |
 | `hooks/rfdetr.py`, `hooks/torch_loop.py` | context manager plus explicit `log_eval` | explicit | planned |
-| `hooks/ultralytics.py` (`cvpilot[ultralytics]`, AGPL-3.0 notice) | `add_callback("on_fit_epoch_end" / "on_train_end")` on the model; reads `trainer.metrics`, the loss items and `validator.metrics.box.maps` with `validator.names` | losses, mAP, per-class AP (`val/AP/<class>`), step = epoch | built; `resume_arguments(path)` gives the verified `resume=` target (`hooks/lightning.py` has the same for `ckpt_path`); the confusion matrix and automatic adoption of framework checkpoints are planned |
+| `hooks/ultralytics.py` (`cvpilot[ultralytics]`, AGPL-3.0 notice) | `add_callback("on_fit_epoch_end" / "on_train_end")` on the model; reads `trainer.metrics`, the loss items and `validator.metrics.box.maps` with `validator.names` | losses, mAP, per-class AP (`val/AP/<class>`), step = epoch | built; `resume_arguments(point)` gives the `resume=` target for a `pt` file `resume_path` verified here (`hooks/lightning.py` has the same for `ckpt_path`; safetensors files and unverified paths are refused); the confusion matrix and automatic adoption of framework checkpoints are planned |
 
 `api.autolog(target, project=..., forward_to=..., task=...)` finds the hook whose `matches`
 accepts the object (from the `hooks` registry, which imports no framework), checks its

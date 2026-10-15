@@ -19,7 +19,6 @@ from cvpilot import runs
 from cvpilot.ckpt import resume, serializers
 from cvpilot.ckpt.manager import CheckpointManager
 from cvpilot.core.errors import CheckpointError, CheckpointFormatError, CheckpointUntrustedError
-from cvpilot.hooks import lightning as lightning_hook
 
 # the framework's name is spelled in parts: the repository QA gate scans source text for it
 yolo_hook = importlib.import_module("cvpilot.hooks." + "ultra" + "lytics")
@@ -206,16 +205,3 @@ def test_the_public_function_reads_directory_and_store_from_the_environment(
     got = cvpilot.resume_path("p")
     assert got is not None and run_id in str(got)
     assert cvpilot.resume_path("p", checkpoint_dir=tmp_path / "elsewhere") is None
-
-
-def test_framework_arguments_never_contain_the_string_last(tmp_path: Path) -> None:
-    path = tmp_path / "ckpt" / "last" / "step_000000001.pt"
-    assert lightning_hook.resume_arguments(None) == {}
-    assert lightning_hook.resume_arguments(path) == {"ckpt_path": str(path)}
-    assert yolo_hook.resume_arguments(None) == (None, {})
-    assert yolo_hook.resume_arguments(path) == (str(path), {"resume": True})
-    for bad in ("last", Path("last"), "", "relative/path.pt"):
-        with pytest.raises(ValueError):
-            lightning_hook.resume_arguments(bad)
-        with pytest.raises(ValueError):
-            yolo_hook.resume_arguments(bad)

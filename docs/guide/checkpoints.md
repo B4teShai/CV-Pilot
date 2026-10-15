@@ -156,9 +156,18 @@ training.
 `CheckpointManager.adopt(path, step)` brings a file a framework wrote (Lightning's `last.ckpt`, a
 YOLO `last.pt`) under verification, as a `pt` checkpoint. That format needs an explicit opt-in
 (`allow_pt_format=True` or `CVPILOT_CKPT_ALLOW_PT=1`) and a recent framework: see
-[Trust model](trust.md). `cvpilot.hooks.lightning.resume_arguments(path)` returns
-`{"ckpt_path": ...}` and the YOLO hook's `resume_arguments(path)` returns the weights path and
-`{"resume": True}`; both refuse relative paths and the string `"last"`.
+[Trust model](trust.md). `cvpilot.hooks.lightning.resume_arguments(point)` returns
+`{"ckpt_path": ...}` and the YOLO hook's `resume_arguments(point)` returns the weights path and
+`{"resume": True}`. They accept only a `pt` checkpoint that `cvpilot.resume_path` (or
+`find_resume_point`) returned in this process, as the path or the `ResumePoint`: never `"last"`, a
+relative name, an arbitrary path or a safetensors file (the default format is CheckpointManager's
+own and no framework can resume from it; restore it with `CheckpointManager.restore` into your
+model). Limits, stated plainly: the strict archive scan accepts plain state dictionaries, so a
+Lightning `last.ckpt` is adopted only if its archive scans clean, and an Ultralytics `last.pt`
+(which pickles the model object) is refused with `unsafe_archive`; when a `pt` file is skipped,
+`resume_point_skipped` and `resume_point_unavailable` say why instead of returning a bare `None`.
+The real-library behaviour is checked by `pytest -m real_libs`, which needs those libraries
+installed and is not part of the default run.
 
 ## Command line
 

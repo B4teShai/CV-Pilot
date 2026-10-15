@@ -22,6 +22,7 @@ from typing import Literal, overload
 from cvpilot import runs
 from cvpilot.ckpt import auth, serializers
 from cvpilot.ckpt.directory import AdmitContext, RunCheckpoints, Skipped, gate_failure
+from cvpilot.core import verified as verified_files
 from cvpilot.core.errors import CheckpointCorruptError, CheckpointUntrustedError
 from cvpilot.core.schema import (
     CheckpointKind,
@@ -167,6 +168,7 @@ def find_resume_point(
                 point = _first_usable(found, owner.run_id, leaf, kind, root, ctx)
                 rejected += found.skipped
                 if point is not None:
+                    verified_files.remember(point.path, point.manifest.format)
                     log.info(
                         "resume_point_selected", run_id=point.run_id,
                         checkpoint_run_id=point.checkpoint_run_id, step=point.manifest.step,
@@ -188,6 +190,11 @@ def find_resume_point(
     failure = gate_failure(rejected, policy)
     if failure is not None:
         raise CheckpointUntrustedError(failure[1], reason=failure[0])
+    if rejected:  # candidates existed and none could be used: not a fresh start
+        log.warning(
+            "resume_point_unavailable", kind=kind, skipped=len(rejected),
+            reasons=sorted({s.reason for s in rejected}),
+        )  # fmt: skip
     return None
 
 
@@ -206,6 +213,10 @@ def _first_usable(
                 _check_pt(found, manifest)
             except CheckpointCorruptError as exc:
                 found.skipped.append(Skipped(manifest.step, kind, manifest.path, exc.reason))
+                get_logger("cvpilot.ckpt").warning(
+                    "resume_point_skipped", checkpoint_run_id=owner_id, step=manifest.step,
+                    kind=kind, reason=exc.reason,
+                )  # fmt: skip
                 continue
         path = Path(root).expanduser().resolve() / owner_id / manifest.path
         inherited = owner_id != leaf.run_id

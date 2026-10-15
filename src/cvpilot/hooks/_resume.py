@@ -1,22 +1,17 @@
-"""Validation shared by the hooks' resume helpers: only an absolute path of a file that was
-verified elsewhere, never the string ``"last"`` that frameworks would resolve by name."""
+"""Validation shared by the hooks' resume helpers (see ``cvpilot.core.verified``)."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
+
+from cvpilot.core.verified import framework_file
 
 
-def verified_path_text(path: str | Path) -> str:
-    """``str(path)`` for an absolute path; anything else (``"last"``, a relative name, an empty
-    string) is refused.
+def verified_path_text(path: Any) -> str:
+    """``str(path)`` for a ``pt`` checkpoint that ``cvpilot.resume_path`` returned in this process
+    (the path or the ``ResumePoint``).
 
     Raises:
-        ValueError: the value is not an absolute path or names a checkpoint by keyword.
+        ValueError: the value is a name, a relative or unverified path, or a safetensors file.
     """
-    text = str(path)
-    candidate = Path(text)
-    if not text or not candidate.is_absolute() or candidate.name in ("last", ""):
-        raise ValueError(
-            "pass the absolute path returned by cvpilot.resume_path, never a name like 'last'"
-        )
-    return text
+    return str(framework_file(path))

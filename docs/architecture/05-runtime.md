@@ -98,7 +98,7 @@ fields are never used for secrets.
 | `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker (`init(forward_to=["mlflow"])`) | `mlflow-skinny`, `wandb`, `trackio` | none |
 | `cvpilot[alerts]` | Telegram, Slack and generic webhook channels (SMTP needs no extra) | `httpx` | none |
 | `cvpilot[server]` | `cvpilot server`, websocket live view, htmx UI, share links | `fastapi`, `uvicorn[standard]`, `websockets`, `sqlalchemy`, `asyncpg` (Postgres optional) | 1 vCPU, 512 MB RAM for SQLite mode |
-| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP; `resume_arguments(path)` for a verified `resume=` target (confusion capture is planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
+| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP; `resume_arguments(point)` for the `resume=` target of a verified `pt` file (confusion capture is planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
 
 Notice for `cvpilot[ultralytics]`: `ultralytics` is AGPL-3.0. It is imported only inside
 `hooks/ultralytics.py`, and that module does not import it at all: the hook receives the model

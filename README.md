@@ -136,7 +136,9 @@ remote and restores the best step through the same checks as any other checkpoin
 
 A save is atomic and verified; a restore skips (and counts) anything truncated, corrupt, forged,
 replaced or symlinked and never loads it; `cvpilot.resume_path("fridge-sku")` returns the newest
-file that verifies. The default policy trusts the checkpoint directory's own digests, which is
+file that verifies. The files `CheckpointManager` writes are its own safetensors format: the
+Lightning and Ultralytics `resume_arguments` helpers take only a verified framework `pt` file (see
+the checkpoint guide for what a real Lightning or Ultralytics file allows). The default policy trusts the checkpoint directory's own digests, which is
 right when only you can write it. **For a directory that is shared, restored from a bucket or
 writable by others, set `CVPILOT_CKPT_KEY` and `CVPILOT_CKPT_REQUIRE_TRUST=authenticated`**
 (see [docs/guide/trust.md](docs/guide/trust.md)). Walkthrough with a preemption, a damaged

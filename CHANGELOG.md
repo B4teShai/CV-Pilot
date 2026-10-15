@@ -16,6 +16,15 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Fixed
 
+- The Lightning and Ultralytics `resume_arguments` helpers accepted any absolute path. They now
+  accept only a `pt` checkpoint that `resume_path` returned in this process (as a path or a
+  `ResumePoint`) and refuse safetensors files with an explanation, since no framework can resume
+  from CheckpointManager's own format. `find_resume_point` logs `resume_point_skipped` and
+  `resume_point_unavailable` (with the reason, for example `unsafe_archive`) instead of returning
+  a bare `None`. Real-library smoke tests (`pytest -m real_libs`) cover the adoption of plain and
+  pickled-model files and of a Lightning `last.ckpt`; the README, guide, ADR-0006 and component
+  docs no longer claim that every framework file can be resumed from.
+
 - Saving and restoring share one set of bounds: an integer of 20 digits below 2**64, a state of
   more than 100 000 nodes, an oversized key or a nesting the restore refuses is now refused at save
   with a clear error instead of being saved and then failing to load. A randomised save-then-load

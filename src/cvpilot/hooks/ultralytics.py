@@ -21,7 +21,6 @@ callbacks never raise into the trainer (see ``cvpilot.hooks``).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 from cvpilot.hooks._guard import MAX_POINTS_PER_CALL, Guard, metric_key, metric_value, step_value
@@ -31,7 +30,7 @@ from cvpilot.hooks.lightning import HookAttachError
 from cvpilot.logging import get_logger
 
 
-def resume_arguments(path: str | Path | None) -> tuple[str | None, dict[str, Any]]:
+def resume_arguments(path: Any) -> tuple[str | None, dict[str, Any]]:
     """``(weights, train_kwargs)`` to resume from a verified checkpoint: construct the model
     from ``weights`` and call ``train(**train_kwargs)`` (``resume=True``). ``(None, {})`` when
     there is nothing to resume. Use with ``cvpilot.resume_path``; ``"last"`` is refused.
