@@ -100,3 +100,23 @@ def forge_pointer(rc: RunCheckpoints, manifest_bytes: bytes, step: int, kind: st
     target = rc.path / ("LATEST" if kind == "last" else "BEST")
     make_writable(target)
     target.write_text(json.dumps(pointer))
+
+
+def run_meta(project: str = "p") -> tuple[Any, Any]:
+    """``(RunMeta, Repro)`` of a fresh running detection run (dataset hash ``merkle:ccc...``)."""
+    from datetime import datetime, timezone
+
+    from cvpilot.core.schema import SCHEMA_VERSION, Repro, RunMeta
+
+    rid = generate_ulid()
+    meta = RunMeta(
+        run_id=rid, project=project, name="n", status="running", task="detection",
+        framework="python==3.12.1", host="h", started_at=datetime.now(timezone.utc),
+        schema_version=SCHEMA_VERSION,
+    )  # fmt: skip
+    repro = Repro(
+        run_id=rid, git_dirty=False, packages_lock_sha256="c" * 64, python_version="3.12",
+        gpu_names=[], dataset_uri="", dataset_hash="merkle:" + "c" * 64, config={},
+        command_line="t.py",
+    )  # fmt: skip
+    return meta, repro
