@@ -83,10 +83,17 @@ class _Session:
     """Opens one ``RunCheckpoints`` per run with the key, policy and store anchor in force."""
 
     def __init__(
-        self, ctx: typer.Context, root: Path, project: str | None, trust: TrustOption | None
+        self,
+        ctx: typer.Context,
+        root: Path,
+        project: str | None,
+        trust: TrustOption | None,
+        min_step: int | None = None,
+        accept_rollback_to: int | None = None,
     ) -> None:
         from cvpilot import runs
         from cvpilot.ckpt import auth
+        from cvpilot.ckpt.directory import AdmitContext
 
         settings: Settings = ctx.obj
         self.root = root
@@ -100,6 +107,10 @@ class _Session:
             get_logger("cvpilot.cli").warning(
                 "checkpoint_trust_downgrade_ignored", requested=asked, effective=self.policy
             )
+        floors = [m for m in (min_step, settings.ckpt_min_step) if m is not None]
+        self.admit = AdmitContext(
+            min_step=max(floors) if floors else None, accept_rollback_to=accept_rollback_to
+        )  # both floors bind; accepting a rollback cannot lower the operator's
         name = project or settings.project
         self._opened = runs.open_anchor(name, settings.store_dir) if name else None
         self.anchor = self._opened[0] if self._opened else None
@@ -165,9 +176,11 @@ def _collect(
     trust: TrustOption | None,
     *,
     check_data: bool,
+    min_step: int | None = None,
+    accept_rollback_to: int | None = None,
 ) -> list[dict[str, Any]]:
     root = _root(directory)
-    session = _Session(ctx, root, project, trust)
+    session = _Session(ctx, root, project, trust, min_step, accept_rollback_to)
     try:
         rows: list[dict[str, Any]] = []
         try:
@@ -180,7 +193,7 @@ def _collect(
             found = session.open(run_id)
             for one in _kinds(kind):
                 try:
-                    entries = found.inspect(one, check_data=check_data)
+                    entries = found.inspect(one, check_data=check_data, ctx=session.admit)
                 except CheckpointError as exc:
                     # a hostile or unreadable entry (a symlink or a file named like a run, a
                     # directory nobody may read) is a corrupt row; the rest is still examined
@@ -224,9 +237,30 @@ def ckpt_verify(
     kind: KindOpt = KindOption.all,
     project: ProjectOpt = None,
     require_trust: TrustOpt = None,
+    expect_min_step: Annotated[
+        int | None,
+        typer.Option(
+            "--expect-min-step",
+            min=0,
+            help="A floor you know from elsewhere: older checkpoints fail (rolled_back).",
+        ),
+    ] = None,
+    accept_rollback_to: Annotated[
+        int | None,
+        typer.Option(
+            "--accept-rollback-to",
+            min=0,
+            help="Accept a rollback from the run store or pointer down to this step, "
+            "on purpose (logged); it never lowers --expect-min-step or CVPILOT_CKPT_MIN_STEP.",
+        ),
+    ] = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Verify every checkpoint: size, structure, SHA-256, chain and the trust policy.
+
+    The newest step known to have existed (run store, a tag-checked pointer,
+    ``CVPILOT_CKPT_MIN_STEP``, ``--expect-min-step``) is a floor: a checkpoint older than it
+    is reported as ``rolled_back`` unless you accept that with ``--accept-rollback-to``.
 
     Prints one line per checkpoint on stdout. Exit 0 when everything verifies; exit 1 when a
     checkpoint is corrupt, truncated, forged or untrusted, or when nothing verifies at all;
@@ -234,7 +268,10 @@ def ckpt_verify(
     """
     from cvpilot.ckpt.directory import TRUST_REASONS
 
-    rows = _collect(ctx, directory, run, kind, project, require_trust, check_data=True)
+    rows = _collect(
+        ctx, directory, run, kind, project, require_trust, check_data=True,
+        min_step=expect_min_step, accept_rollback_to=accept_rollback_to,
+    )  # fmt: skip
     log = get_logger("cvpilot.cli")
     bad = 0
     for row in rows:

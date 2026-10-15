@@ -241,3 +241,54 @@ def test_an_unreadable_run_directory_is_a_row_not_a_traceback(
         assert res.code == 1 and "Traceback" not in res.err
     finally:
         path.chmod(0o755)
+
+
+def _ids(res: CliResult) -> list[tuple[int, str, str | None]]:
+    return [(r["step"], r["status"], r["reason"]) for r in json.loads(res.out)]
+
+
+def test_verify_can_demand_a_minimum_step(invoke: Invoke, seeded: str, tmp_path: Path) -> None:
+    base = ("ckpt", "verify", str(tmp_path / "ckpt"), "--json")
+    assert invoke(*base, "--expect-min-step", "3").code == 0
+    res = invoke(*base, "--expect-min-step", "5")
+    assert res.code == 1
+    assert {s for _, st, s in _ids(res) if st == "corrupt"} == {"rolled_back"}
+
+
+def test_the_operator_floor_cannot_be_accepted_away_on_the_command_line(
+    invoke: Invoke, seeded: str, tmp_path: Path
+) -> None:
+    res = invoke(
+        "ckpt", "verify", str(tmp_path / "ckpt"), "--json", "--expect-min-step", "5",
+        "--accept-rollback-to", "1",
+    )  # fmt: skip
+    assert res.code == 1
+
+
+def test_the_environment_floor_applies_to_verify(
+    invoke: Invoke, seeded: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CVPILOT_CKPT_MIN_STEP", "5")
+    assert invoke("ckpt", "verify", str(tmp_path / "ckpt"), "--json").code == 1
+    monkeypatch.setenv("CVPILOT_CKPT_MIN_STEP", "3")
+    assert invoke("ckpt", "verify", str(tmp_path / "ckpt"), "--json").code == 0
+
+
+def test_a_store_derived_rollback_can_be_accepted_explicitly_and_is_logged(
+    invoke: Invoke, seeded: str, tmp_path: Path, store_root: Path
+) -> None:
+    import os
+
+    folder = tmp_path / "ckpt" / seeded / "last"
+    for step in (3, 2):
+        for suffix in (".manifest.json", ".safetensors"):
+            os.unlink(folder / f"step_{step:09d}{suffix}")
+    base = (
+        "ckpt", "verify", str(tmp_path / "ckpt"), "--project", "proj", "--json",
+        "--require-trust", "anchored",
+    )  # fmt: skip
+    refused = invoke(*base, "--kind", "last")
+    assert refused.code == 1 and {s for _, _, s in _ids(refused)} == {"rolled_back"}
+    accepted = invoke(*base, "--kind", "last", "--accept-rollback-to", "1")
+    assert accepted.code == 0, accepted.err
+    assert accepted.event("checkpoint_rollback_accepted")

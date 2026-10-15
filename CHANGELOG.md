@@ -13,6 +13,10 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   other checkpoint. A fresh-node test runs across real processes. The README restart recipe is
   executed by the test suite; `recover_run`, `list_runs` and `get_run_view` now honour
   `CVPILOT_STORE_DIR` like `init` does. Remote listings are bounded.
+- `cvpilot ckpt verify --expect-min-step N` and `--accept-rollback-to N`; `CVPILOT_CKPT_MIN_STEP`
+  applies to `verify` as well. The trust guide now separates forgery (stopped by a key) from
+  rollback and deletion (needs a floor from the run store, versioned storage or a step you
+  supply) and says what a fresh machine with only a key cannot detect.
 
 ### Fixed
 

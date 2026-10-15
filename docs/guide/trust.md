@@ -62,6 +62,22 @@ a pointer. **Rotation:** tags made under the old key fail under the new one (`au
 re-save to re-tag. Files written before a key existed have no tag and are accepted only under
 `any`.
 
+## Forgery is not rollback
+
+A key stops **forgery**: a writer without it cannot produce a checkpoint, a pointer or an upload
+marker that verifies. It does not, by itself, stop **rollback or deletion**: everything in the
+directory or bucket may be genuine and still be old, or gone. Rollback is detected from a floor
+the writer cannot lower: the run store (a digest and the highest step of every checkpoint), a
+tag-checked `LATEST` pointer, and the numbers you supply (`CVPILOT_CKPT_MIN_STEP`,
+`--expect-min-step`). **A fresh machine that has only the key, with no run store and no remembered
+step, cannot tell that newer checkpoints once existed**: if someone deleted every newer object and
+left an older genuine one, the older one verifies as `authenticated`. Close that gap outside the
+tool: turn on bucket versioning and object lock (or a retention policy) so nothing newer can be
+deleted, keep the run store on storage the bucket's writers cannot reach, and pass the step you
+last saw as `CVPILOT_CKPT_MIN_STEP`. `cvpilot ckpt verify --expect-min-step N` checks a directory
+against such a number, and `--accept-rollback-to N` accepts a rollback from the store or pointer on
+purpose (logged); neither lowers the operator's own floor.
+
 ## What a forged checkpoint can and cannot do
 
 Even at `local_chain_only` a forged checkpoint can supply weights and training state, so it can

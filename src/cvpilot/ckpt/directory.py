@@ -915,7 +915,9 @@ class RunCheckpoints:
         self._remember_verified(kind_fd, manifest)
         return True
 
-    def inspect(self, kind: CheckpointKind, *, check_data: bool = True) -> list[Entry]:
+    def inspect(
+        self, kind: CheckpointKind, *, check_data: bool = True, ctx: AdmitContext | None = None
+    ) -> list[Entry]:
         """Every checkpoint and every stray file of ``kind`` with its verification result,
         newest step first. ``check_data=False`` judges manifests only (no hashing)."""
         _check_kind(kind)
@@ -937,6 +939,7 @@ class RunCheckpoints:
                 have_manifest = {c.step for c in judged if c.step is not None}
                 gate = self.admission(
                     kind,
+                    ctx,
                     trusted={c.step for c in judged if c.reason is None and c.step is not None},
                 )
                 for cand in judged:

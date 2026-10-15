@@ -153,6 +153,8 @@ Lightning and Ultralytics `resume_arguments` helpers take only a verified framew
 the checkpoint guide for what a real Lightning or Ultralytics file allows). The default policy trusts the checkpoint directory's own digests, which is
 right when only you can write it. **For a directory that is shared, restored from a bucket or
 writable by others, set `CVPILOT_CKPT_KEY` and `CVPILOT_CKPT_REQUIRE_TRUST=authenticated`**
+(a key stops forgery; detecting rollback or deletion also needs the run store, versioned storage
+and `CVPILOT_CKPT_MIN_STEP`)
 (see [docs/guide/trust.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/trust.md)). Walkthrough with a preemption, a damaged
 file and a resume: [docs/tutorial.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/tutorial.md); design: ADR-0006.
 

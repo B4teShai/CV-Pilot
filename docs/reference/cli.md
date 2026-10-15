@@ -258,6 +258,10 @@ cvpilot ckpt verify [OPTIONS] {directory}
 
 Verify every checkpoint: size, structure, SHA-256, chain and the trust policy.
 
+The newest step known to have existed (run store, a tag-checked pointer,
+``CVPILOT_CKPT_MIN_STEP``, ``--expect-min-step``) is a floor: a checkpoint older than it
+is reported as ``rolled_back`` unless you accept that with ``--accept-rollback-to``.
+
 Prints one line per checkpoint on stdout. Exit 0 when everything verifies; exit 1 when a
 checkpoint is corrupt, truncated, forged or untrusted, or when nothing verifies at all;
 exit 2 when the path is not a directory or the options are invalid.
@@ -272,6 +276,8 @@ exit 2 when the path is not a directory or the options are invalid.
 | `--kind` | one of `last`, `best`, `all` | `all` | Which checkpoints. |
 | `--project` | str |  | Project whose run store anchors the digests. |
 | `--require-trust` | one of `any`, `anchored`, `authenticated` |  | any, anchored or authenticated (see the help above). |
+| `--expect-min-step` | int range |  | A floor you know from elsewhere: older checkpoints fail (rolled_back). |
+| `--accept-rollback-to` | int range |  | Accept a rollback from the run store or pointer down to this step, on purpose (logged); it never lowers --expect-min-step or CVPILOT_CKPT_MIN_STEP. |
 | `--json` | flag |  | Print JSON instead of text. |
 
 ### `cvpilot ckpt prune`
