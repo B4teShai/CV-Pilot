@@ -125,6 +125,21 @@ Option C, implemented by `ckpt/` with the following rules.
   (zip64), and tensor names and dtypes cannot be derived from the pickle without executing it,
   so they are bounded, not compared.
 
+- **A restored checkpoint is data.** Even at trust level `local_chain_only`, a forged checkpoint
+  can supply weights and training state and cannot execute code through cvpilot: the JSON
+  skeleton is parsed strictly (no duplicate keys, NaN, Infinity or fractions where integers
+  belong, integers within 19 digits, at most 1 MiB, depth and node limits) and rebuilt only into
+  dicts, lists, strings, numbers, booleans, `None`, bytes and arrays, which `validate_plain`
+  re-checks; nothing restored is used to import a module, look up an attribute or pick a class
+  (the `state_dict` and tensor-conversion lookups run on objects the caller passed when saving,
+  never on restored values). RNG structures are validated completely (Python: version 3 and 625
+  integers in range; NumPy: `MT19937`, 624 `uint32` values, position, flag and finite cached
+  value; framework: a `uint8` array of the exact size) before any generator is touched, applied
+  together and rolled back if any step fails; a checkpoint with a malformed RNG state is skipped
+  as `unloadable`. What a forged checkpoint can still do is what weights and optimizer state can
+  do: degrade or bias a model, or exhaust memory up to the bounds above; that is why a shared
+  directory needs `authenticated`.
+
 ## Consequences
 
 - Easier: any kill, at any point of save or upload, leaves a loadable checkpoint; resume is

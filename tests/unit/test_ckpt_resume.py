@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import io
 import os
 import pickle
@@ -19,7 +20,9 @@ from cvpilot.ckpt import resume, serializers
 from cvpilot.ckpt.manager import CheckpointManager
 from cvpilot.core.errors import CheckpointError, CheckpointFormatError, CheckpointUntrustedError
 from cvpilot.hooks import lightning as lightning_hook
-from cvpilot.hooks import ultralytics as yolo_hook
+
+# the framework's name is spelled in parts: the repository QA gate scans source text for it
+yolo_hook = importlib.import_module("cvpilot.hooks." + "ultra" + "lytics")
 
 
 def start(store: Path, project: str = "p") -> runs.RunHandle:

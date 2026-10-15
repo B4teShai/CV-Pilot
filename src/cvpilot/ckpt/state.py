@@ -26,6 +26,9 @@ from cvpilot.core.errors import CheckpointError
 MAX_DEPTH = 32
 MAX_TENSORS = 100_000
 MAX_STATE_JSON_BYTES = 1 << 20
+MAX_NODES = 100_000
+MAX_KEY_CHARS = 4096
+MAX_INT = 2**64
 TENSOR = "$tensor"
 FLOAT = "$float"
 BYTES = "$bytes"
@@ -189,3 +192,56 @@ def merge_state(
     if not isinstance(merged, dict):  # pragma: no cover  # walk(dict) returns a dict
         raise ValueError("state must be a mapping")
     return merged
+
+
+def validate_plain(value: Any) -> None:
+    """Check that a restored state is plain data and bounded.
+
+    Allowed: dicts (string keys, or integer keys from ``$intdict``), lists, strings, booleans,
+    ``None``, integers below 2**64 in magnitude, floats (inf and nan only via ``$float``),
+    bytes up to the state limit and NumPy arrays that are not arrays of objects; at most
+    ``MAX_NODES`` nodes and ``MAX_DEPTH + 2`` levels. Nothing here looks anything up by a name
+    from the data.
+
+    Raises:
+        ValueError: anything else, or a bound is exceeded.
+    """
+    nodes = 0
+
+    def walk(item: Any, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > MAX_NODES or depth > MAX_DEPTH + 2:
+            raise ValueError("the restored state is too large or too deep")
+        if item is None or isinstance(item, bool):
+            return
+        if isinstance(item, int):
+            if abs(item) >= MAX_INT:
+                raise ValueError("the restored state holds an oversized integer")
+        elif isinstance(item, float):
+            return  # inf and nan arrive only through the $float marker; they are plain data
+        elif isinstance(item, str):
+            if len(item) > MAX_STATE_JSON_BYTES:
+                raise ValueError("the restored state holds an oversized string")
+        elif isinstance(item, bytes):
+            if len(item) > MAX_STATE_JSON_BYTES:
+                raise ValueError("the restored state holds oversized bytes")
+        elif isinstance(item, np.ndarray):
+            if item.dtype.hasobject:
+                raise ValueError("the restored state holds an array of objects")
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                if isinstance(key, bool) or not isinstance(key, (str, int)):
+                    raise ValueError("the restored state has an unsupported key")
+                if isinstance(key, str) and len(key) > MAX_KEY_CHARS:
+                    raise ValueError("the restored state has an oversized key")
+                if isinstance(key, int) and abs(key) >= MAX_INT:
+                    raise ValueError("the restored state has an oversized key")
+                walk(child, depth + 1)
+        elif isinstance(item, list):
+            for child in item:
+                walk(child, depth + 1)
+        else:
+            raise ValueError(f"the restored state holds a {type(item).__name__}")
+
+    walk(value, 0)

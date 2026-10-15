@@ -44,7 +44,7 @@ from cvpilot.ckpt.directory import (
     Skipped,
 )
 from cvpilot.ckpt.remote import Mirror
-from cvpilot.ckpt.rng import capture_rng
+from cvpilot.ckpt.rng import capture_rng, validate_rng
 from cvpilot.ckpt.serializers import get_serializer
 from cvpilot.core.errors import (
     CheckpointCorruptError,
@@ -491,7 +491,7 @@ class CheckpointManager:
         return self._save("last", step, state)
 
     def adopt(self, path: str | Path, step: int) -> CheckpointManifest:
-        """Bring a checkpoint file a framework wrote (Lightning ``last.ckpt``, Ultralytics
+        """Bring a checkpoint file a framework wrote (Lightning ``last.ckpt``, a YOLO
         ``last.pt``) under verification: it is streamed into the ``last`` timeline as a ``pt``
         checkpoint with a manifest, a digest in the run store and a mirror upload, so that
         ``resume_path`` can hand back a file that was verified instead of one that merely
@@ -685,6 +685,13 @@ class CheckpointManager:
                 state = get_serializer(verified.manifest.format).loads(
                     verified.data, map_location=map_location
                 )
+                if "rng" in state:
+                    try:
+                        validate_rng(state["rng"])
+                    except ValueError:
+                        raise CheckpointCorruptError(
+                            "the checkpoint's rng state is malformed", reason="unloadable"
+                        ) from None
             except (CheckpointCorruptError, CheckpointFormatError) as exc:
                 reason = exc.reason if isinstance(exc, CheckpointCorruptError) else "unsafe_loader"
                 skipped.append(

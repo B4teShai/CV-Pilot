@@ -76,7 +76,7 @@ _NUMPY_DTYPE = {
 MAX_RANK = 32
 MAX_ELEMENTS = 1 << 40
 MAX_NAME_CHARS = 1024
-MAX_METADATA_VALUE = 2 * state_mod.MAX_STATE_JSON_BYTES
+MAX_METADATA_VALUE = state_mod.MAX_STATE_JSON_BYTES
 MAX_INT_DIGITS = 19
 
 
@@ -106,6 +106,19 @@ def _bounded_int(text: str) -> int:
     if len(text) > MAX_INT_DIGITS or text.startswith("-"):
         raise ValueError("integer out of range")
     return int(text)
+
+
+def _bounded_signed_int(text: str) -> int:
+    if len(text.lstrip("-")) > MAX_INT_DIGITS:
+        raise ValueError("integer out of range")
+    return int(text)
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("non-finite number")
+    return value
 
 
 def _reject_float(text: str) -> Any:
@@ -264,6 +277,8 @@ class SafetensorsSerializer:
                 header.metadata[STATE_KEY],
                 object_pairs_hook=_no_duplicates,
                 parse_constant=_reject_constant,
+                parse_int=_bounded_signed_int,
+                parse_float=_finite_float,
             )
             tensors = module.load(data)
         except (KeyError, ValueError, RecursionError, TypeError):
@@ -274,9 +289,11 @@ class SafetensorsSerializer:
         if not isinstance(skeleton, dict):
             raise _unloadable("the state skeleton is not an object")
         try:
-            return state_mod.merge_state(tensors, skeleton)
-        except (ValueError, TypeError):
+            merged = state_mod.merge_state(tensors, skeleton)
+            state_mod.validate_plain(merged)
+        except (ValueError, TypeError, RecursionError):
             raise _unloadable("the checkpoint state cannot be rebuilt from the file") from None
+        return merged
 
 
 MIN_PT_VERSION = (2, 6)

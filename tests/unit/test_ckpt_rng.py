@@ -40,7 +40,7 @@ def test_the_framework_generator_is_included_only_when_it_is_already_imported(
     assert "framework" not in rng.capture_rng()
     seen: dict[str, Any] = {}
     fake = types.ModuleType(name)
-    fake.get_rng_state = lambda: np.arange(4, dtype=np.uint8)  # type: ignore[attr-defined]
+    fake.get_rng_state = lambda: np.zeros(rng.FRAMEWORK_STATE_BYTES, dtype=np.uint8)  # type: ignore[attr-defined]
     fake.set_rng_state = lambda value: seen.setdefault("set", value)  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, name, fake)
     captured = rng.capture_rng()

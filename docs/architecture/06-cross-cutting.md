@@ -137,6 +137,14 @@ and a consistent chain. Three levels of trust, reported on every restore (`trust
 | `anchored` | the digest of the manifest file is in the run store (`checkpoint_manifest`, append-only) | no | yes, unless the store is writable too |
 | `local_chain_only` | the directory's own chain and pointer | yes | no |
 
+What a forged checkpoint can do even at `local_chain_only`: supply weights, optimizer state and
+other training state (so it can poison or degrade a model) and consume memory up to the stated
+bounds. It cannot execute code through cvpilot: safetensors has no executing loader, the JSON
+state is strictly parsed, bounded and returned as inert data (dunder keys and module-like
+strings are just strings), RNG structures are fully validated before any generator is set and
+rolled back on failure, and nothing restored selects a module, attribute or class. Only the
+opt-in `pt` format reaches a pickle-based loader, behind the controls above.
+
 Rules: under `authenticated` and `anchored` every candidate needs its own proof; nothing is
 vouched for by a neighbour's chain, so a forged newer manifest cannot launder an older one. If
 candidates exist but none reaches the required level, restore raises `checkpoint_untrusted`
