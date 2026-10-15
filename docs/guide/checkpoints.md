@@ -11,7 +11,7 @@ preemption signal as a request to save, not a reason to crash. The design is in
 
 ```python notest
 import cvpilot
-from cvpilot.ckpt import CheckpointManager
+from cvpilot.ckpt import CheckpointManager, apply_rng
 
 run = cvpilot.init("fridge-sku", task="detection")
 ckpt = CheckpointManager(
@@ -25,6 +25,11 @@ ckpt = CheckpointManager(
     every_n_minutes=20,
 )
 state = ckpt.restore_latest_valid()  # None on a fresh start
+start = 0
+if state is not None:
+    model.load_state_dict(state["model"])
+    apply_rng(state["rng"])  # restoring never sets your generators: you do (see Limits)
+    start = state["dataloader_state"]["step"] + 1
 for step in range(start, total_steps):
     ...
     ckpt.maybe_save(
@@ -34,7 +39,7 @@ for step in range(start, total_steps):
         scheduler=sched,
         scaler=scaler,
         rng=True,
-        dataloader_state=sampler.state_dict(),
+        dataloader_state={"step": step, **sampler.state_dict()},
         metrics={"val/mAP50_95": m},
     )
     if ckpt.preempted():
@@ -192,6 +197,20 @@ untrusted.
 ## Limits
 
 `pt` archives over 4 GiB are refused (zip64); restoring holds the whole file in memory once
-(`max_checkpoint_bytes`, default 16 GiB); the manager supports POSIX platforms only (it needs
+(`max_checkpoint_bytes`, default 8 GiB); the manager supports POSIX platforms only (it needs
 directory descriptors); `restore` returns NumPy arrays for safetensors checkpoints (convert with
 `torch.from_numpy` or your framework's equivalent).
+
+Tensor dtypes: float16, float32, float64, the signed and unsigned integer types and bool
+round-trip. **bfloat16, the float8 types and quantised tensors have no NumPy equivalent**, so a save
+that meets one raises `CheckpointError` naming the tensor and its dtype; cast it first (for example
+`tensor.float()`) and cast back after restoring. Integers in the non-tensor state must be below
+2**64 in magnitude, the state at most 100 000 nodes and 32 levels deep, and its JSON at most 1 MiB;
+anything a restore would refuse is refused at save.
+
+Random state: `rng=True` stores the Python, NumPy (legacy global generator) and, if the framework
+is already imported, its CPU generator. **Restoring does not touch your generators**: call
+`cvpilot.ckpt.apply_rng(state["rng"])` yourself after restoring (it validates everything first and
+changes nothing if the state is malformed). Not covered: CUDA generators, per-worker data loader
+generators and `numpy.random.Generator` objects you created yourself; keep their seeds or states
+in `dataloader_state`.

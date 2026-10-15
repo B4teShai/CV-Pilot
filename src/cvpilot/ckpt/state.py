@@ -86,11 +86,24 @@ def _escape(part: str) -> str:
     return part.replace("~", "~0").replace("/", "~1")
 
 
-def _to_array(value: Any) -> np.ndarray[Any, Any] | None:
+def _dtype_name(value: Any) -> str:
+    text = str(getattr(value, "dtype", "") or "unknown")
+    return text.rsplit(".", 1)[-1]
+
+
+def _to_array(value: Any, where: str = "<top>") -> np.ndarray[Any, Any] | None:
     if isinstance(value, np.ndarray):
         array = value
     elif all(callable(getattr(value, name, None)) for name in ("detach", "cpu", "numpy")):
-        array = np.asarray(value.detach().cpu().numpy())
+        try:
+            array = np.asarray(value.detach().cpu().numpy())
+        except (TypeError, RuntimeError, ValueError):
+            dtype = _dtype_name(value)
+            raise CheckpointError(
+                f"cannot store the tensor at {where}: its dtype ({dtype}) has no NumPy "
+                f"equivalent, so safetensors checkpoints cannot hold it; cast it before saving "
+                f"(for example tensor.float()) and cast back after restoring"
+            ) from None
     else:
         return None
     if array.dtype.hasobject:
@@ -112,7 +125,7 @@ def split_state(state: Mapping[str, Any]) -> tuple[dict[str, np.ndarray[Any, Any
     def walk(value: Any, path: tuple[str, ...], depth: int) -> Any:
         if depth > MAX_DEPTH:
             raise CheckpointError(f"checkpoint state is nested deeper than {MAX_DEPTH} levels")
-        array = _to_array(value)
+        array = _to_array(value, "/".join(path) or "<top>")
         if array is not None:
             name = "/".join(_escape(p) for p in path)
             if len(tensors) >= MAX_TENSORS:

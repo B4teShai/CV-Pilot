@@ -128,3 +128,14 @@ def test_the_tutorial_is_the_only_docs_page_with_executed_commands() -> None:
         for block in blocks(page.read_text(encoding="utf-8")):
             if block.lang in RUNNABLE_LANGS:
                 assert block.notest, f"{page.relative_to(DOCS)}:{block.line}: add 'notest'"
+
+
+def test_the_checkpoint_guide_states_what_restoring_does_not_do_and_what_cannot_be_stored() -> None:
+    guide = (DOCS / "guide" / "checkpoints.md").read_text(encoding="utf-8")
+    api = (DOCS / "reference" / "api.md").read_text(encoding="utf-8")
+    assert "apply_rng" in guide and "apply_rng" in api
+    assert "Restoring does not touch your generators" in guide
+    for dtype in ("bfloat16", "float8"):
+        assert dtype in guide
+    changelog = (DOCS.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "RNG state capture and restore" not in changelog

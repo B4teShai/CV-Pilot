@@ -88,7 +88,7 @@ approval (docs/engineering/release.md).
   the `LATEST` pointer), verified restore that walks back and skips and counts anything truncated,
   corrupt, forged, replaced or symlinked, retention that counts only valid checkpoints and never
   deletes the newest one, `best` checkpoints by a monitored metric, resume across runs
-  (`parent_run_id`), a directory lock for concurrent savers, and RNG state capture and restore.
+  (`parent_run_id`), a directory lock for concurrent savers, and RNG state capture (restoring the generators is explicit: `apply_rng(state["rng"])`).
   Tensors go to safetensors files with the non-tensor state as bounded JSON; the pickle-based `pt`
   format is opt-in. Events `checkpoint_saved`, `checkpoint_verified`, `checkpoint_restored`,
   `checkpoint_skipped_corrupt`, `checkpoint_untrusted`, `checkpoint_uploaded`,

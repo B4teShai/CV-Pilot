@@ -36,6 +36,7 @@ ckpt.maybe_save(step, model=model, optimizer=opt, metrics={"mAP50": 0.7})
 ckpt.save_now(step, model=model)  # immediately, any step that advances
 restored = ckpt.restore()  # Restored(state, manifest, run_id, skipped, trust)
 state = ckpt.restore_latest_valid()  # the state only, or None
+apply_rng(state["rng"])  # from cvpilot.ckpt; restoring does not set your generators
 ckpt.adopt("last.pt", step)  # bring a framework-written file under verification
 ckpt.verify(manifest)
 ckpt.list()
