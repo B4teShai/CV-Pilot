@@ -67,8 +67,12 @@ from cvpilot.core.schema import (
 from cvpilot.core.ulid import is_valid_ulid
 from cvpilot.logging import get_logger
 
-DEFAULT_MAX_BYTES = 16 * 1024 * 1024 * 1024
-"""Largest checkpoint file written or read by default (16 GiB)."""
+DEFAULT_MAX_BYTES = 8 * 1024 * 1024 * 1024
+"""Largest checkpoint file written or read by default (8 GiB)."""
+DEFAULT_REMOTE_CANDIDATE_BYTES = 4 * 1024 * 1024 * 1024
+"""Most bytes one remote candidate may be before it is refused unread (4 GiB)."""
+DEFAULT_REMOTE_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
+"""Most bytes one restore may download in all (8 GiB)."""
 DEFAULT_MAX_ENTRIES = 10_000
 """Most files examined in one kind directory; bounds the work of a walk."""
 KINDS: tuple[CheckpointKind, ...] = ("last", "best")
@@ -78,7 +82,15 @@ _MANIFEST = re.compile(r"step_([0-9]{9,19})\.manifest\.json")
 _MARKER = re.compile(r"step_([0-9]{9,19})\.remote\.json")
 _SHA = re.compile(r"[0-9a-f]{64}")
 TRUST_REASONS = frozenset(
-    {"auth_invalid", "auth_missing", "not_anchored", "anchor_error", "store_mismatch"}
+    {
+        "auth_invalid",
+        "auth_missing",
+        "not_anchored",
+        "anchor_error",
+        "store_mismatch",
+        "rolled_back",
+        "binding_mismatch",
+    }
 )
 """Reasons that mean "not trusted at the required level" (event ``checkpoint_untrusted``)."""
 POLICIES = ("authenticated", "anchored", "any")
@@ -150,6 +162,114 @@ class _Cand:
     reason: str | None = None
     tag_state: str = "nokey"  # nokey | absent | valid | invalid
     trust: TrustLevel = "local_chain_only"
+
+
+@dataclass(frozen=True)
+class AdmitContext:
+    """What a caller adds to the gate: steps known to exist elsewhere (a remote listing), a
+    deliberate rollback acceptance, an external high-water mark and a per-candidate byte cap."""
+
+    present: frozenset[int] = frozenset()
+    accept_rollback_to: int | None = None
+    min_step: int | None = None
+    max_candidate_bytes: int | None = None
+
+
+class Admission:
+    """The single decision: may this candidate be returned, fetched or counted as valid?
+
+    ``decide`` combines, in this order, the trust verdict of the manifest (policy level,
+    authentication, run-store anchor, binding), whether the format is allowed, the size caps and
+    the rollback floor. Restore (local and remote), resume, the command line, retention and the
+    remote fetch and install all call it; none has its own notion of "valid".
+
+    The floor is the newest step known to have been saved (tag-checked pointer, run store,
+    ``min_step``). A candidate older than the floor is admitted only when a trusted manifest at
+    or above the floor is still present (so the newer one is merely damaged: corruption, counted
+    and skipped, not rollback) or when the caller accepted the rollback on purpose. A store that
+    cannot answer denies everything under the strict policies, with reason ``anchor_error``.
+    """
+
+    def __init__(
+        self, rc: RunCheckpoints, kind: CheckpointKind, trusted: set[int], ctx: AdmitContext | None
+    ) -> None:
+        self._rc, self._kind = rc, kind
+        self._ctx = ctx or AdmitContext()
+        self._trusted = trusted | set(self._ctx.present)
+        self._error: str | None = None
+        known: int | None = None
+        try:
+            known = rc._floor(kind)
+        except CheckpointUntrustedError as exc:
+            self._error = exc.reason
+        self._known = known
+        marks = [m for m in (known, self._ctx.min_step) if m is not None]
+        self.floor: int | None = max(marks) if marks else None
+        self._accepted_logged = False
+
+    def _rolled_back(self, step: int | None, floor: int | None = None) -> str | None:
+        floor = self.floor if floor is None else floor
+        accept = self._ctx.accept_rollback_to
+        if accept is not None and (accept == 0 if step is None else step >= accept):
+            if not self._accepted_logged:
+                self._accepted_logged = True
+                self._rc._emit(
+                    "warning", "checkpoint_rollback_accepted", step=step, kind=self._kind,
+                    floor=floor, accepted_to=accept,
+                )  # fmt: skip
+            return None
+        return "rolled_back"
+
+    def decide(self, cand: _Cand | None) -> str | None:
+        """None when ``cand`` may be used, else the reason it may not. ``None`` as the candidate
+        asks whether finding nothing at all is acceptable (it is not when checkpoints are known to
+        have existed)."""
+        if self._error is not None:
+            return self._error
+        if cand is None:  # the external mark is checked by the caller across the whole lineage
+            if self._known is None or any(t >= self._known for t in self._trusted):
+                return None  # nothing known, or the newest is still here but damaged
+            return self._rolled_back(None, self._known)
+        if cand.reason is not None:
+            return cand.reason
+        manifest = cand.manifest
+        if manifest is None or cand.digest is None or cand.step is None:
+            return "manifest_invalid"
+        if manifest.format == "pt" and not self._rc.allow_pt:
+            return "pt_not_allowed"
+        limit = self._ctx.max_candidate_bytes
+        if manifest.size_bytes > self._rc.max_bytes or (
+            limit is not None and manifest.size_bytes > limit
+        ):
+            return "too_large"
+        if self.floor is not None and cand.step < self.floor:
+            if any(t >= self.floor for t in self._trusted):
+                return None  # the newer one is still here (damaged): corruption, not rollback
+            return self._rolled_back(cand.step)
+        return None
+
+
+def gate_failure(skipped: Iterable[Skipped], policy: str) -> tuple[str, str] | None:
+    """``(reason, message)`` when the gate, not damage, is why nothing could be returned: a
+    rollback, a failing run store, or (under a strict policy) candidates that lack the required
+    proof. The caller logs it and raises ``CheckpointUntrustedError``."""
+    reasons = [s.reason for s in skipped]
+    if "rolled_back" in reasons:
+        return "rolled_back", (
+            "checkpoints were rolled back: a newer checkpoint is known to have existed and is gone "
+            "(restore it, or accept the rollback on purpose)"
+        )
+    if "anchor_error" in reasons and policy != "any":
+        return "anchor_error", (
+            "the run store could not be consulted, so the required trust level cannot be proven"
+        )
+    untrusted = [r for r in reasons if r in TRUST_REASONS]
+    if untrusted and policy != "any":
+        return "untrusted", (
+            f"{len(untrusted)} checkpoint(s) exist but none reaches the required trust level "
+            f"{policy!r}; nothing was restored (see CVPILOT_CKPT_REQUIRE_TRUST)"
+        )
+    return None
 
 
 def _check_step(step: object) -> int:
@@ -493,56 +613,16 @@ class RunCheckpoints:
             finally:
                 os.close(kind_fd)
 
-    def check_fresh(
+    def admission(
         self,
         kind: CheckpointKind,
-        chosen: int | None,
+        ctx: AdmitContext | None = None,
         *,
-        present: Iterable[int] = (),
-        accept_rollback_to: int | None = None,
-        min_step: int | None = None,
-    ) -> None:
-        """Refuse to serve ``chosen`` (a step, or None when nothing was found) when something newer
-        is known to have existed and is gone. A newer checkpoint that is still here (``present``
-        from a remote listing, or a trusted manifest) but fails its data check is corruption, not
-        rollback: the older one is served and the skip is counted.
-
-        ``accept_rollback_to=N`` deliberately accepts a restore at step N or later (0 accepts
-        starting from nothing); it is logged. ``min_step`` is an external high-water mark.
-
-        Raises:
-            CheckpointUntrustedError: reason ``rolled_back``.
-        """
-        if self.require_trust == "any":
-            return
-        known_floor = self._floor(kind)
-        marks = [m for m in (known_floor, min_step) if m is not None]
-        if not marks:
-            return
-        floor = max(marks)
-        step = -1 if chosen is None else chosen
-        if step >= floor:
-            return
-        known = {*present, *self.trusted_steps(kind)}
-        if any(s >= floor for s in known):
-            return
-        if accept_rollback_to is not None and (
-            step >= accept_rollback_to if step >= 0 else accept_rollback_to == 0
-        ):
-            self._emit(
-                "warning", "checkpoint_rollback_accepted", step=chosen, kind=kind, floor=floor,
-                accepted_to=accept_rollback_to,
-            )  # fmt: skip
-            return
-        self._emit(
-            "error", "checkpoint_untrusted", reason="rolled_back", step=chosen, kind=kind,
-            floor=floor,
-        )  # fmt: skip
-        raise CheckpointUntrustedError(
-            f"{kind} checkpoints were rolled back: step {chosen} is older than step {floor}, "
-            "which was saved and is gone (restore it, or accept the rollback on purpose)",
-            reason="rolled_back",
-        )
+        trusted: set[int] | None = None,
+    ) -> Admission:
+        """The one gate every path passes (see ``Admission.decide``)."""
+        _check_kind(kind)
+        return Admission(self, kind, self.trusted_steps(kind) if trusted is None else trusted, ctx)
 
     def _judge(self, run_fd: int, kind_fd: int, kind: str) -> list[_Cand]:
         """Decide which manifests are trusted at the required level, newest first."""
@@ -556,24 +636,47 @@ class RunCheckpoints:
         valid tag, or the digest in the run store). Nothing is vouched for by a neighbour, so a
         forged newer manifest cannot launder an older one."""
         for cand in cands:
-            manifest = cand.manifest
-            if manifest is None or cand.step is None or cand.digest is None:
-                continue
-            if cand.tag_state == "invalid":
-                cand.reason = "auth_invalid"
-                continue
-            stored, errored = self._stored_digest(kind, cand.step)
-            if stored is not None and stored != cand.digest:
-                cand.reason = "store_mismatch"
-                continue
-            authenticated = cand.tag_state == "valid"
-            if self.require_trust == "authenticated" and not authenticated:
-                cand.reason = "auth_missing"
-            elif not authenticated and stored is None:
-                cand.reason = "anchor_error" if errored else "not_anchored"
-            else:
-                cand.trust = "authenticated" if authenticated else "anchored"
+            self._strict_verdict(cand, kind)
         return cands
+
+    def _strict_verdict(self, cand: _Cand, kind: str) -> None:
+        manifest = cand.manifest
+        if manifest is None or cand.step is None or cand.digest is None:
+            return
+        if cand.tag_state == "invalid":
+            cand.reason = "auth_invalid"
+            return
+        stored, errored = self._stored_digest(kind, cand.step)
+        if stored is not None and stored != cand.digest:
+            cand.reason = "store_mismatch"
+            return
+        authenticated = cand.tag_state == "valid"
+        if self.require_trust == "authenticated" and not authenticated:
+            cand.reason = "auth_missing"
+        elif not authenticated and stored is None:
+            cand.reason = "anchor_error" if errored else "not_anchored"
+        else:
+            cand.trust = "authenticated" if authenticated else "anchored"
+
+    def judge_single(self, cand: _Cand, kind: str) -> _Cand:
+        """The trust verdict for one candidate that is not part of the local walk (a remote
+        manifest, before anything is downloaded). Under ``any`` only a wrong tag rejects."""
+        if cand.manifest is None:
+            return cand
+        if self.require_trust != "any":
+            self._strict_verdict(cand, kind)
+            return cand
+        if cand.tag_state == "invalid":
+            cand.reason = "auth_invalid"
+            return cand
+        stored, _ = self._stored_digest(kind, cand.step or 0)
+        if stored is not None and stored != cand.digest:
+            cand.reason = "store_mismatch"
+        elif cand.tag_state == "valid":
+            cand.trust = "authenticated"
+        elif stored is not None:
+            cand.trust = "anchored"
+        return cand
 
     def _judge_chain(self, run_fd: int, cands: list[_Cand], kind: str) -> list[_Cand]:
         """Policy ``any``: the chain rules of the module docstring. A wrong tag always rejects;
@@ -681,40 +784,54 @@ class RunCheckpoints:
             raise CheckpointCorruptError(f"{name} fails its digest", reason="digest_mismatch")
         return None
 
-    def iter_valid(self, kind: CheckpointKind, *, load: bool = False) -> Iterator[Verified]:
-        """Checkpoints of ``kind`` that verify, newest step first; each refusal is counted in
-        ``skipped`` and logged. With ``load`` the verified bytes are returned, read once."""
+    def iter_valid(
+        self, kind: CheckpointKind, *, load: bool = False, ctx: AdmitContext | None = None
+    ) -> Iterator[Verified]:
+        """Checkpoints of ``kind`` the gate admits and whose data verifies, newest step first;
+        each refusal is counted in ``skipped`` and logged. With ``load`` the verified bytes are
+        returned, read once. When nothing is yielded the gate is asked whether finding nothing is
+        acceptable (it is not when checkpoints are known to have existed)."""
         _check_kind(kind)
         self.skipped = []
-        with self._open_run(create=False) as run_fd:
-            if run_fd is None:
-                return
-            try:
-                kind_fd = self._open_kind(run_fd, kind, create=False)
-            except CheckpointCorruptError as exc:
-                self._skip(None, kind, kind, exc.reason)
-                return
-            if kind_fd is None:
-                return
-            import os
+        import os
 
+        yielded = False
+        with self._open_run(create=False) as run_fd:
+            kind_fd: int | None = None
+            judged: list[_Cand] = []
+            if run_fd is not None:
+                try:
+                    kind_fd = self._open_kind(run_fd, kind, create=False)
+                except CheckpointCorruptError as exc:
+                    self._skip(None, kind, kind, exc.reason)
+                if kind_fd is not None:
+                    judged = self._judge(run_fd, kind_fd, kind)
             try:
-                for cand in self._judge(run_fd, kind_fd, kind):
-                    manifest = cand.manifest
-                    if cand.reason is not None or manifest is None or cand.digest is None:
-                        self._skip(cand.step, kind, cand.name, cand.reason or "manifest_invalid")
+                gate = self.admission(
+                    kind,
+                    ctx,
+                    trusted={c.step for c in judged if c.reason is None and c.step is not None},
+                )
+                for cand in judged:
+                    reason = gate.decide(cand)
+                    if reason is not None or cand.manifest is None or cand.digest is None:
+                        self._skip(cand.step, kind, cand.name, reason or "manifest_invalid")
                         continue
-                    if manifest.format == "pt" and not self.allow_pt:
-                        self._skip(manifest.step, kind, cand.name, "pt_not_allowed")
-                        continue
+                    assert kind_fd is not None  # noqa: S101  # judged is empty without it
                     try:
-                        data = self._check_data(kind_fd, manifest, load=load)
+                        data = self._check_data(kind_fd, cand.manifest, load=load)
                     except CheckpointCorruptError as exc:
-                        self._skip(manifest.step, kind, cand.name, exc.reason)
+                        self._skip(cand.manifest.step, kind, cand.name, exc.reason)
                         continue
-                    yield Verified(manifest, cand.digest, data, cand.trust)
+                    yielded = True
+                    yield Verified(cand.manifest, cand.digest, data, cand.trust)
+                if not yielded:
+                    reason = gate.decide(None)
+                    if reason is not None:
+                        self._skip(None, kind, kind, reason)
             finally:
-                os.close(kind_fd)
+                if kind_fd is not None:
+                    os.close(kind_fd)
 
     def inspect(self, kind: CheckpointKind, *, check_data: bool = True) -> list[Entry]:
         """Every checkpoint and every stray file of ``kind`` with its verification result,
@@ -736,9 +853,13 @@ class RunCheckpoints:
                 judged = self._judge(run_fd, kind_fd, kind)
                 names = self._list(kind_fd)
                 have_manifest = {c.step for c in judged if c.step is not None}
+                gate = self.admission(
+                    kind,
+                    trusted={c.step for c in judged if c.reason is None and c.step is not None},
+                )
                 for cand in judged:
                     manifest = cand.manifest
-                    reason = cand.reason
+                    reason = gate.decide(cand)
                     if reason is None and manifest is not None and check_data:
                         try:
                             self._check_data(kind_fd, manifest, load=False)
@@ -975,6 +1096,45 @@ class RunCheckpoints:
                 os.close(kind_fd)
         return cand.manifest
 
+    # -- liveness -------------------------------------------------------------------------------
+
+    def hold_lease(self) -> int | None:
+        """Take the run's liveness lease (see ``fsops.hold_lease``); the caller keeps the
+        descriptor open for the life of the process."""
+        try:
+            with self._open_run(create=True) as run_fd:
+                return None if run_fd is None else fsops.hold_lease(run_fd)
+        except CheckpointError:
+            return None
+
+    def lease_state(self) -> bool | None:
+        """True: a live process holds the lease; False: the lease file exists and is free (the
+        process is dead); None: no lease file."""
+        with self._open_run(create=False) as run_fd:
+            return None if run_fd is None else fsops.probe_lease(run_fd)
+
+    def last_activity(self) -> float | None:
+        """The newest modification time in the run's checkpoint folders (a heartbeat of sorts)."""
+        import os
+
+        newest: float | None = None
+        with self._open_run(create=False) as run_fd:
+            if run_fd is None:
+                return None
+            times = [fsops.newest_mtime(run_fd)]
+            for kind in KINDS:
+                try:
+                    kind_fd = self._open_kind(run_fd, kind, create=False)
+                except CheckpointCorruptError:
+                    continue
+                if kind_fd is not None:
+                    times.append(fsops.newest_mtime(kind_fd))
+                    os.close(kind_fd)
+        for value in times:
+            if value is not None and (newest is None or value > newest):
+                newest = value
+        return newest
+
     # -- bytes for the remote mirror ------------------------------------------------------------
 
     def read_range(self, manifest: CheckpointManifest, offset: int, length: int) -> bytes:
@@ -1011,7 +1171,12 @@ class RunCheckpoints:
                 os.close(kind_fd)
 
     def install(
-        self, kind: CheckpointKind, step: int, raw_manifest: bytes, chunks: Iterable[bytes]
+        self,
+        kind: CheckpointKind,
+        step: int,
+        raw_manifest: bytes,
+        chunks: Iterable[bytes],
+        ctx: AdmitContext | None = None,
     ) -> CheckpointManifest | None:
         """Install a checkpoint fetched from the remote: the manifest must pass every self-check
         for this run, kind and step, and the data must match its size and SHA-256 while it is
@@ -1031,9 +1196,11 @@ class RunCheckpoints:
             raise CheckpointCorruptError(
                 "the remote manifest does not verify", reason=cand.reason or "manifest_invalid"
             )
-        if manifest.size_bytes > self.max_bytes:
+        refusal = self.admission(kind, ctx).decide(self.judge_single(cand, kind))
+        if refusal is not None:
             raise CheckpointCorruptError(
-                "the remote checkpoint is over the size limit", reason="too_large"
+                f"the remote checkpoint is not admitted ({refusal}); nothing was written",
+                reason=refusal,
             )
         final_data = manifest.path.split("/", 1)[1]
         final_manifest = manifest_name(step)

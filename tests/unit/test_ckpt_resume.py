@@ -105,8 +105,10 @@ def test_a_run_whose_checkpoints_are_all_bad_hands_over_to_an_older_run(tmp_path
 
 def test_a_crashed_run_is_offered_but_flagged_as_needing_recovery(tmp_path: Path) -> None:
     run = start(tmp_path / "store")
-    manager(run, tmp_path).save_now(1, model=weights(1.0))
-    run.abandon()  # a process that died: the status stays running
+    mgr = manager(run, tmp_path)
+    mgr.save_now(1, model=weights(1.0))
+    mgr.close()  # the process died: the liveness lease is gone
+    run.abandon()  # and the status stays running
     point = find(tmp_path)
     assert point is not None and point.needs_recover is True and point.status == "running"
 

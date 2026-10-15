@@ -337,7 +337,7 @@ def fsync_dir(dir_fd: int) -> None:
             raise CheckpointError(f"cannot fsync the checkpoint directory: {exc}") from exc
 
 
-def _open_lock_file(dir_fd: int) -> int:
+def _open_lock_file(dir_fd: int, name: str = LOCK_NAME) -> int:
     """Open ``.lock``, creating it exclusively when absent. Several processes may race to create
     it (some filesystems answer ENOENT to a plain O_CREAT in that window), so the open and the
     exclusive create alternate a few times instead of trusting one call."""
@@ -345,13 +345,13 @@ def _open_lock_file(dir_fd: int) -> int:
     last: OSError | None = None
     for attempt in range(20):
         try:
-            return os.open(LOCK_NAME, base, dir_fd=dir_fd)
+            return os.open(name, base, dir_fd=dir_fd)
         except FileNotFoundError as exc:
             last = exc
         except OSError as exc:
             raise CheckpointError(f"cannot open the checkpoint lock: {exc}") from exc
         try:
-            return os.open(LOCK_NAME, base | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=dir_fd)
+            return os.open(name, base | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=dir_fd)
         except (FileExistsError, FileNotFoundError) as exc:
             last = exc
         except OSError as exc:
@@ -392,6 +392,61 @@ def lock(dir_fd: int, *, timeout: float) -> Iterator[None]:
                 fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
+
+
+LEASE_NAME = ".alive"
+
+
+def hold_lease(dir_fd: int) -> int | None:
+    """Take the liveness lease of a run: an exclusive ``flock`` on ``.alive`` kept for as long as
+    the returned descriptor stays open. The kernel drops it when the process dies, however it
+    dies, so "the lease is free" means "nobody is running this run". None when it is already
+    held (another manager of the same run) or the filesystem cannot lock."""
+    require_posix()
+    try:
+        fd = _open_lock_file(dir_fd, LEASE_NAME)
+    except CheckpointError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def probe_lease(dir_fd: int) -> bool | None:
+    """True when a live process holds the run's lease, False when the file exists but nobody
+    does (the run is dead), None when there is no lease file (an older layout: use timestamps)."""
+    try:
+        fd = os.open(LEASE_NAME, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            return True if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN) else None
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
+def newest_mtime(dir_fd: int, *, limit: int = 10_000) -> float | None:
+    """The newest modification time among the entries of a directory (bounded)."""
+    newest: float | None = None
+    try:
+        names = os.listdir(dir_fd)[:limit]
+    except OSError:
+        return None
+    for name in names:
+        try:
+            mtime = os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mtime
+        except OSError:
+            continue
+        newest = mtime if newest is None else max(newest, mtime)
+    return newest
 
 
 def temp_name(final: str) -> str:

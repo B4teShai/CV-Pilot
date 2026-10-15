@@ -64,6 +64,19 @@ def list_runs(
         store.close()
 
 
+def last_metric_activity(project: str, run_id: str, store_dir: Path | None) -> float | None:
+    """When the newest metric file of a run was written (a run that logs is alive), or None."""
+    location = store_location(project, store_dir)
+    if location is None or not is_valid_ulid(run_id):
+        return None
+    folder = location / "metrics" / run_id
+    try:
+        times = [entry.stat().st_mtime for entry in folder.iterdir() if entry.is_file()]
+    except OSError:
+        return None
+    return max(times) if times else None
+
+
 def open_existing(project: str, run_id: str, store_dir: Path | None) -> RunStore:
     """Open a project's store to act on ``run_id``; an absent store means the run is unknown."""
     if not is_valid_ulid(run_id):

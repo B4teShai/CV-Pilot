@@ -26,10 +26,11 @@ from __future__ import annotations
 import functools
 import hashlib
 import math
+import os
 import platform
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, overload
@@ -37,11 +38,15 @@ from typing import Any, Literal, overload
 from cvpilot.ckpt import auth, fsops, preempt
 from cvpilot.ckpt.directory import (
     DEFAULT_MAX_BYTES,
+    DEFAULT_REMOTE_CANDIDATE_BYTES,
+    DEFAULT_REMOTE_TOTAL_BYTES,
     POLICIES,
     TRUST_REASONS,
+    AdmitContext,
     Entry,
     RunCheckpoints,
     Skipped,
+    gate_failure,
 )
 from cvpilot.ckpt.remote import Mirror
 from cvpilot.ckpt.rng import capture_rng, validate_rng
@@ -155,6 +160,8 @@ class CheckpointManager:
         grace_seconds: float = 30.0,
         format: CheckpointFormat = "safetensors",  # noqa: A002
         max_checkpoint_bytes: int = DEFAULT_MAX_BYTES,
+        remote_max_candidate_bytes: int = DEFAULT_REMOTE_CANDIDATE_BYTES,
+        remote_max_total_bytes: int = DEFAULT_REMOTE_TOTAL_BYTES,
         verify_after_save: bool = True,
         install_signal_handlers: bool = True,
         notice_source: preempt.NoticeSource | str | None = None,
@@ -226,6 +233,11 @@ class CheckpointManager:
         self.grace_seconds = float(grace_seconds)
         self._format: CheckpointFormat = format
         self._max_bytes = max_checkpoint_bytes
+        if remote_max_candidate_bytes < 1 or remote_max_total_bytes < remote_max_candidate_bytes:
+            raise ValueError(
+                "remote byte caps must be positive and the total at least one candidate"
+            )
+        self._remote_candidate_bytes = remote_max_candidate_bytes
         self._verify = verify_after_save
         self._lock_timeout = lock_timeout
         self._key = key
@@ -256,10 +268,12 @@ class CheckpointManager:
                 else remotes.get(location.scheme)(location, timeout=remote_timeout),
                 retries=remote_retries,
                 deadline=remote_deadline,
+                max_total_bytes=remote_max_total_bytes,
                 sleep=remote_sleep,
                 clock=remote_clock,
             )
         self._own = self._dir_for(self._handle.run_id)
+        self._lease_fd: int | None = self._own.hold_lease()  # dies with the process
         self._last_step: int | None = None
         self._last_time = clock()
         self._best_value: float | None = None
@@ -323,7 +337,14 @@ class CheckpointManager:
         return None if self._mirror is None else self._mirror.location.url
 
     def close(self) -> None:
-        """Stop the notice poller and put the previous signal handlers back."""
+        """Stop the notice poller, put the previous signal handlers back and release the
+        liveness lease."""
+        if self._lease_fd is not None:
+            try:
+                os.close(self._lease_fd)
+            except OSError:
+                pass
+            self._lease_fd = None
         if self._poller is not None:
             self._poller.stop()
         self._guard.restore()
@@ -698,41 +719,33 @@ class CheckpointManager:
         )
         if self._mirror is not None:
             self._mirror.begin_restore()
+        ctx = AdmitContext(
+            accept_rollback_to=accept_rollback_to,
+            min_step=self.min_step,
+            max_candidate_bytes=self._remote_candidate_bytes,
+        )
         skipped: list[Skipped] = []
         for run_id in order:
-            remote_steps: list[int] = []
-            found = self._restore_local(run_id, kind, map_location, skipped, policy)
+            found = self._restore_local(run_id, kind, map_location, skipped, policy, ctx)
             if found is None and self._mirror is not None:
-                found = self._restore_remote(
-                    run_id, kind, map_location, skipped, policy, remote_steps
-                )
+                found = self._restore_remote(run_id, kind, map_location, skipped, policy, ctx)
             if found is None:
                 continue
-            self._dir_for(run_id, policy).check_fresh(
-                kind,
-                found.manifest.step,
-                present=remote_steps,
-                accept_rollback_to=accept_rollback_to,
-                min_step=self.min_step,
-            )
             self._announce(found, run_id, kind, len(skipped), policy)
             self.last_restore = found
             return found
         self.last_restore = None
-        untrusted = [s for s in skipped if s.reason in TRUST_REASONS]
-        if untrusted and policy != "any":
+        if self.min_step is not None and accept_rollback_to != 0:
+            skipped.append(Skipped(None, kind, kind, "rolled_back"))  # progress is known: min_step
+        failure = gate_failure(skipped, policy)
+        if failure is not None:
+            reason, message = failure
+            rejected = [s for s in skipped if s.reason in TRUST_REASONS]
             self._emit(
-                "error", "checkpoint_untrusted", required=policy,
-                rejected=len(untrusted), reasons=sorted({s.reason for s in untrusted}),
+                "error", "checkpoint_untrusted", required=policy, reason=reason,
+                rejected=len(rejected), reasons=sorted({s.reason for s in rejected}),
             )  # fmt: skip
-            raise CheckpointUntrustedError(
-                f"{len(untrusted)} checkpoint(s) exist but none reaches the required trust level "
-                f"{policy!r}; nothing was restored (see CVPILOT_CKPT_REQUIRE_TRUST)"
-            )
-        for run_id in order:  # nothing at all: was something saved and then removed?
-            self._dir_for(run_id, policy).check_fresh(
-                kind, None, accept_rollback_to=accept_rollback_to, min_step=self.min_step
-            )
+            raise CheckpointUntrustedError(message, reason=reason)
         self._emit("info", "checkpoint_restore_empty", dir=str(self._root), skipped=len(skipped))
         return None
 
@@ -758,9 +771,10 @@ class CheckpointManager:
         map_location: str,
         skipped: list[Skipped],
         policy: str | None = None,
+        ctx: AdmitContext | None = None,
     ) -> Restored | None:
         found = self._dir_for(run_id, policy)
-        for verified in found.iter_valid(kind, load=True):
+        for verified in found.iter_valid(kind, load=True, ctx=ctx):
             try:
                 assert verified.data is not None  # noqa: S101  # load=True always sets it
                 state = get_serializer(verified.manifest.format).loads(
@@ -795,7 +809,7 @@ class CheckpointManager:
         map_location: str,
         skipped: list[Skipped],
         policy: str,
-        present: list[int],
+        ctx: AdmitContext,
     ) -> Restored | None:
         """Nothing usable locally: fetch the newest remote checkpoints one by one (verified before
         they are kept) and restore through the same local checks. ``present`` receives the steps
@@ -809,10 +823,10 @@ class CheckpointManager:
                 "warning", "checkpoint_download_failed", kind=kind, error_type=type(exc).__name__
             )
             return None
-        present.extend(steps)
+        ctx = replace(ctx, present=frozenset(steps))  # still listed, so not "gone"
         for step in steps[:MAX_REMOTE_CANDIDATES]:
             try:
-                self._mirror.fetch(found, kind, step)
+                self._mirror.fetch(found, kind, step, ctx)
             except (CheckpointCorruptError, OSError) as exc:
                 reason = (
                     exc.reason if isinstance(exc, CheckpointCorruptError) else "remote_unavailable"
@@ -828,7 +842,7 @@ class CheckpointManager:
                     reason=reason, remote=self._mirror.label,
                 )  # fmt: skip
                 continue
-            restored = self._restore_local(run_id, kind, map_location, skipped, policy)
+            restored = self._restore_local(run_id, kind, map_location, skipped, policy, ctx)
             if restored is not None:
                 return restored
         return None

@@ -20,7 +20,12 @@ import time
 from collections.abc import Callable, Iterator
 from typing import Any, TypeVar
 
-from cvpilot.ckpt.directory import RunCheckpoints, manifest_name
+from cvpilot.ckpt.directory import (
+    DEFAULT_REMOTE_TOTAL_BYTES,
+    AdmitContext,
+    RunCheckpoints,
+    manifest_name,
+)
 from cvpilot.core.errors import CheckpointCorruptError, CheckpointError
 from cvpilot.core.schema import MAX_MANIFEST_BYTES, CheckpointKind, CheckpointManifest, RemoteStore
 from cvpilot.core.uri import RemoteLocation
@@ -73,6 +78,7 @@ class Mirror:
         retries: int = 3,
         backoff: float = 0.5,
         deadline: float = 300.0,
+        max_total_bytes: int = DEFAULT_REMOTE_TOTAL_BYTES,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -83,6 +89,7 @@ class Mirror:
         self._retries, self._backoff, self._deadline = retries, backoff, deadline
         self._sleep, self._clock = sleep, clock
         self._fetched = 0
+        self._max_total = max_total_bytes
 
     def begin_restore(self) -> None:
         """Start a restore: the byte budget of fetches begins again."""
@@ -238,7 +245,13 @@ class Mirror:
         steps = [int(m.group(1)) for n in names if (m := _STEP_NAME.fullmatch(n))]
         return sorted(steps, reverse=True)
 
-    def fetch(self, rc: RunCheckpoints, kind: CheckpointKind, step: int) -> bool:
+    def fetch(
+        self,
+        rc: RunCheckpoints,
+        kind: CheckpointKind,
+        step: int,
+        ctx: AdmitContext | None = None,
+    ) -> bool:
         """Download one checkpoint into the local directory; the manifest and the data are
         verified before anything is kept.
 
@@ -261,6 +274,18 @@ class Mirror:
             raise CheckpointCorruptError(
                 "the remote manifest does not verify", reason=probe.reason or "manifest_invalid"
             )
+        # the one gate, before a single byte of data is read: trust, size caps, rollback floor
+        refusal = rc.admission(kind, ctx).decide(rc.judge_single(probe, kind))
+        if refusal is not None:
+            raise CheckpointCorruptError(
+                f"the remote checkpoint is not admitted ({refusal}); nothing was downloaded",
+                reason=refusal,
+            )
+        if self._fetched + manifest.size_bytes > self._max_total:
+            raise CheckpointCorruptError(
+                "the byte budget of this restore is used up", reason="too_large"
+            )
+        self._fetched += manifest.size_bytes
         key = base + manifest.path.split("/", 1)[1]
         size = self._call(lambda: self._store.size(key), started)
         if size != manifest.size_bytes:
@@ -280,4 +305,4 @@ class Mirror:
                 offset += len(chunk)
                 yield chunk
 
-        return rc.install(kind, step, raw, chunks()) is not None
+        return rc.install(kind, step, raw, chunks(), ctx) is not None

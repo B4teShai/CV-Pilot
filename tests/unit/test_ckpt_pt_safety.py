@@ -185,7 +185,9 @@ def test_the_directory_refuses_pt_files_unless_allowed(tmp_path: Path) -> None:
     closed = RunCheckpoints(rc.path.parent, rc.run_id)
     assert list(closed.iter_valid("last")) == []
     assert [s.reason for s in closed.skipped] == ["pt_not_allowed"]
-    assert [e.status for e in closed.inspect("last")] == ["valid"]  # verifying never loads
+    # verification and retention use the same gate as restore: a pt file that is not allowed is
+    # not "valid" for them either
+    assert [(e.status, e.reason) for e in closed.inspect("last")] == [("corrupt", "pt_not_allowed")]
 
 
 def evil_pickle() -> bytes:

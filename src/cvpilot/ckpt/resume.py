@@ -14,18 +14,28 @@ access to the checkpoint directory (see the threat model).
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, overload
 
 from cvpilot import runs
 from cvpilot.ckpt import auth, serializers
-from cvpilot.ckpt.directory import TRUST_REASONS, RunCheckpoints, Skipped
+from cvpilot.ckpt.directory import AdmitContext, RunCheckpoints, Skipped, gate_failure
 from cvpilot.core.errors import CheckpointCorruptError, CheckpointUntrustedError
-from cvpilot.core.schema import CheckpointKind, CheckpointManifest, RequireTrust, TrustLevel
+from cvpilot.core.schema import (
+    CheckpointKind,
+    CheckpointManifest,
+    RequireTrust,
+    RunMeta,
+    TrustLevel,
+)
+from cvpilot.logging import get_logger
 from cvpilot.settings import load_settings
 
-RESUMABLE = ("preempted", "failed", "running")
+RESUMABLE = ("preempted", "failed", "running", "resumed")
+LIVE = ("running", "resumed")
+DEFAULT_ALIVE_WITHIN_S = 900.0
 
 
 @dataclass(frozen=True)
@@ -33,13 +43,44 @@ class ResumePoint:
     """A verified checkpoint to resume from and where it came from."""
 
     run_id: str
+    """The run to pass as ``resume_from``: the newest run of the lineage."""
     path: Path
     manifest: CheckpointManifest
     trust: TrustLevel
     status: str
     needs_recover: bool
-    """True when the run is still ``running`` (its process died): mark it failed with
-    ``cvpilot.runs.recover_run`` before passing it as ``resume_from``."""
+    """True when the run is still ``running`` or ``resumed`` (its process died): mark it failed
+    with ``cvpilot.runs.recover_run`` before passing it as ``resume_from``."""
+    checkpoint_run_id: str = ""
+    """The run whose directory holds the file (an ancestor when ``run_id`` crashed before it
+    saved anything)."""
+    reason: str = ""
+
+
+def _alive(
+    project: str, root: Path, store_root: Path | None, run_id: str, alive_within_s: float
+) -> bool:
+    """Is a process still working on this run? The liveness lease is exact (the kernel drops it
+    when the process dies); without one, activity within ``alive_within_s`` seconds counts."""
+    probe = RunCheckpoints(root, run_id)
+    state = probe.lease_state()
+    if state is not None:
+        return state
+    seen = [probe.last_activity(), runs.last_metric_activity(project, run_id, store_root)]
+    latest = max((t for t in seen if t is not None), default=None)
+    return latest is not None and time.time() - latest < alive_within_s
+
+
+def _lineage(leaf: RunMeta, by_id: dict[str, RunMeta]) -> list[RunMeta]:
+    chain = [leaf]
+    seen = {leaf.run_id}
+    while chain[-1].parent_run_id is not None and len(chain) < 64:
+        parent = by_id.get(chain[-1].parent_run_id or "")
+        if parent is None or parent.run_id in seen:
+            break
+        chain.append(parent)
+        seen.add(parent.run_id)
+    return chain
 
 
 def find_resume_point(
@@ -51,8 +92,23 @@ def find_resume_point(
     kind: CheckpointKind = "last",
     min_step: int | None = None,
     accept_rollback_to: int | None = None,
+    name: str | None = None,
+    alive_within_s: float = DEFAULT_ALIVE_WITHIN_S,
+    force: bool = False,
 ) -> ResumePoint | None:
-    """The newest verified checkpoint of ``kind`` among the project's resumable runs.
+    """The newest verified checkpoint of ``kind`` among the project's resumable lineages.
+
+    A lineage is a run and the runs it resumed. Only its newest run (the one nobody resumed) is a
+    starting point, so a crashed resumed run (status ``resumed``) is chosen over its parent and a
+    lineage whose newest run finished is done. The checkpoint is searched in the newest run
+    first and then in its ancestors; the returned ``run_id`` is the run to ``resume_from`` even
+    when the file belongs to an ancestor.
+
+    **The search is project-wide.** ``name`` restricts it to runs of one job (``init(name=...)``);
+    without it, any resumable run of the project qualifies, so two different jobs in one project
+    can pick up each other's weights. A run that a live process is still working on is never
+    chosen (and so never recovered) unless ``force``: liveness is the run's lease in the
+    checkpoint directory, or, for runs without one, activity within ``alive_within_s``.
 
     The policy is ``require_trust``, else ``CVPILOT_CKPT_REQUIRE_TRUST``, else ``authenticated``
     when ``CVPILOT_CKPT_KEY`` is set, else ``any``. Under the strict policies a point older than
@@ -62,7 +118,8 @@ def find_resume_point(
 
     Raises:
         ValueError: no checkpoint directory is given or configured.
-        CheckpointUntrustedError: checkpoints exist but none reaches the required trust level.
+        CheckpointUntrustedError: checkpoints exist but none reaches the required trust level, or
+            the newest is a rollback or the run store cannot be consulted.
         CheckpointError: ``require_trust='authenticated'`` without ``CVPILOT_CKPT_KEY``.
     """
     settings = load_settings()
@@ -76,44 +133,66 @@ def find_resume_point(
     policy: RequireTrust = auth.resolve_policy(  # type: ignore[assignment]
         require_trust, settings.ckpt_require_trust, key
     )
-    floor_mark = min_step if min_step is not None else settings.ckpt_min_step
+    mark = min_step if min_step is not None else settings.ckpt_min_step
+    ctx = AdmitContext(accept_rollback_to=accept_rollback_to, min_step=mark)
+    log = get_logger("cvpilot.ckpt")
     opened = runs.open_anchor(project, store_root)
     anchor = opened[0] if opened is not None else None
-    rejected: list[str] = []
+    rejected: list[Skipped] = []
     try:
-        for meta in runs.list_runs(project, store_dir=store_root):
-            if meta.status not in RESUMABLE:
+        metas = runs.list_runs(project, store_dir=store_root)
+        by_id = {m.run_id: m for m in metas}
+        parents = {m.parent_run_id for m in metas if m.parent_run_id is not None}
+        leaves = sorted(
+            (m for m in metas if m.run_id not in parents), key=lambda m: m.run_id, reverse=True
+        )
+        for leaf in leaves:
+            if leaf.status not in RESUMABLE or (name is not None and leaf.name != name):
                 continue
-            found = RunCheckpoints(
-                root, meta.run_id, anchor=anchor, key=key, require_trust=policy,
-                allow_pt=settings.ckpt_allow_pt,
-            )  # fmt: skip
-            point = _first_usable(found, meta.run_id, meta.status, kind, root)
-            rejected += [s.reason for s in found.skipped]
-            if point is None:  # a newer run whose checkpoints are all gone is not skipped silently
-                found.check_fresh(kind, None, accept_rollback_to=accept_rollback_to)
+            if (
+                leaf.status in LIVE
+                and not force
+                and _alive(project, root, store_root, leaf.run_id, alive_within_s)
+            ):
+                log.info("resume_point_skipped_alive", run_id=leaf.run_id, status=leaf.status)
                 continue
-            found.check_fresh(
-                kind,
-                point.manifest.step,
-                accept_rollback_to=accept_rollback_to,
-                min_step=floor_mark,
-            )
-            return point
+            for owner in _lineage(leaf, by_id):
+                found = RunCheckpoints(
+                    root, owner.run_id, anchor=anchor, key=key, require_trust=policy,
+                    allow_pt=settings.ckpt_allow_pt,
+                )  # fmt: skip
+                point = _first_usable(found, owner.run_id, leaf, kind, root, ctx)
+                rejected += found.skipped
+                if point is not None:
+                    log.info(
+                        "resume_point_selected", run_id=point.run_id,
+                        checkpoint_run_id=point.checkpoint_run_id, step=point.manifest.step,
+                        status=point.status, trust_level=point.trust, reason=point.reason,
+                    )  # fmt: skip
+                    return point
+                failure = gate_failure(found.skipped, policy)
+                if failure is not None and failure[0] in ("rolled_back", "anchor_error"):
+                    raise CheckpointUntrustedError(failure[1], reason=failure[0])
     finally:
         if opened is not None:
             opened[1]()
-    if policy != "any" and any(r in TRUST_REASONS for r in rejected):
-        raise CheckpointUntrustedError(
-            f"checkpoints exist but none reaches the required trust level {policy!r}"
-        )
+    if mark is not None and accept_rollback_to != 0:
+        rejected.append(Skipped(None, kind, kind, "rolled_back"))
+    failure = gate_failure(rejected, policy)
+    if failure is not None:
+        raise CheckpointUntrustedError(failure[1], reason=failure[0])
     return None
 
 
 def _first_usable(
-    found: RunCheckpoints, run_id: str, status: str, kind: CheckpointKind, root: Path
+    found: RunCheckpoints,
+    owner_id: str,
+    leaf: RunMeta,
+    kind: CheckpointKind,
+    root: Path,
+    ctx: AdmitContext,
 ) -> ResumePoint | None:
-    for verified in found.iter_valid(kind):
+    for verified in found.iter_valid(kind, ctx=ctx):
         manifest = verified.manifest
         if manifest.format == "pt":
             try:
@@ -121,8 +200,13 @@ def _first_usable(
             except CheckpointCorruptError as exc:
                 found.skipped.append(Skipped(manifest.step, kind, manifest.path, exc.reason))
                 continue
-        path = Path(root).expanduser().resolve() / run_id / manifest.path
-        return ResumePoint(run_id, path, manifest, verified.trust, status, status == "running")
+        path = Path(root).expanduser().resolve() / owner_id / manifest.path
+        inherited = owner_id != leaf.run_id
+        return ResumePoint(
+            leaf.run_id, path, manifest, verified.trust, leaf.status, leaf.status in LIVE,
+            owner_id,
+            "checkpoint inherited from an ancestor run" if inherited else "newest resumable run",
+        )  # fmt: skip
     return None
 
 
