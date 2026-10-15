@@ -16,6 +16,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Fixed
 
+- Retention re-hashed every kept checkpoint after every save (and `verify_after_save` hashed the new
+  one twice), which made a steady-state save at `keep_last=3` about three times as slow as
+  necessary (0.52 s against 0.19 s for a 128 MB state on macOS arm64, `benchmarks/ckpt_save.py`).
+  Retention now hashes a file only if this process has not verified it with the same inode, size and
+  times; only a checkpoint that verifies is ever deleted. The budget of ADR-0006 (5 % over a plain
+  write) is still not met: SHA-256 is paid once per save.
+
 - The preemption path caught only a short list of exception types, so a model whose `state_dict`
   raised `RuntimeError` escaped into the training loop and the run was never marked `preempted`.
   It now catches everything, marks the run right after the local checkpoint verifies, uploads with

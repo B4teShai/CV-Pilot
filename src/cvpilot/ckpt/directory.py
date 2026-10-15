@@ -371,6 +371,7 @@ class RunCheckpoints:
         self.require_trust: RequireTrust = require_trust
         self.allow_pt = allow_pt
         self.skipped: list[Skipped] = []
+        self._verified_files: dict[tuple[str, str], tuple[tuple[int, ...], str]] = {}
         try:
             self.path = Path(root).expanduser().resolve() / run_id
         except (OSError, RuntimeError) as exc:
@@ -880,6 +881,40 @@ class RunCheckpoints:
                 if kind_fd is not None:
                     os.close(kind_fd)
 
+    @staticmethod
+    def _identity(kind_fd: int, name: str) -> tuple[int, ...] | None:
+        """Inode, size and times of a file: what changes when it is replaced or rewritten."""
+        import os
+
+        try:
+            st = os.stat(name, dir_fd=kind_fd, follow_symlinks=False)
+        except OSError:
+            return None
+        return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    def _remember_verified(self, kind_fd: int, manifest: CheckpointManifest) -> None:
+        name = manifest.path.split("/", 1)[1]
+        identity = self._identity(kind_fd, name)
+        if identity is not None:
+            self._verified_files[(manifest.kind, name)] = (identity, manifest.sha256)
+
+    def _data_ok(self, kind_fd: int, manifest: CheckpointManifest) -> bool:
+        """Does the data of ``manifest`` verify? Used by retention only (a restore always
+        hashes): a file this process verified (at save or earlier) whose inode, size and times
+        are unchanged is not hashed again, so steady-state retention reads nothing."""
+        name = manifest.path.split("/", 1)[1]
+        key = (manifest.kind, name)
+        identity = self._identity(kind_fd, name)
+        if identity is not None and self._verified_files.get(key) == (identity, manifest.sha256):
+            return True
+        try:
+            self._check_data(kind_fd, manifest, load=False)
+        except CheckpointCorruptError:
+            self._verified_files.pop(key, None)
+            return False
+        self._remember_verified(kind_fd, manifest)
+        return True
+
     def inspect(self, kind: CheckpointKind, *, check_data: bool = True) -> list[Entry]:
         """Every checkpoint and every stray file of ``kind`` with its verification result,
         newest step first. ``check_data=False`` judges manifests only (no hashing)."""
@@ -1112,6 +1147,7 @@ class RunCheckpoints:
                         f"{final_data} does not verify after it was written",
                         reason="digest_mismatch",
                     )
+                self._remember_verified(kind_fd, manifest)
         except BaseException:
             fsops.unlink_quiet(kind_fd, temp_data)
             fsops.unlink_quiet(kind_fd, temp_manifest)
@@ -1381,18 +1417,25 @@ class RunCheckpoints:
             if kind_fd is None:
                 return PruneResult()
             try:
-                valid = [
+                # manifests that pass the gate, newest first; their data is hashed only when it
+                # matters and was not already verified by this process (see ``_data_ok``)
+                cands = [
                     e.manifest
-                    for e in self.inspect(kind, check_data=True)
+                    for e in self.inspect(kind, check_data=False)
                     if e.status == "valid" and e.manifest is not None
                 ]
-                if not valid:
+                newest = next((m for m in cands if self._data_ok(kind_fd, m)), None)
+                if newest is None:
                     return PruneResult()
-                newest = valid[0]
+                kept: list[CheckpointManifest] = []
                 if kind == "last":
-                    kept = valid[:keep]
+                    for m in cands:
+                        if len(kept) >= keep:
+                            break
+                        if self._data_ok(kind_fd, m):
+                            kept.append(m)
                 else:
-                    saved_modes = {m.metric_mode for m in valid if m.metric_mode is not None}
+                    saved_modes = {m.metric_mode for m in cands if m.metric_mode is not None}
                     if len(saved_modes) > 1 or (
                         mode is not None and saved_modes and saved_modes != {mode}
                     ):
@@ -1403,12 +1446,20 @@ class RunCheckpoints:
                     ranking = mode or (next(iter(saved_modes)) if saved_modes else "max")
                     sign = 1.0 if ranking == "max" else -1.0
                     ranked = sorted(
-                        valid, key=lambda m: (sign * (m.metric_value or 0.0), m.step), reverse=True
+                        cands, key=lambda m: (sign * (m.metric_value or 0.0), m.step), reverse=True
                     )
-                    kept = ranked[:keep]
+                    for m in ranked:
+                        if len(kept) >= keep:
+                            break
+                        if self._data_ok(kind_fd, m):
+                            kept.append(m)
                     if newest not in kept:
                         kept.append(newest)
-                doomed = sorted((m for m in valid if m not in kept), key=lambda m: m.step)
+                # only a checkpoint that verifies is ever deleted: a damaged one is left alone
+                doomed = sorted(
+                    (m for m in cands if m not in kept and self._data_ok(kind_fd, m)),
+                    key=lambda m: m.step,
+                )
                 if doomed and is_confirmed is not None and not is_confirmed(newest):
                     return PruneResult([], list(kept), held_back=True)
                 if not dry_run:

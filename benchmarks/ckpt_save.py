@@ -29,6 +29,8 @@ from cvpilot.ckpt.serializers import get_serializer
 from cvpilot.core.hashing import new_run_id
 from cvpilot.core.schema import Repro, RunMeta
 
+keep_last_warmup = 3  # the first saves have fewer files to retain
+
 
 def plain_write(path: Path, data: bytes) -> float:
     started = time.perf_counter()
@@ -64,6 +66,33 @@ def managed_save(root: Path, store: Path, state: dict[str, np.ndarray], *, verif
     return elapsed
 
 
+def steady_saves(
+    root: Path, store: Path, state: dict[str, np.ndarray], *, saves: int = 7, keep_last: int = 3
+) -> list[float]:
+    """Times of consecutive ``save_now`` calls on one manager with retention on: the saves a long
+    job actually pays for (each one also prunes the checkpoints beyond ``keep_last``)."""
+    run_id = new_run_id()
+    meta = RunMeta(
+        run_id=run_id, project="bench", name="bench", status="running", task="detection",
+        framework="python==3.12.1", host="h", started_at=datetime.now(timezone.utc),
+        schema_version=1,
+    )  # fmt: skip
+    repro = Repro(
+        run_id=run_id, git_dirty=False, packages_lock_sha256="0" * 64, python_version="3",
+        gpu_names=[], dataset_uri="", dataset_hash="merkle:" + "0" * 64, config={},
+        command_line="bench",
+    )  # fmt: skip
+    run = runs.start_run(meta, repro, store_dir=store)
+    manager = CheckpointManager(run, dir=root, keep_last=keep_last, install_signal_handlers=False)
+    times: list[float] = []
+    for step in range(1, saves + 1):
+        started = time.perf_counter()
+        manager.save_now(step, model=state)
+        times.append(time.perf_counter() - started)
+    run.finish()
+    return times
+
+
 def main(megabytes: int = 256, repeats: int = 3) -> None:
     state = {"w": np.random.default_rng(0).random(megabytes * 1024 * 1024 // 4).astype(np.float32)}
     data = get_serializer("safetensors").dumps({"model": state})
@@ -77,6 +106,7 @@ def main(megabytes: int = 256, repeats: int = 3) -> None:
         verified = [
             managed_save(base / f"v{i}", base / "store", state, verify=True) for i in range(repeats)
         ]
+        steady = steady_saves(base / "steady", base / "store", state)[keep_last_warmup:]
     p, u, v = (statistics.median(x) for x in (plain, unverified, verified))
     # the managed numbers include serialising the state, which the plain write does not
     serialise = []
@@ -90,6 +120,9 @@ def main(megabytes: int = 256, repeats: int = 3) -> None:
     sys.stdout.write(f"serialise only:                          {s:.3f} s\n")
     sys.stdout.write(f"save_now, verify_after_save=False:       {u:.3f} s\n")
     sys.stdout.write(f"save_now, verify_after_save=True:        {v:.3f} s\n")
+    sys.stdout.write(
+        f"save_now in steady state (keep_last=3, retention on): {statistics.median(steady):.3f} s\n"
+    )
     sys.stdout.write(
         f"overhead over serialise + plain write, unverified: {(u / (s + p) - 1) * 100:.1f} %\n"
     )
