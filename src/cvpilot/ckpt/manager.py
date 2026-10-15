@@ -32,7 +32,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 from cvpilot.ckpt import auth, fsops, preempt
 from cvpilot.ckpt.directory import (
@@ -72,7 +72,14 @@ MAX_REMOTE_CANDIDATES = 10
 MAX_GRACE_S = 3600.0
 _WEIGHT_KEYS = ("model", "ema")
 _STATE_OBJECTS = ("model", "optimizer", "scheduler", "scaler", "ema")
-_RUN_METHODS = ("emit", "ancestors", "repro_facts", "record_checkpoint", "checkpoint_digest")
+_RUN_METHODS = (
+    "emit",
+    "ancestors",
+    "repro_facts",
+    "record_checkpoint",
+    "checkpoint_digest",
+    "checkpoint_max_step",
+)
 
 
 @dataclass
@@ -108,6 +115,21 @@ def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+class _HandleAnchor:
+    """The run store as the directory's external anchor: manifest digests and the highest step."""
+
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+
+    def __call__(self, run_id: str, kind: CheckpointKind, step: int) -> str | None:
+        digest: str | None = self._handle.checkpoint_digest(run_id, kind, step)
+        return digest
+
+    def max_step(self, run_id: str, kind: CheckpointKind) -> int | None:
+        value: int | None = self._handle.checkpoint_max_step(run_id, kind)
+        return value
+
+
 class CheckpointManager:
     """Atomic, verified checkpoints for one run. See the module docstring."""
 
@@ -141,16 +163,17 @@ class CheckpointManager:
         lock_timeout: float = 30.0,
         require_trust: RequireTrust | None = None,
         allow_pt_format: bool | None = None,
+        min_step: int | None = None,
     ) -> None:
         settings = load_settings()
+        key = auth.load_key()  # environment only; never stored, logged or passed on
         if dir is None:
             dir = settings.checkpoint_dir
         if dir is None:
             raise ValueError("dir is required: pass dir= or set CVPILOT_CHECKPOINT_DIR")
         if remote is None:
             remote = settings.checkpoint_remote
-        if require_trust is None:
-            require_trust = settings.ckpt_require_trust
+        require_trust = auth.resolve_policy(require_trust, settings.ckpt_require_trust, key)  # type: ignore[assignment]
         if require_trust not in POLICIES:
             raise ValueError(f"require_trust must be one of {', '.join(POLICIES)}")
         if allow_pt_format is None:
@@ -205,11 +228,19 @@ class CheckpointManager:
         self._max_bytes = max_checkpoint_bytes
         self._verify = verify_after_save
         self._lock_timeout = lock_timeout
-        self._key = auth.load_key()  # environment only; never stored, logged or passed on
+        self._key = key
+        self.min_step = min_step if min_step is not None else settings.ckpt_min_step
+        if self.min_step is not None and (
+            isinstance(self.min_step, bool)
+            or not isinstance(self.min_step, int)
+            or self.min_step < 0
+        ):
+            raise ValueError("min_step must be a non-negative integer")
+        self._anchor = _HandleAnchor(self._handle)
         self.require_trust: RequireTrust = require_trust
         self.allow_pt = allow_pt_format
         self._clock = clock
-        self._dirs: dict[str, RunCheckpoints] = {}
+        self._dirs: dict[tuple[str, str], RunCheckpoints] = {}
         self._mirror: Mirror | None = None
         if remote is not None or remote_store is not None:
             if remote is None:
@@ -257,8 +288,9 @@ class CheckpointManager:
             fields["checkpoint_run_id"] = owner
         self._handle.emit(level, event, **fields)
 
-    def _dir_for(self, run_id: str) -> RunCheckpoints:
-        found = self._dirs.get(run_id)
+    def _dir_for(self, run_id: str, policy: str | None = None) -> RunCheckpoints:
+        level: Any = policy or self.require_trust
+        found = self._dirs.get((run_id, level))
         if found is None:
             found = RunCheckpoints(
                 self._root,
@@ -266,13 +298,13 @@ class CheckpointManager:
                 create=run_id == self._handle.run_id,
                 max_bytes=self._max_bytes,
                 emit=self._emit,
-                anchor=self._handle.checkpoint_digest,
+                anchor=self._anchor,
                 lock_timeout=self._lock_timeout,
                 key=self._key,
-                require_trust=self.require_trust,
+                require_trust=level,
                 allow_pt=self.allow_pt,
             )
-            self._dirs[run_id] = found
+            self._dirs[(run_id, level)] = found
         return found
 
     def _versions(self) -> dict[str, str]:
@@ -639,46 +671,95 @@ class CheckpointManager:
         *,
         map_location: str = "cpu",
         run_ids: Sequence[str] | None = None,
+        require_trust: RequireTrust | None = None,
+        accept_rollback_to: int | None = None,
     ) -> Restored | None:
         """The newest checkpoint of ``kind`` that verifies and loads, searching this run first
         and then the runs it resumed (nearest first). Corrupt, truncated, forged, replaced or
         symlinked files are skipped and counted, never loaded; ``None`` when nothing verifies.
 
-        Under the trust policy ``anchored`` or ``authenticated`` a candidate that lacks its own
-        proof is never substituted at a lower level: if candidates exist but none qualifies,
-        ``CheckpointUntrustedError`` is raised (event ``checkpoint_untrusted``).
+        ``require_trust`` overrides the manager's policy for this call. Under ``anchored`` or
+        ``authenticated`` a candidate that lacks its own proof is never substituted at a lower
+        level: if candidates exist but none qualifies, ``CheckpointUntrustedError`` is raised
+        (event ``checkpoint_untrusted``). The strict policies also look for rollback: if the
+        newest checkpoint that qualifies is older than one the tag-checked pointer, the run store
+        or ``min_step`` says existed, ``CheckpointUntrustedError`` with reason ``rolled_back`` is
+        raised; ``accept_rollback_to=N`` accepts a restore at step N or later on purpose (logged;
+        0 accepts starting from nothing). A newer checkpoint that is still present but damaged is
+        corruption, not rollback.
         """
+        policy: RequireTrust = require_trust or self.require_trust
+        if policy not in POLICIES:
+            raise ValueError(f"require_trust must be one of {', '.join(POLICIES)}")
         order = (
             list(run_ids)
             if run_ids is not None
             else [self._handle.run_id, *self._handle.ancestors()]
         )
+        if self._mirror is not None:
+            self._mirror.begin_restore()
         skipped: list[Skipped] = []
         for run_id in order:
-            found = self._restore_local(run_id, kind, map_location, skipped)
+            remote_steps: list[int] = []
+            found = self._restore_local(run_id, kind, map_location, skipped, policy)
             if found is None and self._mirror is not None:
-                found = self._restore_remote(run_id, kind, map_location, skipped)
-            if found is not None:
-                self.last_restore = found
-                return found
+                found = self._restore_remote(
+                    run_id, kind, map_location, skipped, policy, remote_steps
+                )
+            if found is None:
+                continue
+            self._dir_for(run_id, policy).check_fresh(
+                kind,
+                found.manifest.step,
+                present=remote_steps,
+                accept_rollback_to=accept_rollback_to,
+                min_step=self.min_step,
+            )
+            self._announce(found, run_id, kind, len(skipped), policy)
+            self.last_restore = found
+            return found
         self.last_restore = None
         untrusted = [s for s in skipped if s.reason in TRUST_REASONS]
-        if untrusted and self.require_trust != "any":
+        if untrusted and policy != "any":
             self._emit(
-                "error", "checkpoint_untrusted", required=self.require_trust,
+                "error", "checkpoint_untrusted", required=policy,
                 rejected=len(untrusted), reasons=sorted({s.reason for s in untrusted}),
             )  # fmt: skip
             raise CheckpointUntrustedError(
                 f"{len(untrusted)} checkpoint(s) exist but none reaches the required trust level "
-                f"{self.require_trust!r}; nothing was restored (see CVPILOT_CKPT_REQUIRE_TRUST)"
+                f"{policy!r}; nothing was restored (see CVPILOT_CKPT_REQUIRE_TRUST)"
+            )
+        for run_id in order:  # nothing at all: was something saved and then removed?
+            self._dir_for(run_id, policy).check_fresh(
+                kind, None, accept_rollback_to=accept_rollback_to, min_step=self.min_step
             )
         self._emit("info", "checkpoint_restore_empty", dir=str(self._root), skipped=len(skipped))
         return None
 
+    def _announce(
+        self, found: Restored, run_id: str, kind: CheckpointKind, skipped: int, policy: str
+    ) -> None:
+        manifest = found.manifest
+        self._emit(
+            "info", "checkpoint_restored", run_id=run_id, step=manifest.step, kind=kind,
+            size_bytes=manifest.size_bytes, sha256_prefix=manifest.sha256[:12],
+            skipped=skipped, trust_level=found.trust,
+        )  # fmt: skip
+        if self._key is not None and policy == "any" and found.trust != "authenticated":
+            self._emit(
+                "warning", "checkpoint_untrusted_accepted", step=manifest.step, kind=kind,
+                trust_level=found.trust, reason="a key is configured but the policy is any",
+            )  # fmt: skip
+
     def _restore_local(
-        self, run_id: str, kind: CheckpointKind, map_location: str, skipped: list[Skipped]
+        self,
+        run_id: str,
+        kind: CheckpointKind,
+        map_location: str,
+        skipped: list[Skipped],
+        policy: str | None = None,
     ) -> Restored | None:
-        found = self._dir_for(run_id)
+        found = self._dir_for(run_id, policy)
         for verified in found.iter_valid(kind, load=True):
             try:
                 assert verified.data is not None  # noqa: S101  # load=True always sets it
@@ -703,23 +784,24 @@ class CheckpointManager:
                 )  # fmt: skip
                 continue
             skipped.extend(found.skipped)
-            manifest = verified.manifest
-            self._emit(
-                "info", "checkpoint_restored", run_id=run_id, step=manifest.step, kind=kind,
-                size_bytes=manifest.size_bytes, sha256_prefix=manifest.sha256[:12],
-                skipped=len(skipped), trust_level=verified.trust,
-            )  # fmt: skip
-            return Restored(state, manifest, run_id, skipped, verified.trust)
+            return Restored(state, verified.manifest, run_id, skipped, verified.trust)
         skipped.extend(found.skipped)
         return None
 
     def _restore_remote(
-        self, run_id: str, kind: CheckpointKind, map_location: str, skipped: list[Skipped]
+        self,
+        run_id: str,
+        kind: CheckpointKind,
+        map_location: str,
+        skipped: list[Skipped],
+        policy: str,
+        present: list[int],
     ) -> Restored | None:
         """Nothing usable locally: fetch the newest remote checkpoints one by one (verified before
-        they are kept) and restore through the same local checks."""
+        they are kept) and restore through the same local checks. ``present`` receives the steps
+        the remote lists, which the rollback check counts as still existing."""
         assert self._mirror is not None  # noqa: S101  # the caller checked
-        found = self._dir_for(run_id)
+        found = self._dir_for(run_id, policy)
         try:
             steps = self._mirror.list_steps(run_id, kind)
         except OSError as exc:
@@ -727,6 +809,7 @@ class CheckpointManager:
                 "warning", "checkpoint_download_failed", kind=kind, error_type=type(exc).__name__
             )
             return None
+        present.extend(steps)
         for step in steps[:MAX_REMOTE_CANDIDATES]:
             try:
                 self._mirror.fetch(found, kind, step)
@@ -735,20 +818,56 @@ class CheckpointManager:
                     exc.reason if isinstance(exc, CheckpointCorruptError) else "remote_unavailable"
                 )
                 skipped.append(Skipped(step, kind, f"remote:{kind}/{step}", reason))
+                event = (
+                    "checkpoint_untrusted"
+                    if reason in TRUST_REASONS
+                    else ("checkpoint_skipped_corrupt")
+                )
                 self._emit(
-                    "warning", "checkpoint_skipped_corrupt", run_id=run_id, step=step, kind=kind,
+                    "warning", event, run_id=run_id, step=step, kind=kind,
                     reason=reason, remote=self._mirror.label,
                 )  # fmt: skip
                 continue
-            restored = self._restore_local(run_id, kind, map_location, skipped)
+            restored = self._restore_local(run_id, kind, map_location, skipped, policy)
             if restored is not None:
                 return restored
         return None
 
-    def restore_latest_valid(self, *, map_location: str = "cpu") -> dict[str, Any] | None:
-        """The state of the newest valid ``last`` checkpoint, or ``None`` on a fresh start."""
-        restored = self.restore("last", map_location=map_location)
-        return None if restored is None else restored.state
+    @overload
+    def restore_latest_valid(
+        self,
+        *,
+        map_location: str = ...,
+        require_trust: RequireTrust | None = ...,
+        with_trust: Literal[False] = ...,
+    ) -> dict[str, Any] | None: ...
+
+    @overload
+    def restore_latest_valid(
+        self,
+        *,
+        map_location: str = ...,
+        require_trust: RequireTrust | None = ...,
+        with_trust: Literal[True],
+    ) -> Restored | None: ...
+
+    def restore_latest_valid(
+        self,
+        *,
+        map_location: str = "cpu",
+        require_trust: RequireTrust | None = None,
+        with_trust: bool = False,
+    ) -> dict[str, Any] | Restored | None:
+        """The state of the newest valid ``last`` checkpoint, or ``None`` on a fresh start.
+
+        ``require_trust`` overrides the policy for this call. By default only the state is
+        returned (as before); with ``with_trust=True`` the whole ``Restored`` comes back, so the
+        caller sees the trust level that was achieved (``Restored.trust``).
+        """
+        restored = self.restore("last", map_location=map_location, require_trust=require_trust)
+        if restored is None:
+            return None
+        return restored if with_trust else restored.state
 
     # -- inspection -------------------------------------------------------------------------
 

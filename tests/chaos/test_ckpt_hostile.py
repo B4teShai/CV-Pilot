@@ -173,7 +173,11 @@ def test_a_forged_coherent_directory_is_refused_when_authentication_is_required(
     data_file(rc, 2).write_bytes(evil)
     forged = forge_manifest(rc, 2, sha256=hashlib.sha256(evil).hexdigest(), size_bytes=len(evil))
     forge_pointer(rc, forged, 2)
-    restored = manager.restore()
+    # the genuine step 2 was replaced: serving step 1 instead would be a silent rollback
+    with pytest.raises(CheckpointUntrustedError) as rolled:
+        manager.restore()
+    assert rolled.value.reason == "rolled_back"
+    restored = manager.restore(accept_rollback_to=1)  # a deliberate recovery
     assert restored is not None and restored.manifest.step == 1
     assert restored.trust == "authenticated"
     # delete the genuine step 1 as well: nothing left that is authentic, so nothing is loaded

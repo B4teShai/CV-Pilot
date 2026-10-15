@@ -2,7 +2,7 @@
   "cvpilot": {
     "CheckpointManager": {
       "bases": [],
-      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 17179869184, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None) -> 'None'",
+      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 17179869184, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None, min_step: 'int | None' = None) -> 'None'",
       "kind": "class",
       "members": {
         "adopt": "(self, path: 'str | Path', step: 'int') -> 'CheckpointManifest'",
@@ -11,8 +11,8 @@
         "maybe_save": "(self, step: 'int', *, model: 'Any', optimizer: 'Any | None' = None, scheduler: 'Any | None' = None, scaler: 'Any | None' = None, rng: 'bool' = True, dataloader_state: 'Mapping[str, Any] | None' = None, metrics: 'Mapping[str, float] | None' = None, ema: 'Any | None' = None) -> 'CheckpointManifest | None'",
         "preempted": "(self) -> 'bool'",
         "remote_url": "property",
-        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None) -> 'Restored | None'",
-        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu') -> 'dict[str, Any] | None'",
+        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None) -> 'Restored | None'",
+        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', require_trust: 'RequireTrust | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
         "save_now": "(self, step: 'int', *, kind: 'CheckpointKind' = 'last', **state: 'Any') -> 'CheckpointManifest'",
         "verify": "(self, manifest: 'CheckpointManifest') -> 'bool'"
       }
@@ -61,13 +61,13 @@
     },
     "resume_path": {
       "kind": "function",
-      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None) -> 'Path | None'"
+      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None, with_trust: 'bool' = False) -> 'Path | ResumePoint | None'"
     }
   },
   "cvpilot.ckpt": {
     "CheckpointManager": {
       "bases": [],
-      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 17179869184, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None) -> 'None'",
+      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 17179869184, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None, min_step: 'int | None' = None) -> 'None'",
       "kind": "class",
       "members": {
         "adopt": "(self, path: 'str | Path', step: 'int') -> 'CheckpointManifest'",
@@ -76,8 +76,8 @@
         "maybe_save": "(self, step: 'int', *, model: 'Any', optimizer: 'Any | None' = None, scheduler: 'Any | None' = None, scaler: 'Any | None' = None, rng: 'bool' = True, dataloader_state: 'Mapping[str, Any] | None' = None, metrics: 'Mapping[str, float] | None' = None, ema: 'Any | None' = None) -> 'CheckpointManifest | None'",
         "preempted": "(self) -> 'bool'",
         "remote_url": "property",
-        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None) -> 'Restored | None'",
-        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu') -> 'dict[str, Any] | None'",
+        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None) -> 'Restored | None'",
+        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', require_trust: 'RequireTrust | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
         "save_now": "(self, step: 'int', *, kind: 'CheckpointKind' = 'last', **state: 'Any') -> 'CheckpointManifest'",
         "verify": "(self, manifest: 'CheckpointManifest') -> 'bool'"
       }
@@ -117,11 +117,11 @@
     },
     "find_resume_point": {
       "kind": "function",
-      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, store_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None, kind: 'CheckpointKind' = 'last') -> 'ResumePoint | None'"
+      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, store_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None, kind: 'CheckpointKind' = 'last', min_step: 'int | None' = None, accept_rollback_to: 'int | None' = None) -> 'ResumePoint | None'"
     },
     "resume_path": {
       "kind": "function",
-      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, store_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None) -> 'Path | None'"
+      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, store_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None, with_trust: 'bool' = False) -> 'Path | ResumePoint | None'"
     }
   },
   "cvpilot.core.errors": {
@@ -226,9 +226,11 @@
       "bases": [
         "CheckpointError"
       ],
-      "init": "(...)",
+      "init": "(message: 'str', *, reason: 'str' = 'untrusted') -> 'None'",
       "kind": "class",
-      "members": {}
+      "members": {
+        "log_fields": "(self) -> 'dict[str, Any]'"
+      }
     },
     "CompareRefusedError": {
       "bases": [

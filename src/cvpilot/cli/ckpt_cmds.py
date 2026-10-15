@@ -90,11 +90,13 @@ class _Session:
 
         settings: Settings = ctx.obj
         self.root = root
-        self.policy: Any = trust.value if trust else settings.ckpt_require_trust
         try:
             self.key = auth.load_key()
         except CheckpointError as exc:
             raise _usage(str(exc)) from None
+        self.policy: Any = auth.resolve_policy(
+            trust.value if trust else None, settings.ckpt_require_trust, self.key
+        )
         name = project or settings.project
         self._opened = runs.open_anchor(name, settings.store_dir) if name else None
         self.anchor = self._opened[0] if self._opened else None

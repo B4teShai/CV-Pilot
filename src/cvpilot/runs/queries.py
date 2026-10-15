@@ -97,13 +97,30 @@ def get_run_view(project: str, run_id: str, *, store_dir: Path | None = None) ->
         store.close()
 
 
+class StoreAnchor:
+    """Read-only view of the checkpoint digests a project's store recorded.
+
+    Calling it returns the manifest digest of ``(run, kind, step)``; ``max_step`` is the highest
+    step recorded for ``(run, kind)``, the freshness floor of the strict trust policies.
+    """
+
+    def __init__(self, store: RunStore) -> None:
+        self._store = store
+
+    def __call__(self, run_id: str, kind: CheckpointKind, step: int) -> str | None:
+        return self._store.get_manifest_digest(run_id, kind, step)
+
+    def max_step(self, run_id: str, kind: CheckpointKind) -> int | None:
+        return self._store.max_manifest_step(run_id, kind)
+
+
 def open_anchor(
     project: str, store_dir: Path | None
-) -> tuple[Callable[[str, CheckpointKind, int], str | None], Callable[[], None]] | None:
-    """A read-only ``anchor(run_id, kind, step)`` over the project's recorded checkpoint digests
-    and the function that closes it, or None when the project has no store."""
+) -> tuple[StoreAnchor, Callable[[], None]] | None:
+    """A read-only anchor over the project's recorded checkpoint digests and the function that
+    closes it, or None when the project has no store."""
     try:
         store = open_store(project, store_dir, create=False)
     except StoreNotFoundError:
         return None
-    return store.get_manifest_digest, store.close
+    return StoreAnchor(store), store.close

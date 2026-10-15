@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from cvpilot import runs
 from cvpilot.core.errors import (
@@ -32,6 +32,8 @@ from cvpilot.repro import capture_repro
 from cvpilot.settings import is_rank_zero, load_settings, parse_forwarders
 
 if TYPE_CHECKING:
+    from cvpilot.ckpt.resume import ResumePoint
+    from cvpilot.core.schema import RequireTrust
     from cvpilot.eval import AnnotationTable, PredictionTable
 
 _state_lock = threading.Lock()
@@ -305,28 +307,68 @@ def autolog(
     return run
 
 
+@overload
+def resume_path(
+    project: str,
+    *,
+    checkpoint_dir: str | Path | None = ...,
+    require_trust: RequireTrust | None = ...,
+    accept_rollback_to: int | None = ...,
+    with_trust: Literal[False] = ...,
+) -> Path | None: ...
+
+
+@overload
+def resume_path(
+    project: str,
+    *,
+    checkpoint_dir: str | Path | None = ...,
+    require_trust: RequireTrust | None = ...,
+    accept_rollback_to: int | None = ...,
+    with_trust: Literal[True],
+) -> ResumePoint | None: ...
+
+
 def resume_path(
     project: str,
     *,
     checkpoint_dir: str | Path | None = None,
-) -> Path | None:
+    require_trust: RequireTrust | None = None,
+    accept_rollback_to: int | None = None,
+    with_trust: bool = False,
+) -> Path | ResumePoint | None:
     """The path of the newest verified ``last`` checkpoint to resume from, or ``None``.
 
     Searches the project's ``preempted``, ``failed`` and crashed (``running``) runs, newest
     first, in ``checkpoint_dir`` (default ``CVPILOT_CHECKPOINT_DIR``), and returns the first
-    checkpoint that passes size, structure, SHA-256 and the trust policy
-    (``CVPILOT_CKPT_REQUIRE_TRUST``); corrupt, truncated, forged or symlinked files are skipped.
-    Never the string ``"last"``: pass the result to ``Trainer.fit(ckpt_path=...)`` or load it
-    yourself. See ``cvpilot.ckpt.find_resume_point`` for the run it came from.
+    checkpoint that passes size, structure, SHA-256 and the trust policy; corrupt, truncated,
+    forged or symlinked files are skipped. The policy is ``require_trust``, else
+    ``CVPILOT_CKPT_REQUIRE_TRUST``, else ``authenticated`` when ``CVPILOT_CKPT_KEY`` is set (a
+    key alone used to enforce nothing), else ``any``. Under the strict policies a checkpoint
+    older than one known to have existed is a rollback and raises (``accept_rollback_to``
+    accepts it on purpose).
+
+    The return value is a ``Path`` (never the string ``"last"``); with ``with_trust=True`` it is
+    the ``cvpilot.ckpt.ResumePoint``, which carries the trust level achieved, the run it came
+    from and whether that run needs ``recover_run``.
 
     Raises:
         ValueError: no checkpoint directory is given or configured.
-        CheckpointUntrustedError: checkpoints exist but none reaches the required trust level.
+        CheckpointUntrustedError: checkpoints exist but none reaches the required trust level,
+            or the newest one is a rollback.
     """
-    from cvpilot.ckpt.resume import resume_path as _resume_path
+    from cvpilot.ckpt.resume import find_resume_point
 
     ensure_configured("cvpilot-client", load_settings())
-    return _resume_path(project, checkpoint_dir=checkpoint_dir)
+    point = find_resume_point(
+        project,
+        checkpoint_dir=checkpoint_dir,
+        require_trust=require_trust,
+        accept_rollback_to=accept_rollback_to,
+    )
+    if point is None:
+        return None
+    return point if with_trust else point.path
 
 
 def _require_active() -> Run:

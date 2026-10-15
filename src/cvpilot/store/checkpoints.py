@@ -83,6 +83,16 @@ def get_manifest_digest(store: LocalRunStore, run_id: str, kind: str, step: int)
     return digest
 
 
+def max_manifest_step(store: LocalRunStore, run_id: str, kind: str) -> int | None:
+    """The highest step recorded for ``(run, kind)``: the store's memory of how far saves got."""
+    _key(run_id, kind, 0)
+    rows = store._query(
+        "SELECT max(step) FROM checkpoint_manifest WHERE run_id=? AND kind=?", (run_id, kind)
+    )
+    value = rows[0][0] if rows else None
+    return None if value is None else int(value)
+
+
 def list_manifests(store: LocalRunStore, run_id: str) -> list[CheckpointManifest]:
     """The recorded manifests of a run in step order (kind, then step)."""
     require_run_id(run_id)

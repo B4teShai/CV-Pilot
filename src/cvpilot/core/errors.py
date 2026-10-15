@@ -238,9 +238,17 @@ class CheckpointStepError(CheckpointError, ValueError):
 
 
 class CheckpointUntrustedError(CheckpointError):
-    """Checkpoints exist but none reaches the trust level the policy requires (fail closed)."""
+    """Checkpoints exist but none reaches the trust level the policy requires (fail closed), or the
+    newest one that does is older than a checkpoint known to have existed (``rolled_back``)."""
 
     event = "checkpoint_untrusted"
+
+    def __init__(self, message: str, *, reason: str = "untrusted") -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    def log_fields(self) -> dict[str, Any]:
+        return {"reason": self.reason}
 
 
 class CheckpointFormatError(CheckpointError):

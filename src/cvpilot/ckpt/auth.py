@@ -50,6 +50,17 @@ def load_key(environ: Mapping[str, str] | None = None) -> bytes | None:
     return key
 
 
+def resolve_policy(explicit: str | None, configured: str | None, key: bytes | None) -> str:
+    """The trust policy in force: an explicit argument, else ``CVPILOT_CKPT_REQUIRE_TRUST``, else
+    ``authenticated`` when a key is configured (a key alone used to enforce nothing), else
+    ``any``."""
+    if explicit is not None:
+        return explicit
+    if configured is not None:
+        return configured
+    return "authenticated" if key is not None else "any"
+
+
 def tag(key: bytes, label: bytes, run_id: str, data: bytes) -> str:
     """Hex HMAC-SHA256 over ``label``, the run id and ``data`` (NUL separated)."""
     message = label + b"\0" + run_id.encode("ascii", "replace") + b"\0" + data

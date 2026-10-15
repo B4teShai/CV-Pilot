@@ -82,6 +82,11 @@ class Mirror:
         self._store = store
         self._retries, self._backoff, self._deadline = retries, backoff, deadline
         self._sleep, self._clock = sleep, clock
+        self._fetched = 0
+
+    def begin_restore(self) -> None:
+        """Start a restore: the byte budget of fetches begins again."""
+        self._fetched = 0
 
     @property
     def label(self) -> str:

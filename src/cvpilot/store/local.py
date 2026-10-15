@@ -869,6 +869,10 @@ class LocalRunStore:
         """The recorded manifest digest, or None when nothing was recorded for the key."""
         return _checkpoints.get_manifest_digest(self, run_id, kind, step)
 
+    def max_manifest_step(self, run_id: str, kind: str) -> int | None:
+        """The highest checkpoint step recorded for ``(run, kind)``, or None."""
+        return _checkpoints.max_manifest_step(self, run_id, kind)
+
     def list_manifests(self, run_id: str) -> list[CheckpointManifest]:
         """The recorded manifests of a run ordered by step."""
         return _checkpoints.list_manifests(self, run_id)

@@ -352,6 +352,10 @@ class RunHandle:
         """The digest recorded for a checkpoint manifest of this project, or None."""
         return self._store.get_manifest_digest(run_id, kind, step)
 
+    def checkpoint_max_step(self, run_id: str, kind: CheckpointKind) -> int | None:
+        """The highest checkpoint step the store recorded for a run, or None."""
+        return self._store.max_manifest_step(run_id, kind)
+
     # -- finishing --------------------------------------------------------
 
     def finish(self, status: FinalStatus = "finished") -> None:

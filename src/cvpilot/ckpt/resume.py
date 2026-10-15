@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, overload
 
 from cvpilot import runs
 from cvpilot.ckpt import auth, serializers
@@ -48,8 +49,16 @@ def find_resume_point(
     store_dir: str | Path | None = None,
     require_trust: RequireTrust | None = None,
     kind: CheckpointKind = "last",
+    min_step: int | None = None,
+    accept_rollback_to: int | None = None,
 ) -> ResumePoint | None:
     """The newest verified checkpoint of ``kind`` among the project's resumable runs.
+
+    The policy is ``require_trust``, else ``CVPILOT_CKPT_REQUIRE_TRUST``, else ``authenticated``
+    when ``CVPILOT_CKPT_KEY`` is set, else ``any``. Under the strict policies a point older than
+    the tag-checked pointer, the run store or ``min_step`` (``CVPILOT_CKPT_MIN_STEP``) is a
+    rollback and raises; ``accept_rollback_to`` accepts it on purpose (see
+    ``CheckpointManager.restore``).
 
     Raises:
         ValueError: no checkpoint directory is given or configured.
@@ -62,9 +71,12 @@ def find_resume_point(
         raise ValueError(
             "a checkpoint directory is required: pass it or set CVPILOT_CHECKPOINT_DIR"
         )
-    policy: RequireTrust = require_trust or settings.ckpt_require_trust
     store_root = Path(store_dir) if store_dir is not None else settings.store_dir
     key = auth.load_key()
+    policy: RequireTrust = auth.resolve_policy(  # type: ignore[assignment]
+        require_trust, settings.ckpt_require_trust, key
+    )
+    floor_mark = min_step if min_step is not None else settings.ckpt_min_step
     opened = runs.open_anchor(project, store_root)
     anchor = opened[0] if opened is not None else None
     rejected: list[str] = []
@@ -78,8 +90,16 @@ def find_resume_point(
             )  # fmt: skip
             point = _first_usable(found, meta.run_id, meta.status, kind, root)
             rejected += [s.reason for s in found.skipped]
-            if point is not None:
-                return point
+            if point is None:  # a newer run whose checkpoints are all gone is not skipped silently
+                found.check_fresh(kind, None, accept_rollback_to=accept_rollback_to)
+                continue
+            found.check_fresh(
+                kind,
+                point.manifest.step,
+                accept_rollback_to=accept_rollback_to,
+                min_step=floor_mark,
+            )
+            return point
     finally:
         if opened is not None:
             opened[1]()
@@ -119,18 +139,53 @@ def _check_pt(found: RunCheckpoints, manifest: CheckpointManifest) -> None:
     serializers.scan_pt_archive(data)
 
 
+@overload
+def resume_path(
+    project: str,
+    *,
+    checkpoint_dir: str | Path | None = ...,
+    store_dir: str | Path | None = ...,
+    require_trust: RequireTrust | None = ...,
+    accept_rollback_to: int | None = ...,
+    with_trust: Literal[False] = ...,
+) -> Path | None: ...
+
+
+@overload
+def resume_path(
+    project: str,
+    *,
+    checkpoint_dir: str | Path | None = ...,
+    store_dir: str | Path | None = ...,
+    require_trust: RequireTrust | None = ...,
+    accept_rollback_to: int | None = ...,
+    with_trust: Literal[True],
+) -> ResumePoint | None: ...
+
+
 def resume_path(
     project: str,
     *,
     checkpoint_dir: str | Path | None = None,
     store_dir: str | Path | None = None,
     require_trust: RequireTrust | None = None,
-) -> Path | None:
+    accept_rollback_to: int | None = None,
+    with_trust: bool = False,
+) -> Path | ResumePoint | None:
     """The path of the newest verified ``last`` checkpoint to resume from, or ``None``.
 
-    See ``find_resume_point`` for the search, the trust policy and the errors.
+    The return type is unchanged by default (a ``Path``); with ``with_trust=True`` the whole
+    ``ResumePoint`` comes back, so the caller sees the trust level that was achieved
+    (``ResumePoint.trust``), the run and whether it needs recovery. See ``find_resume_point`` for
+    the search, the trust policy and the errors.
     """
     point = find_resume_point(
-        project, checkpoint_dir=checkpoint_dir, store_dir=store_dir, require_trust=require_trust
+        project,
+        checkpoint_dir=checkpoint_dir,
+        store_dir=store_dir,
+        require_trust=require_trust,
+        accept_rollback_to=accept_rollback_to,
     )
-    return None if point is None else point.path
+    if point is None:
+        return None
+    return point if with_trust else point.path

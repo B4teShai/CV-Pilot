@@ -49,6 +49,7 @@ from cvpilot.core.errors import (
     CheckpointExistsError,
     CheckpointPathError,
     CheckpointStepError,
+    CheckpointUntrustedError,
 )
 from cvpilot.core.hashing import checkpoint_chain, pointer_digest
 from cvpilot.core.schema import (
@@ -427,6 +428,121 @@ class RunCheckpoints:
             self._emit("warning", "checkpoint_anchor_failed", error_type=type(exc).__name__)
             return None, True
         return (digest if isinstance(digest, str) and _SHA.fullmatch(digest) else None), False
+
+    # -- freshness: rollback and replay ---------------------------------------------------------
+
+    def _anchor_max(self, kind: str) -> int | None:
+        fn = getattr(self._anchor, "max_step", None)
+        if not callable(fn):
+            return None
+        try:
+            value = fn(self.run_id, kind)
+        except Exception as exc:  # noqa: BLE001  # a store that cannot answer fails closed
+            self._emit("warning", "checkpoint_anchor_failed", error_type=type(exc).__name__)
+            raise CheckpointUntrustedError(
+                "the run store could not say how far checkpoints got (anchor_error)",
+                reason="anchor_error",
+            ) from None
+        return (
+            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        )
+
+    def _floor(self, kind: CheckpointKind) -> int | None:
+        """The newest step known to have been saved, or None when nothing is known."""
+        _check_kind(kind)
+        if self.require_trust == "any":
+            return None
+        known: list[int] = []
+        if self._key is not None:  # an unauthenticated pointer proves nothing about freshness
+            with self._open_run(create=False) as run_fd:
+                pointer = None if run_fd is None else self._pointer(run_fd, kind)
+            if pointer is not None:
+                known.append(pointer.step)
+        stored = self._anchor_max(kind)
+        if stored is not None:
+            known.append(stored)
+        return max(known) if known else None
+
+    def freshness_floor(self, kind: CheckpointKind) -> int:
+        """The newest step known to have been saved: the larger of the tag-checked pointer's step
+        and the run store's highest recorded step. 0 under the ``any`` policy (which does not look
+        for rollback) and when nothing is known.
+
+        Raises:
+            CheckpointUntrustedError: the run store failed to answer (reason ``anchor_error``).
+        """
+        return self._floor(kind) or 0
+
+    def trusted_steps(self, kind: CheckpointKind) -> set[int]:
+        """Steps whose manifest passes every trust rule (their data is not examined)."""
+        _check_kind(kind)
+        with self._open_run(create=False) as run_fd:
+            if run_fd is None:
+                return set()
+            kind_fd = self._open_kind(run_fd, kind, create=False)
+            if kind_fd is None:
+                return set()
+            import os
+
+            try:
+                return {
+                    c.step
+                    for c in self._judge(run_fd, kind_fd, kind)
+                    if c.reason is None and c.step is not None
+                }
+            finally:
+                os.close(kind_fd)
+
+    def check_fresh(
+        self,
+        kind: CheckpointKind,
+        chosen: int | None,
+        *,
+        present: Iterable[int] = (),
+        accept_rollback_to: int | None = None,
+        min_step: int | None = None,
+    ) -> None:
+        """Refuse to serve ``chosen`` (a step, or None when nothing was found) when something newer
+        is known to have existed and is gone. A newer checkpoint that is still here (``present``
+        from a remote listing, or a trusted manifest) but fails its data check is corruption, not
+        rollback: the older one is served and the skip is counted.
+
+        ``accept_rollback_to=N`` deliberately accepts a restore at step N or later (0 accepts
+        starting from nothing); it is logged. ``min_step`` is an external high-water mark.
+
+        Raises:
+            CheckpointUntrustedError: reason ``rolled_back``.
+        """
+        if self.require_trust == "any":
+            return
+        known_floor = self._floor(kind)
+        marks = [m for m in (known_floor, min_step) if m is not None]
+        if not marks:
+            return
+        floor = max(marks)
+        step = -1 if chosen is None else chosen
+        if step >= floor:
+            return
+        known = {*present, *self.trusted_steps(kind)}
+        if any(s >= floor for s in known):
+            return
+        if accept_rollback_to is not None and (
+            step >= accept_rollback_to if step >= 0 else accept_rollback_to == 0
+        ):
+            self._emit(
+                "warning", "checkpoint_rollback_accepted", step=chosen, kind=kind, floor=floor,
+                accepted_to=accept_rollback_to,
+            )  # fmt: skip
+            return
+        self._emit(
+            "error", "checkpoint_untrusted", reason="rolled_back", step=chosen, kind=kind,
+            floor=floor,
+        )  # fmt: skip
+        raise CheckpointUntrustedError(
+            f"{kind} checkpoints were rolled back: step {chosen} is older than step {floor}, "
+            "which was saved and is gone (restore it, or accept the rollback on purpose)",
+            reason="rolled_back",
+        )
 
     def _judge(self, run_fd: int, kind_fd: int, kind: str) -> list[_Cand]:
         """Decide which manifests are trusted at the required level, newest first."""

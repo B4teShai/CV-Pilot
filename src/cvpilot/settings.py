@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 Env = Literal["dev", "staging", "prod"]
 Level = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
@@ -43,6 +43,7 @@ _FIELDS: dict[str, tuple[str, Callable[[str], str]]] = {
     "checkpoint_remote": ("CHECKPOINT_REMOTE", str),
     "ckpt_require_trust": ("CKPT_REQUIRE_TRUST", str.lower),
     "ckpt_allow_pt": ("CKPT_ALLOW_PT", _bool_text),
+    "ckpt_min_step": ("CKPT_MIN_STEP", str),
 }
 
 
@@ -130,8 +131,9 @@ class Settings(BaseModel, frozen=True):
     forward_hosts: tuple[str, ...] = ()
     checkpoint_dir: Path | None = None
     checkpoint_remote: str | None = None
-    ckpt_require_trust: Literal["authenticated", "anchored", "any"] = "any"
+    ckpt_require_trust: Literal["authenticated", "anchored", "any"] | None = None
     ckpt_allow_pt: bool = False
+    ckpt_min_step: int | None = Field(default=None, ge=0)
 
     @field_validator("forward_hosts", mode="before")
     @classmethod
