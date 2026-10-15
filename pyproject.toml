@@ -84,7 +84,19 @@ dev = [
     "pyyaml>=6",
     "safetensors>=0.4",
     "fsspec>=2024.2",
+    "build==1.6.1",
+    "twine==7.0.0",
 ]
+docs = [
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.7.7",
+]
+audit = [
+    "pip-audit==2.10.1",
+]
+
+[tool.uv]
+default-groups = ["dev", "docs"]
 
 [tool.ruff]
 line-length = 100

@@ -1,0 +1,555 @@
+{
+  "cvpilot": {
+    "CheckpointManager": {
+      "bases": [],
+      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 17179869184, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None) -> 'None'",
+      "kind": "class",
+      "members": {
+        "adopt": "(self, path: 'str | Path', step: 'int') -> 'CheckpointManifest'",
+        "close": "(self) -> 'None'",
+        "list": "(self) -> 'list[Entry]'",
+        "maybe_save": "(self, step: 'int', *, model: 'Any', optimizer: 'Any | None' = None, scheduler: 'Any | None' = None, scaler: 'Any | None' = None, rng: 'bool' = True, dataloader_state: 'Mapping[str, Any] | None' = None, metrics: 'Mapping[str, float] | None' = None, ema: 'Any | None' = None) -> 'CheckpointManifest | None'",
+        "preempted": "(self) -> 'bool'",
+        "remote_url": "property",
+        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None) -> 'Restored | None'",
+        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu') -> 'dict[str, Any] | None'",
+        "save_now": "(self, step: 'int', *, kind: 'CheckpointKind' = 'last', **state: 'Any') -> 'CheckpointManifest'",
+        "verify": "(self, manifest: 'CheckpointManifest') -> 'bool'"
+      }
+    },
+    "Run": {
+      "bases": [],
+      "init": "(handle: 'runs.RunHandle') -> 'None'",
+      "kind": "class",
+      "members": {
+        "abandon": "(self) -> 'None'",
+        "finish": "(self, status: \"Literal['finished', 'failed', 'preempted']\" = 'finished') -> 'None'",
+        "handle": "property",
+        "log": "(self, points: 'Mapping[str, float]', *, step: 'int', epoch: 'int | None' = None) -> 'None'",
+        "log_artifact": "(self, path: 'str | Path', *, kind: 'ArtifactKind', meta: 'Mapping[str, Any] | None' = None) -> 'Artifact'",
+        "log_eval": "(self, preds: 'PredictionTable', gts: 'AnnotationTable', *, step: 'int', class_names: 'Sequence[str] | None' = None, slices: 'Mapping[str, str] | None' = None, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, provenance: 'Mapping[str, str | None] | None' = None) -> 'EvalSnapshot'",
+        "run_id": "property",
+        "status": "property"
+      }
+    },
+    "__version__": {
+      "kind": "str"
+    },
+    "autolog": {
+      "kind": "function",
+      "signature": "(target: 'object', *, project: 'str | None' = None, forward_to: 'Sequence[str] | None' = None, **init_kwargs: 'Any') -> 'Run'"
+    },
+    "finish": {
+      "kind": "function",
+      "signature": "(status: \"Literal['finished', 'failed', 'preempted']\" = 'finished') -> 'None'"
+    },
+    "init": {
+      "kind": "function",
+      "signature": "(project: 'str | None' = None, *, task: 'Task', name: 'str | None' = None, config: 'Mapping[str, Any] | None' = None, dataset_uri: 'str | Path | None' = None, seed: 'int | None' = None, framework: 'str | None' = None, resume_from: 'str | None' = None, store_dir: 'str | Path | None' = None, forward_to: 'Sequence[str] | None' = None) -> 'Run'"
+    },
+    "log": {
+      "kind": "function",
+      "signature": "(points: 'Mapping[str, float]', *, step: 'int', epoch: 'int | None' = None) -> 'None'"
+    },
+    "log_artifact": {
+      "kind": "function",
+      "signature": "(path: 'str | Path', *, kind: 'ArtifactKind', meta: 'Mapping[str, Any] | None' = None) -> 'Artifact'"
+    },
+    "log_eval": {
+      "kind": "function",
+      "signature": "(preds: 'PredictionTable', gts: 'AnnotationTable', *, step: 'int', class_names: 'Sequence[str] | None' = None, slices: 'Mapping[str, str] | None' = None, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, provenance: 'Mapping[str, str | None] | None' = None) -> 'EvalSnapshot'"
+    },
+    "resume_path": {
+      "kind": "function",
+      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None) -> 'Path | None'"
+    }
+  },
+  "cvpilot.ckpt": {
+    "CheckpointManager": {
+      "bases": [],
+      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 17179869184, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None) -> 'None'",
+      "kind": "class",
+      "members": {
+        "adopt": "(self, path: 'str | Path', step: 'int') -> 'CheckpointManifest'",
+        "close": "(self) -> 'None'",
+        "list": "(self) -> 'list[Entry]'",
+        "maybe_save": "(self, step: 'int', *, model: 'Any', optimizer: 'Any | None' = None, scheduler: 'Any | None' = None, scaler: 'Any | None' = None, rng: 'bool' = True, dataloader_state: 'Mapping[str, Any] | None' = None, metrics: 'Mapping[str, float] | None' = None, ema: 'Any | None' = None) -> 'CheckpointManifest | None'",
+        "preempted": "(self) -> 'bool'",
+        "remote_url": "property",
+        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None) -> 'Restored | None'",
+        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu') -> 'dict[str, Any] | None'",
+        "save_now": "(self, step: 'int', *, kind: 'CheckpointKind' = 'last', **state: 'Any') -> 'CheckpointManifest'",
+        "verify": "(self, manifest: 'CheckpointManifest') -> 'bool'"
+      }
+    },
+    "Restored": {
+      "bases": [],
+      "fields": {
+        "manifest": "CheckpointManifest",
+        "run_id": "str",
+        "skipped": "list[Skipped]",
+        "state": "dict[str, Any]",
+        "trust": "TrustLevel"
+      },
+      "kind": "class",
+      "members": {}
+    },
+    "ResumePoint": {
+      "bases": [],
+      "fields": {
+        "manifest": "CheckpointManifest",
+        "needs_recover": "bool",
+        "path": "Path",
+        "run_id": "str",
+        "status": "str",
+        "trust": "TrustLevel"
+      },
+      "kind": "class",
+      "members": {}
+    },
+    "apply_rng": {
+      "kind": "function",
+      "signature": "(state: 'Any') -> 'None'"
+    },
+    "capture_rng": {
+      "kind": "function",
+      "signature": "() -> 'dict[str, Any]'"
+    },
+    "find_resume_point": {
+      "kind": "function",
+      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, store_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None, kind: 'CheckpointKind' = 'last') -> 'ResumePoint | None'"
+    },
+    "resume_path": {
+      "kind": "function",
+      "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, store_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None) -> 'Path | None'"
+    }
+  },
+  "cvpilot.core.errors": {
+    "BaselineExistsError": {
+      "bases": [
+        "BaselineRefusedError"
+      ],
+      "init": "(message: 'str', *, project: 'str | None' = None, tag: 'str | None' = None, run_id: 'str | None' = None, eval_set_hash: 'str | None' = None) -> 'None'",
+      "kind": "class",
+      "members": {}
+    },
+    "BaselineIntegrityError": {
+      "bases": [
+        "SnapshotIntegrityError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "BaselineNotFoundError": {
+      "bases": [
+        "CvpilotError",
+        "LookupError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "BaselineRefusedError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(message: 'str', *, project: 'str | None' = None, tag: 'str | None' = None, run_id: 'str | None' = None, eval_set_hash: 'str | None' = None) -> 'None'",
+      "kind": "class",
+      "members": {
+        "log_fields": "(self) -> 'dict[str, Any]'"
+      }
+    },
+    "CheckpointBusyError": {
+      "bases": [
+        "CheckpointError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "CheckpointCorruptError": {
+      "bases": [
+        "CheckpointError"
+      ],
+      "init": "(message: 'str', *, reason: 'str') -> 'None'",
+      "kind": "class",
+      "members": {
+        "log_fields": "(self) -> 'dict[str, Any]'"
+      }
+    },
+    "CheckpointError": {
+      "bases": [
+        "CvpilotError",
+        "OSError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "CheckpointExistsError": {
+      "bases": [
+        "CheckpointError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "CheckpointFormatError": {
+      "bases": [
+        "CheckpointError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "CheckpointPathError": {
+      "bases": [
+        "CheckpointError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "CheckpointStepError": {
+      "bases": [
+        "CheckpointError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "CheckpointUntrustedError": {
+      "bases": [
+        "CheckpointError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "CompareRefusedError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(message: 'str', *, reason: 'str', candidate_run_id: 'str | None' = None, baseline_run_id: 'str | None' = None, candidate_eval_set_hash: 'str | None' = None, baseline_eval_set_hash: 'str | None' = None) -> 'None'",
+      "kind": "class",
+      "members": {
+        "log_fields": "(self) -> 'dict[str, Any]'"
+      }
+    },
+    "CvpilotError": {
+      "bases": [
+        "Exception"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {
+        "log_fields": "(self) -> 'dict[str, Any]'"
+      }
+    },
+    "DuplicateMetricError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "EvalInputError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "EvalSetMismatchError": {
+      "bases": [
+        "CompareRefusedError"
+      ],
+      "init": "(message: 'str', *, reason: 'str', candidate_run_id: 'str | None' = None, baseline_run_id: 'str | None' = None, candidate_eval_set_hash: 'str | None' = None, baseline_eval_set_hash: 'str | None' = None) -> 'None'",
+      "kind": "class",
+      "members": {}
+    },
+    "HookNotFoundError": {
+      "bases": [
+        "CvpilotError",
+        "LookupError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "InvalidResumeError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "InvalidRunIdError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "InvalidTransitionError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "MetricOrderError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "MissingExtraError": {
+      "bases": [
+        "CvpilotError",
+        "ImportError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "NoActiveRunError": {
+      "bases": [
+        "CvpilotError",
+        "RuntimeError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "RecomputeMismatchError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(message: 'str', *, run_id: 'str | None' = None, what: 'str | None' = None) -> 'None'",
+      "kind": "class",
+      "members": {
+        "log_fields": "(self) -> 'dict[str, Any]'"
+      }
+    },
+    "RunAlreadyActiveError": {
+      "bases": [
+        "CvpilotError",
+        "RuntimeError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "RunClosedError": {
+      "bases": [
+        "CvpilotError",
+        "RuntimeError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "RunNotFoundError": {
+      "bases": [
+        "CvpilotError",
+        "LookupError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "SliceCardinalityError": {
+      "bases": [
+        "EvalInputError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "SnapshotExistsError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "SnapshotIntegrityError": {
+      "bases": [
+        "StoreError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "SnapshotNotFoundError": {
+      "bases": [
+        "CvpilotError",
+        "LookupError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "StoreError": {
+      "bases": [
+        "CvpilotError",
+        "OSError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "StoreNotFoundError": {
+      "bases": [
+        "StoreError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "StoreVersionError": {
+      "bases": [
+        "StoreError"
+      ],
+      "init": "(store_version: 'int', library_version: 'int') -> 'None'",
+      "kind": "class",
+      "members": {
+        "log_fields": "(self) -> 'dict[str, Any]'"
+      }
+    }
+  },
+  "cvpilot.deprecation": {
+    "CvpilotDeprecationWarning": {
+      "bases": [
+        "DeprecationWarning"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "Entry": {
+      "bases": [],
+      "fields": {
+        "alternative": "str | None",
+        "name": "str",
+        "removal": "str",
+        "since": "str"
+      },
+      "kind": "class",
+      "members": {}
+    },
+    "deprecated": {
+      "kind": "function",
+      "signature": "(*, since: 'str', removal: 'str', alternative: 'str | None' = None) -> 'Callable[[F], F]'"
+    },
+    "expired": {
+      "kind": "function",
+      "signature": "(current: 'str') -> 'list[Entry]'"
+    },
+    "registered": {
+      "kind": "function",
+      "signature": "() -> 'list[Entry]'"
+    },
+    "warn_deprecated": {
+      "kind": "function",
+      "signature": "(what: 'str', *, since: 'str', removal: 'str', alternative: 'str | None' = None, stacklevel: 'int' = 2) -> 'None'"
+    }
+  },
+  "cvpilot.eval": {
+    "AnnotationTable": {
+      "bases": [],
+      "fields": {
+        "boxes": "F64",
+        "class_id": "I64",
+        "image_id": "StrArray",
+        "images": "ImageTable | None",
+        "iscrowd": "BoolArray"
+      },
+      "kind": "class",
+      "members": {
+        "from_columns": "(cls, *, image_id: 'object', class_id: 'object', boxes: 'object | None' = None, iscrowd: 'object | None' = None, images: 'ImageTable | None' = None) -> 'AnnotationTable'",
+        "from_table": "(cls, source: 'object', *, images: 'ImageTable | None' = None, task: 'str' = 'detection') -> 'AnnotationTable'"
+      }
+    },
+    "EvalResult": {
+      "bases": [],
+      "fields": {
+        "bootstrap": "BootstrapInfo | None",
+        "ci": "dict[str, tuple[float, float]]",
+        "ci_status": "CiStatus",
+        "class_names": "list[str]",
+        "confusion": "I64",
+        "eval_set_hash": "str",
+        "metrics": "dict[str, float]",
+        "n_images": "int",
+        "params": "EvalParams | None",
+        "per_class": "dict[str, dict[str, float]]",
+        "slice_hash": "str | None",
+        "slice_spec": "dict[str, str]",
+        "slices": "dict[str, dict[str, float]]",
+        "task": "Task"
+      },
+      "kind": "class",
+      "members": {
+        "to_snapshot": "(self, *, run_id: 'str', step: 'int', confusion_sha256: 'str', predictions_sha256: 'str', provenance: 'Mapping[str, str | None] | None' = None) -> 'EvalSnapshot'"
+      }
+    },
+    "ImageTable": {
+      "bases": [],
+      "fields": {
+        "height": "I64 | None",
+        "image_id": "StrArray",
+        "meta": "Mapping[str, StrArray]",
+        "width": "I64 | None"
+      },
+      "kind": "class",
+      "members": {
+        "from_columns": "(cls, *, image_id: 'object', width: 'object | None' = None, height: 'object | None' = None, meta: 'Mapping[str, object] | None' = None) -> 'ImageTable'"
+      }
+    },
+    "PredictionTable": {
+      "bases": [],
+      "fields": {
+        "boxes": "F64",
+        "class_id": "I64",
+        "image_id": "StrArray",
+        "score": "F64"
+      },
+      "kind": "class",
+      "members": {
+        "from_columns": "(cls, *, image_id: 'object', class_id: 'object', score: 'object', boxes: 'object | None' = None) -> 'PredictionTable'",
+        "from_table": "(cls, source: 'object', *, task: 'str' = 'detection') -> 'PredictionTable'"
+      }
+    },
+    "eval_set_hash": {
+      "kind": "function",
+      "signature": "(gts: 't.AnnotationTable', class_names: 'Sequence[str]', *, task: 'Task' = 'detection') -> 'str'"
+    },
+    "evaluate": {
+      "kind": "function",
+      "signature": "(preds: 't.PredictionTable', gts: 't.AnnotationTable', *, task: 'Task', class_names: 'Sequence[str]', slices: 'Mapping[str, str] | None' = None, iou_thresholds: 'Sequence[float] | None' = None, confusion_iou: 'float' = 0.5, confusion_score: 'float' = 0.25, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, workers: 'int' = 4) -> 'EvalResult'"
+    }
+  }
+}
