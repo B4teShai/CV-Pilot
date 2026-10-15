@@ -68,10 +68,16 @@ cvpilot repro "$RUN" | head -n 3    # prints a bash script: checkout, stored dif
 ```
 
 ```text expect
-run_started
-finished
+RUN_ID                      STATUS     STARTED                    NAME
+{*}  finished   {*}  python-{*}
 status: finished
-#!
+#!/usr/bin/env bash
+# Reproduction script for CV-Pilot run {*} (project demo).
+```
+
+```text expect stderr
+json: message=run_started project=demo status=running
+json: message=run_finished project=demo status=finished n_points=3
 ```
 
 Notes:
@@ -127,6 +133,12 @@ python restart.py
 ```text expect
 starting at step 0
 starting at step 3
+```
+
+```text expect stderr
+json: message=run_started project=fridge-sku status=running
+json: message=run_started project=fridge-sku status=resumed
+json: message=checkpoint_restored step=2 kind=last trust_level=anchored
 ```
 
 On a node that has neither (a fresh machine that only reaches the bucket), configure `remote=` or

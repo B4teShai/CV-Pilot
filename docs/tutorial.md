@@ -16,8 +16,12 @@ cvpilot doctor
 ```
 
 ```text expect
-cvpilot 0.
+cvpilot {*}
 ok
+```
+
+```text expect stderr
+json: message=doctor_completed status=ok
 ```
 
 `doctor` prints `ok` on `stdout` and one JSON log line on `stderr`. Everything cvpilot logs is
@@ -94,7 +98,7 @@ python make_data.py
 ```
 
 ```text expect
-wrote gts.parquet
+wrote gts.parquet, preds_good.parquet, preds_bad.parquet, classes.txt
 ```
 
 ## 4. A training script that checkpoints and resumes
@@ -166,6 +170,12 @@ python train.py --steps 30 --preempt-at 14
 preempted: checkpoint saved at step 14
 ```
 
+```text expect stderr
+json: message=preemption_signal_received signal=SIGTERM
+json: message=checkpoint_saved step=14 kind=last
+json: message=run_preempted signal=SIGTERM step=14 saved=True
+```
+
 The handler only set a flag. The next `maybe_save` wrote a checkpoint outside its normal
 interval, marked the run `preempted` and returned; the loop saw `ckpt.preempted()` and stopped.
 
@@ -175,9 +185,10 @@ cvpilot ckpt list "$CVPILOT_CHECKPOINT_DIR"
 ```
 
 ```text expect
-preempted
-000000014
-000000010
+RUN_ID                      STATUS     STARTED                    NAME
+{*}  preempted  {*}
+{*}  last  000000014  valid    anchored
+{*}  last  000000010  valid    anchored
 ```
 
 Two checkpoints exist: step 10 from the interval and step 14 from the preemption.
@@ -194,7 +205,8 @@ cvpilot ckpt verify "$CVPILOT_CHECKPOINT_DIR" --project demo || echo "verify exi
 ```
 
 ```text expect
-size_mismatch
+{*}  last  000000014  corrupt  size_mismatch
+{*}  last  000000010  valid    anchored
 verify exit code: 1
 ```
 
@@ -206,7 +218,11 @@ python -c "import cvpilot; print(cvpilot.resume_path('demo'))"
 ```
 
 ```text expect
-step_000000010.safetensors
+{*}/ckpt/{*}/last/step_000000010.safetensors
+```
+
+```text expect stderr
+json: message=checkpoint_skipped_corrupt step=14 reason=size_mismatch
 ```
 
 `resume_path` skipped the damaged file and returned the previous valid one. It never returns the
@@ -219,7 +235,7 @@ python train.py --steps 30
 ```
 
 ```text expect
-resumed from step 10 of run
+resumed from step 10 of run {*}
 finished at step 29
 ```
 
@@ -232,7 +248,7 @@ cvpilot runs show "$RUN2" | grep -E "^(status|parent_run_id)"
 
 ```text expect
 status: finished
-parent_run_id: 01
+parent_run_id: {*}
 ```
 
 ## 8. Evaluate and pin a baseline
@@ -244,7 +260,12 @@ cvpilot baseline set prod "$RUN2"
 ```
 
 ```text expect
-baseline_set
+pinned prod: run {*} eval_set {*} step 29
+```
+
+```text expect stderr
+json: message=eval_completed step=29 task=detection n_images=60
+json: message=baseline_set tag=prod replaced=False
 ```
 
 These runs have finished, so evaluating into them needs the explicit `--allow-closed`; inside a
@@ -266,8 +287,14 @@ cvpilot gate "$RUN3" --baseline tag:prod --max-drop mAP50_95=1 --min-images 30 \
 ```
 
 ```text expect
-gate: FAIL
+finished at step 29
+gate: FAIL (1 violations, worst: [headline_drop] mAP50_95) run {*} step 29 vs baseline tag:prod
+  - [headline_drop] mAP50_95: mAP50_95 dropped {*} points (limit 1)
 gate exit code: 1
+```
+
+```text expect stderr
+json: message=gate_failed n_violations=1 worst_metric=mAP50_95 worst_kind=headline_drop
 ```
 
 A candidate that matches the baseline:
@@ -281,7 +308,12 @@ cvpilot gate "$RUN4" --baseline tag:prod --max-drop mAP50_95=1 --min-images 30
 ```
 
 ```text expect
-gate: PASS
+finished at step 29
+gate: PASS (1 checks, 0 slices skipped) run {*} step 29 vs baseline tag:prod
+```
+
+```text expect stderr
+json: message=gate_passed n_violations=0
 ```
 
 The gate fails closed: a missing metric, a different evaluation set, a snapshot or baseline that
@@ -303,8 +335,11 @@ cvpilot ckpt verify "$CVPILOT_CHECKPOINT_DIR" --run "$RUN4" || echo "verify exit
 ```
 
 ```text expect
-authenticated
-auth_missing
+finished at step 29
+{*}  last  000000020  valid    authenticated
+{*}  last  000000010  valid    authenticated
+{*}  last  000000020  corrupt  auth_missing
+{*}  last  000000010  corrupt  auth_missing
 verify exit code: 1
 ```
 
