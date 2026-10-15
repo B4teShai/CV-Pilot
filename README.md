@@ -5,9 +5,8 @@ the experiment tracker you already use.
 
 ## Status
 
-Version 0.1.0 (release candidate; nothing has been published to any package index). Built and
-tested: run capture, the local run store, the eval engine, baselines, compare and gate, reports,
-tracker forwarders, Lightning and Ultralytics hooks, a GitHub Action, and the checkpoint manager
+Alpha. Built and tested: run capture, the local run store, the eval engine, baselines, compare and
+gate, reports, tracker forwarders, Lightning and Ultralytics hooks, a GitHub Action, and the checkpoint manager
 (atomic saves, verified restore, retention, preemption handling, object-storage mirror, HMAC
 authentication and a trust policy).
 
@@ -15,30 +14,31 @@ authentication and a trust policy).
   `finish`, `autolog`, `resume_path` and `CheckpointManager`. `Run` is a context manager.
 - CLI: `cvpilot --version`, `doctor`, `runs list|show`, `repro`, `eval`, `baseline`, `compare`,
   `gate`, `ckpt list|verify|prune`, with the exit-code contract of
-  [docs/engineering/errors-and-logging.md](docs/engineering/errors-and-logging.md). The full
-  reference is generated from the code: [docs/reference/cli.md](docs/reference/cli.md).
+  [docs/engineering/errors-and-logging.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/engineering/errors-and-logging.md). The full
+  reference is generated from the code: [docs/reference/cli.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/reference/cli.md).
 - Settings: `CVPILOT_ENV`, `CVPILOT_LOG_LEVEL`, `CVPILOT_PROJECT`, `CVPILOT_STORE_DIR`,
   `CVPILOT_STORE_COMMAND_LINE`, `CVPILOT_FORWARD_TO`, `CVPILOT_FORWARD_HOSTS`,
   `CVPILOT_CHECKPOINT_DIR`, `CVPILOT_CHECKPOINT_REMOTE`, `CVPILOT_CKPT_KEY`,
   `CVPILOT_CKPT_REQUIRE_TRUST`, `CVPILOT_CKPT_ALLOW_PT`; structured JSON logging on `stderr`.
 - Documentation: a MkDocs site (`mkdocs.yml`, `docs/`) with a user guide, a tutorial whose every
-  command is run by a test ([docs/tutorial.md](docs/tutorial.md)) and the architecture set.
+  command is run by a test ([docs/tutorial.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/tutorial.md)) and the architecture set.
 
 Not built: the server, alert rules and channels, sync, and hooks for Hugging Face, MMEngine and
 RF-DETR. The architecture documents mark each part as built or planned. See
-[CHANGELOG.md](CHANGELOG.md).
+[CHANGELOG.md](https://github.com/B4teShai/CV-Pilot/blob/main/CHANGELOG.md).
 
-## Install (from source)
+## Install
 
-Requires Python 3.10 or newer and [`uv`](https://docs.astral.sh/uv/).
+Requires Python 3.10 or newer.
 
 ```bash notest
-git clone <repository-url> cv-pilot
-cd cv-pilot
-uv sync
-uv run cvpilot --version
-uv run cvpilot doctor
+pip install cvpilot        # or: uv add cvpilot
+cvpilot --version
+cvpilot doctor
 ```
+
+To work on CV-Pilot itself, clone [the repository](https://github.com/B4teShai/CV-Pilot) and run
+`uv sync` (needs [`uv`](https://docs.astral.sh/uv/)).
 
 `doctor` prints `ok` on `stdout` and one JSON log line (`doctor_completed`) on `stderr`.
 Exit codes: `0` success, `1` failure, `2` usage or configuration error, `130` interrupted.
@@ -132,7 +132,7 @@ starting at step 3
 On a node that has neither (a fresh machine that only reaches the bucket), configure `remote=` or
 `CVPILOT_CHECKPOINT_REMOTE` and call `ckpt.restore(discover=True)`: it lists the newest runs on the
 remote and restores the best step through the same checks as any other checkpoint
-([docs/guide/checkpoints.md](docs/guide/checkpoints.md)).
+([docs/guide/checkpoints.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/checkpoints.md)).
 
 A save is atomic and verified; a restore skips (and counts) anything truncated, corrupt, forged,
 replaced or symlinked and never loads it; `cvpilot.resume_path("fridge-sku")` returns the newest
@@ -141,8 +141,8 @@ Lightning and Ultralytics `resume_arguments` helpers take only a verified framew
 the checkpoint guide for what a real Lightning or Ultralytics file allows). The default policy trusts the checkpoint directory's own digests, which is
 right when only you can write it. **For a directory that is shared, restored from a bucket or
 writable by others, set `CVPILOT_CKPT_KEY` and `CVPILOT_CKPT_REQUIRE_TRUST=authenticated`**
-(see [docs/guide/trust.md](docs/guide/trust.md)). Walkthrough with a preemption, a damaged
-file and a resume: [docs/tutorial.md](docs/tutorial.md); design: ADR-0006.
+(see [docs/guide/trust.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/trust.md)). Walkthrough with a preemption, a damaged
+file and a resume: [docs/tutorial.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/tutorial.md); design: ADR-0006.
 
 ## Evaluate predictions
 
@@ -230,7 +230,7 @@ not run in this environment.
 pull request it judges cannot change the code that runs, the baseline it compares with or the
 settings it uses.** Run on its own it protects against accidents, not against a contributor who
 controls the store, the workflow or the action. The full model is "Trust model for CI gates" in
-[docs/architecture/06-cross-cutting.md](docs/architecture/06-cross-cutting.md); in short:
+[docs/architecture/06-cross-cutting.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/architecture/06-cross-cutting.md); in short:
 
 - install cvpilot from a pinned release with hashes, never from the pull request;
 - take the baseline store and the ground truth from the base branch or a protected artifact, and
@@ -317,23 +317,23 @@ cvpilot.finish()
 ## Planned
 
 The server, alert rules and channels, sync, and the Hugging Face, MMEngine and RF-DETR hooks are
-not built; [docs/architecture/02-components.md](docs/architecture/02-components.md) fixes their
+not built; [docs/architecture/02-components.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/architecture/02-components.md) fixes their
 interfaces and status.
 
 ## Architecture
 
-![System context](docs/diagrams/png/context.png)
+![System context](https://raw.githubusercontent.com/B4teShai/CV-Pilot/main/docs/diagrams/png/context.png)
 
-![Containers](docs/diagrams/png/containers.png)
+![Containers](https://raw.githubusercontent.com/B4teShai/CV-Pilot/main/docs/diagrams/png/containers.png)
 
-- [docs/architecture/README.md](docs/architecture/README.md): the full document set
+- [docs/architecture/README.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/architecture/README.md): the full document set
   (overview, components, data model, flows, runtime, cross-cutting concerns).
-- [docs/engineering/README.md](docs/engineering/README.md): coding standards, testing,
+- [docs/engineering/README.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/engineering/README.md): coding standards, testing,
   errors and logging, dependencies and licensing, workflow.
-- [docs/adr/](docs/adr/0001-scope-and-license.md): architecture decision records.
-- [docs/engineering/release.md](docs/engineering/release.md): the release runbook (publishing needs
+- [docs/adr/](https://github.com/B4teShai/CV-Pilot/blob/main/docs/adr/0001-scope-and-license.md): architecture decision records.
+- [docs/engineering/release.md](https://github.com/B4teShai/CV-Pilot/blob/main/docs/engineering/release.md): the release runbook (publishing needs
   the maintainer's explicit approval).
 
 ## License
 
-Apache-2.0, including the server. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache-2.0, including the server. See [LICENSE](https://github.com/B4teShai/CV-Pilot/blob/main/LICENSE) and [NOTICE](https://github.com/B4teShai/CV-Pilot/blob/main/NOTICE).

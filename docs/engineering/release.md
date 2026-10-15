@@ -34,6 +34,7 @@ uv sync --locked
 uv run ruff check . && uv run ruff format --check . && uv run mypy
 uv run pytest --cov=cvpilot --cov-fail-under=85          # also on a real 3.13 environment
 uv lock --check
+python3 scripts/check_readme.py                          # the README is the package index page
 python3 /path/to/tools/qa_check.py .
 NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict
 uv build --out-dir dist
@@ -42,6 +43,12 @@ python scripts/verify_wheel.py dist/cvpilot-*.whl --python 3.10 --python 3.13
 sha256sum dist/*
 ```
 
+0. The README is the long description on the package index: every link is an absolute `https://`
+   URL into this repository, and it carries no release-status wording ("release candidate",
+   "nothing has been published", "install from source"). `scripts/check_readme.py` checks that
+   locally and the release workflow runs it before the build, so a tag cannot be built while the
+   README is wrong. The status of a release lives in this runbook and the CHANGELOG, not in the
+   README.
 1. The version is `__version__` in `src/cvpilot/__init__.py`; it changes only in the final
    release-preparation commit, together with the `CHANGELOG` heading. `tests/unit/test_deprecation.py`
    fails if a deprecation is due for removal in that version.

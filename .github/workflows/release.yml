@@ -32,6 +32,8 @@ jobs:
             echo "tag $TAG does not equal v$version (src/cvpilot/__init__.py)" >&2
             exit 1
           fi
+      - name: The README must be fit for the package index page
+        run: python3 scripts/check_readme.py
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run mypy

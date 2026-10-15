@@ -16,6 +16,11 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Fixed
 
+- The README is the package index page, so it no longer carries a frozen "release candidate,
+  nothing published, install from source" status or relative links and images that break on the
+  index. `scripts/check_readme.py` refuses relative links, links outside the project and
+  release-status wording; the release workflow runs it before the build and a test covers it.
+
 - Four published extras (`server`, `hf`, `mmdet`, `alerts`) installed nothing and the docs told
   you to install them; they are gone from the metadata and described as planned. New extras
   `remote-s3`, `remote-gcs` and `remote-azure` bring `fsspec` together with `s3fs`, `gcsfs` or
