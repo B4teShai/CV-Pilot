@@ -47,3 +47,12 @@ def test_find_returns_first_match_or_none() -> None:
 def test_first_party_local_store_is_registered() -> None:
     assert "local" in stores.names()
     assert callable(stores.get("local"))
+
+
+def test_first_party_forwarders_are_registered_without_importing_their_sdk() -> None:
+    from cvpilot.registry import forwarders
+
+    assert forwarders.names() == ["mlflow", "trackio", "wandb"]
+    for name in ("mlflow", "wandb", "trackio"):
+        factory = forwarders.get(name)
+        assert factory.name == name and callable(factory)  # type: ignore[attr-defined]

@@ -7,6 +7,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Forwarders: `init(forward_to=[...])` or `CVPILOT_FORWARD_TO` sends every logged scalar to MLflow
+  (`cvpilot[mlflow]`), W&B (`cvpilot[wandb]`) or Trackio (`cvpilot[trackio]`) through the
+  `cvpilot.forwarders` registry. Each forwarder has a daemon worker thread behind a bounded queue:
+  a failing, slow or hung tracker is counted and logged once (`forward_failed`,
+  `forward_summary`), never raised into or blocking the training loop (`finish` waits at most 5 s).
+  Tokens stay in the SDK's own environment; adapters refuse credentials in URLs, plain http outside
+  dev and disabled TLS verification. ADR-0008.
 - Reports: `--report PATH` (static HTML: every name escaped, no script or link, CSP limited to its
   hashed inline style, severity-first with row caps) and `--report-json PATH` (canonical JSON, no
   timestamps) on `compare` and `gate`; atomic writes that refuse symbolic links; golden tests.

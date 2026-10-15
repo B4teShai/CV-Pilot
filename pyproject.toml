@@ -25,9 +25,9 @@ ultralytics = []
 lightning = []
 hf = []
 mmdet = []
-mlflow = []
-wandb = []
-trackio = []
+mlflow = ["mlflow-skinny>=2.14"]
+wandb = ["wandb>=0.17"]
+trackio = ["trackio>=0.2"]
 alerts = []
 
 [project.scripts]
@@ -38,6 +38,11 @@ local = "cvpilot.store.local:open_store"
 
 [project.entry-points."cvpilot.tables"]
 parquet = "cvpilot.store.tables:open_tables"
+
+[project.entry-points."cvpilot.forwarders"]
+mlflow = "cvpilot.forward.mlflow:MlflowForwarder"
+wandb = "cvpilot.forward.wandb:WandbForwarder"
+trackio = "cvpilot.forward.trackio:TrackioForwarder"
 
 [project.entry-points."cvpilot.capturers"]
 git = "cvpilot.capture.env:capture_git"
@@ -60,6 +65,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pycocotools==2.0.11",
+    "pyyaml>=6",
 ]
 
 [tool.ruff]
@@ -83,8 +89,9 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not real_libs'"
 markers = [
   "chaos: kills a subprocess mid-write and checks recovery",
   "parity: compares metrics with the pycocotools reference",
+  "real_libs: smoke test against the real tracker or framework library; off by default (pytest -m real_libs)",
 ]

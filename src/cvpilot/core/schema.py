@@ -515,6 +515,26 @@ class MetricSink(Protocol):
     ) -> Artifact: ...
 
 
+class Forwarder(Protocol):
+    """Pushes a run's scalars to a tracker; adapters register under ``forwarders``.
+
+    An adapter is constructed with ``allow_insecure`` (true only when ``CVPILOT_ENV=dev``) and
+    reads its endpoint and credentials from the tracker SDK's own environment variables: it
+    takes no token argument, stores none and logs none. ``open``, ``log_points`` and ``close``
+    run on a worker thread owned by the fan-out, never on the training thread.
+    """
+
+    name: str
+    requires: tuple[str, ...]
+
+    def open(self, meta: RunMeta, repro: Repro) -> None: ...
+    def log_points(self, points: Sequence[MetricPoint]) -> None: ...
+    def close(self, status: RunStatus) -> None: ...
+
+
+ForwarderFactory = Callable[..., Forwarder]
+
+
 class MetricStats(_Model):
     """Index-level summary of a run's metric files; ``min_step``/``max_step`` are None if empty."""
 

@@ -22,7 +22,7 @@ from cvpilot.core.hashing import new_run_id
 from cvpilot.core.schema import SCHEMA_VERSION, Artifact, ArtifactKind, EvalSnapshot, RunMeta, Task
 from cvpilot.logging import ensure_configured, get_logger
 from cvpilot.repro import capture_repro
-from cvpilot.settings import load_settings
+from cvpilot.settings import load_settings, parse_forwarders
 
 if TYPE_CHECKING:
     from cvpilot.eval import AnnotationTable, PredictionTable
@@ -139,6 +139,7 @@ def init(
     framework: str | None = None,
     resume_from: str | None = None,
     store_dir: str | Path | None = None,
+    forward_to: Sequence[str] | None = None,
 ) -> Run:
     """Start a run and make it the active run of this process.
 
@@ -151,6 +152,9 @@ def init(
         framework: ``"<name>==<version>"``; defaults to the running Python.
         resume_from: run id of a ``preempted`` or ``failed`` run to continue.
         store_dir: overrides ``CVPILOT_STORE_DIR`` (default ``~/.cvpilot``).
+        forward_to: forwarder names (``"mlflow"``, ``"wandb"``, ``"trackio"`` or a plugin) that
+            receive every logged scalar on worker threads; defaults to ``CVPILOT_FORWARD_TO``.
+            A tracker that is down or slow never raises into or blocks the training loop.
 
     Raises:
         SettingsError: an invalid ``CVPILOT_*`` variable.
@@ -158,6 +162,8 @@ def init(
         InvalidResumeError, RunNotFoundError: ``resume_from`` cannot be resumed or is unknown.
         FileNotFoundError, NotADirectoryError: ``dataset_uri`` is unusable.
         StoreError: the store cannot be created or written.
+        UnknownPluginError, MissingExtraError: a forwarder is not registered or its extra is
+            missing (raised before any run is created).
     """
     global _active, _atexit_registered
     settings = load_settings()
@@ -171,6 +177,8 @@ def init(
             raise RunAlreadyActiveError(
                 f"run {_active.run_id} is still active; call finish() before init()"
             )
+        names = settings.forward_to if forward_to is None else parse_forwarders(forward_to)
+        chosen = runs.resolve_forwarders(names, allow_insecure=settings.env == "dev")
         run_id = new_run_id()
         captured = capture_repro(
             run_id,
@@ -198,7 +206,9 @@ def init(
                 started_at=started,
                 schema_version=SCHEMA_VERSION,
             )
-        handle = runs.start_run(meta, captured.repro, store_dir=root, git_diff=captured.git_diff)
+        handle = runs.start_run(
+            meta, captured.repro, store_dir=root, git_diff=captured.git_diff, forwarders=chosen
+        )
         _active = Run(handle)
         if not _atexit_registered:
             atexit.register(_flush_active_at_exit)

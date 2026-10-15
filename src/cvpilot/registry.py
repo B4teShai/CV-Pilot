@@ -13,7 +13,7 @@ from importlib.metadata import EntryPoint, entry_points
 from typing import Any, Generic, TypeVar
 
 from cvpilot.core.errors import CvpilotError
-from cvpilot.core.schema import StoreFactory, TableIOFactory
+from cvpilot.core.schema import ForwarderFactory, StoreFactory, TableIOFactory
 
 T = TypeVar("T")
 EntryPointLookup = Callable[..., Iterable[EntryPoint]]
@@ -68,3 +68,4 @@ class Registry(Generic[T]):
 stores: Registry[StoreFactory] = Registry("cvpilot.stores")
 capturers: Registry[Capturer] = Registry("cvpilot.capturers")
 tables: Registry[TableIOFactory] = Registry("cvpilot.tables")
+forwarders: Registry[ForwarderFactory] = Registry("cvpilot.forwarders")

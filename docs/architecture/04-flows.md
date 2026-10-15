@@ -53,7 +53,7 @@ Failure paths:
 |---|---|---|---|
 | Hook extra not installed | `autolog` raises `MissingExtraError` naming the extra or plugin | 1 (Python API raises; CLI not involved) | `hook_missing` |
 | Duplicate `(key, step)` in a batch | batch rejected, exception to the caller; training continues only if the caller catches it | n/a | `metrics_rejected` |
-| Forwarder error (tracker down) | skipped for this batch, retried next batch; training unaffected | n/a | `forward_failed` (WARN) |
+| Forwarder error (tracker down, slow or hung) | counted; the first failure per forwarder is logged once; the next batch is offered again (not after `open` failed or a stall); a full queue drops the batch; `log` and the training loop are never blocked or raised into | n/a | `forward_failed` (WARN, once), `forward_summary` (WARN, at finish) |
 | Store write error (disk full, permissions) | `log()` raises `StoreError`; training loop decides | n/a | `store_write_failed` (ERROR) |
 | `gate` run, baseline tag or run not found, or the project has no store | one line on `stderr` | 1 | `command_failed` |
 | Unknown option, bad threshold syntax (`--max-drop mAP50_95`), no threshold given, `--min-images 0` | Typer usage error | 2 | none (usage errors are not logged) |
@@ -84,7 +84,7 @@ above 256, malformed Parquet or an existing snapshot give `EvalInputError`,
 `SliceCardinalityError` or `SnapshotExistsError`, exit 1 with one `error:` line and one
 `command_failed` event, and nothing is stored. Steps 5 to 8 are built: `cvpilot baseline`,
 `cvpilot compare` and `cvpilot gate` (ADR-0007) read only verified snapshots and never trust a
-stored comparison. Hooks, forwarders, the outbox and alert rules are not built, and the
+stored comparison. Forwarders are built (ADR-0008); hooks, the outbox and alert rules are not built, and the
 duplicate-batch failure is raised to the caller without a `metrics_rejected` event.
 `cvpilot runs show` and `cvpilot repro` read the result.
 

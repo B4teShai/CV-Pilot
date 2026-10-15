@@ -18,6 +18,9 @@ _PREFIX = "CVPILOT_"
 # A unit test asserts both patterns stay equal.
 PROJECT_PATTERN = r"[a-z0-9][a-z0-9_-]{0,63}"
 _PROJECT = re.compile(PROJECT_PATTERN)
+FORWARDER_PATTERN = r"[a-z][a-z0-9_-]{0,31}"
+_FORWARDER = re.compile(FORWARDER_PATTERN)
+MAX_FORWARDERS = 8
 _TRUE = {"true", "1", "yes", "on"}
 _FALSE = {"false", "0", "no", "off"}
 
@@ -34,7 +37,30 @@ _FIELDS: dict[str, tuple[str, Callable[[str], str]]] = {
     "store_command_line": ("STORE_COMMAND_LINE", _bool_text),
     "project": ("PROJECT", str),
     "store_dir": ("STORE_DIR", str),
+    "forward_to": ("FORWARD_TO", str),
 }
+
+
+def parse_forwarders(value: Any) -> tuple[str, ...]:
+    """Forwarder names from a comma-separated string or a sequence; validated, no duplicates.
+
+    Raises:
+        ValueError: a name is empty or does not match ``[a-z][a-z0-9_-]{0,31}``, a name is
+            repeated, or there are more than ``MAX_FORWARDERS``.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        names = [part.strip() for part in value.split(",")] if value.strip() else []
+    elif isinstance(value, (list, tuple)):
+        names = list(value)
+    else:
+        raise ValueError("must be a comma-separated list of names")
+    if len(names) > MAX_FORWARDERS or len(set(names)) != len(names):
+        raise ValueError("too many or repeated forwarder names")
+    if not all(isinstance(n, str) and _FORWARDER.fullmatch(n) for n in names):
+        raise ValueError("invalid forwarder name")
+    return tuple(names)
 
 
 class SettingsError(ValueError):
@@ -47,6 +73,12 @@ class Settings(BaseModel, frozen=True):
     store_command_line: bool = True
     project: str | None = None
     store_dir: Path | None = None
+    forward_to: tuple[str, ...] = ()
+
+    @field_validator("forward_to", mode="before")
+    @classmethod
+    def _forward_to(cls, value: Any) -> tuple[str, ...]:
+        return parse_forwarders(value)
 
     @field_validator("project")
     @classmethod

@@ -22,6 +22,10 @@ HEAVY = {
     "httpx",
     "ultra" + "lytics",
     "lightning",
+    "mlflow",
+    "wandb",
+    "trackio",
+    "pytorch_lightning",
 }
 
 

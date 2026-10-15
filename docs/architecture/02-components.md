@@ -11,9 +11,9 @@ Every other package is planned and its interface is the contract it will be buil
 | Layer | Packages |
 |---|---|
 | Interface | `cli/` (built), `api.py` (built: `init`, `log`, `log_artifact`, `log_eval`, `finish`) |
-| Application | `runs/` (built), `repro` (built), `eval/` (built), `compare/` (baselines, compare, gate built), `ckpt/`, `alerts/` |
+| Application | `runs/` (built, with the forwarder fan-out), `repro` (built), `eval/` (built), `compare/` (baselines, compare, gate built), `ckpt/`, `alerts/` |
 | Domain | `core/schema.py`, `core/hashing.py` (built); `core/ulid.py`, `core/redact.py`, `core/jsonable.py`, `core/errors.py` (built); `core/metrics.py`, `core/confusion.py` (built) |
-| Infrastructure | `store/`, `capture/` (built); `hooks/`, `forward/`, `sync/`, `remote/`, `notify/`, `server/` |
+| Infrastructure | `store/`, `capture/`, `forward/` (built); `hooks/`, `sync/`, `remote/`, `notify/`, `server/` |
 | Cross-cutting | `logging.py`, `settings.py`, `registry.py` (built) |
 
 Signatures use `Literal` and Pydantic models from `core/schema.py`; `PredictionTable` and
@@ -80,7 +80,8 @@ def init(
     framework: str | None = None,        # "<name>==<version>", default the running Python
     resume_from: str | None = None,      # run id of a preempted or failed run
     store_dir: str | PathLike[str] | None = None,   # default: CVPILOT_STORE_DIR
-) -> Run                                 # built; `forward_to` and `resume: bool` are planned
+    forward_to: Sequence[str] | None = None,        # default: CVPILOT_FORWARD_TO
+) -> Run                                 # built (with `forward_to`); `resume: bool` is planned
 def log(points: Mapping[str, float], *, step: int, epoch: int | None = None) -> None
 def log_eval(
     preds: PredictionTable,
@@ -136,7 +137,9 @@ class RunHandle:                  # implements MetricSink.log and log_artifact
     def finish(self, status: Literal["finished", "failed", "preempted"] = "finished") -> None
 ```
 
-`log` validates the whole call, buffers at most 10 000 points and writes one Parquet batch on
+After a flush the batch is offered to the forwarders (`runs/forwarding.py`): a non-blocking
+`put_nowait` on a bounded queue per forwarder, each served by its own daemon thread; `finish`
+waits at most `CLOSE_TIMEOUT_S` (5 s) for them. `log` validates the whole call, buffers at most 10 000 points and writes one Parquet batch on
 the caller's thread when that bound is reached or 2 s have passed since the last flush
 (checked on each call; there is no timer thread). The longest a training step waits on I/O is
 one batch write. A failed write keeps the points buffered and raises `StoreError`. A step must
@@ -146,7 +149,7 @@ sets the final status and logs `run_finished`; a run whose process died stays `r
 `recover_run` marks it `failed`. `resume_from` accepts only `preempted` or `failed` parents.
 
 Depends on: `core/`, registry `stores`. Status: built (lifecycle, queries, recovery, resume
-metadata); planned: `log_snapshot`, forwarders, the outbox and client-side alerts.
+metadata, forwarder fan-out); planned: the outbox and client-side alerts.
 
 ### `eval/`
 
@@ -480,18 +483,40 @@ package; its `--help` text and docstring carry the AGPL-3.0 notice required by
 ### `forward/`
 
 ```python
-class Forwarder(Protocol):
-    name: str  # "mlflow", "wandb", "trackio", "tensorboard"
-    requires: tuple[str, ...]
+class Forwarder(Protocol):  # core/schema.py
+    name: str  # "mlflow", "wandb", "trackio" (TensorBoard is planned)
+    requires: tuple[str, ...]  # "a|b" means either distribution
 
     def open(self, meta: RunMeta, repro: Repro) -> None: ...
     def log_points(self, points: Sequence[MetricPoint]) -> None: ...
-    def log_artifact(self, artifact: Artifact, path: Path) -> None: ...
     def close(self, status: RunStatus) -> None: ...
+
+
+# constructed as cls(allow_insecure=<CVPILOT_ENV == "dev">); no token argument exists
 ```
 
-A forwarder failure is logged once at `WARN` (`forward_failed`) and never stops training.
-Depends on: `core/schema.py`; tracker SDK inside the adapter. Status: planned.
+Adapters: `forward/mlflow.py` (`cvpilot[mlflow]`, `mlflow-skinny`), `forward/wandb.py`
+(`cvpilot[wandb]`), `forward/trackio.py` (`cvpilot[trackio]`), registered under
+`cvpilot.forwarders`. Each imports its SDK inside `open()` only and raises
+`MissingExtraError("... install cvpilot[<name>]")` when it is absent; the registry-level
+check (`requires`) raises the same error at `init()` before any run exists. Endpoint and
+credentials come from the SDK's own environment variables (`MLFLOW_TRACKING_URI`,
+`WANDB_API_KEY`, ...): an adapter reads no credential, accepts none, stores none and logs
+none. At construction it refuses an endpoint with credentials in the URL, a plain `http`
+endpoint (unless `CVPILOT_ENV=dev`), and the SDK switches that disable TLS verification
+(`MLFLOW_TRACKING_INSECURE_TLS`, `WANDB_INSECURE_DISABLE_SSL`); the message names the variable
+and never the value. Adapters send the run id, project, task, parent run id and the metrics
+(MLflow: tags; W&B and Trackio: a small config), never `Repro.config`, the command line, the
+dataset path or artifacts. Keys: MLflow replaces characters it does not accept with `_` (steps
+and float64 values are unchanged); W&B requires non-decreasing steps, so points are sent grouped
+by ascending step and points older than the last forwarded step are counted in
+`dropped_points`. Artifact forwarding is not built (predictions can reveal the dataset; it will
+be opt-in).
+
+The fan-out lives in `runs/forwarding.py` (ADR-0008): a bounded queue, a daemon worker thread and
+a stall timeout per forwarder, so a failing, slow or hung tracker is counted and logged once and
+never raises into or blocks the training loop. Depends on: `core/`; the tracker SDK inside the
+adapter. Status: built (`mlflow`, `wandb`, `trackio`); planned: TensorBoard.
 
 ### `sync/`
 

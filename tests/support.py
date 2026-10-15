@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 
 from cvpilot.core.hashing import new_run_id
-from cvpilot.core.schema import SCHEMA_VERSION, EvalSnapshot, Repro, RunMeta
+from cvpilot.core.schema import SCHEMA_VERSION, EvalSnapshot, MetricPoint, Repro, RunMeta
 from cvpilot.registry import tables
 from cvpilot.store.local import LocalRunStore, open_store
 
@@ -200,3 +200,37 @@ def write_eval_files(
     )
     (folder / "c.txt").write_text("cat\ndog\n")
     return folder / "p.parquet", folder / "g.parquet", folder / "c.txt"
+
+
+def meta_repro() -> tuple[RunMeta, Repro]:
+    rid = new_run_id()
+    meta = RunMeta(
+        run_id=rid,
+        project="p",
+        name="n",
+        status="running",
+        task="detection",
+        framework="python==3.12.1",
+        host="h",
+        started_at=datetime(2026, 10, 15, tzinfo=timezone.utc),
+        schema_version=SCHEMA_VERSION,
+    )
+    repro = Repro(
+        run_id=rid,
+        git_dirty=False,
+        packages_lock_sha256=SHA,
+        python_version="3.12",
+        gpu_names=[],
+        dataset_uri="/d",
+        dataset_hash="merkle:" + SHA,
+        config={},
+        command_line="train.py",
+    )
+    return meta, repro
+
+
+def batch(meta: RunMeta, step: int, n: int = 3) -> list[MetricPoint]:
+    return [
+        MetricPoint(run_id=meta.run_id, key=f"k{i}", step=step, value=step + i / 10, wall_time=1.0)
+        for i in range(n)
+    ]

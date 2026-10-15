@@ -31,6 +31,7 @@ from cvpilot.core.errors import (
 from cvpilot.core.schema import (
     Artifact,
     ArtifactKind,
+    Forwarder,
     MetricPoint,
     Repro,
     RunMeta,
@@ -39,6 +40,7 @@ from cvpilot.core.schema import (
     is_terminal,
 )
 from cvpilot.logging import bind_request_id, get_logger
+from cvpilot.runs.forwarding import Fanout
 from cvpilot.runs.queries import open_existing, open_store
 
 if TYPE_CHECKING:
@@ -86,6 +88,7 @@ class RunHandle:
         flush_points: int = FLUSH_POINTS,
         flush_interval_s: float = FLUSH_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
+        fanout: Fanout | None = None,
     ) -> None:
         if flush_points < 1:
             raise ValueError("flush_points must be positive")
@@ -105,6 +108,7 @@ class RunHandle:
         self._flush_lock = threading.Lock()
         self._seq = itertools.count(1)
         self._status: RunStatus = meta.status
+        self._fanout = fanout
 
     @property
     def run_id(self) -> str:
@@ -212,6 +216,8 @@ class RunHandle:
                 raise
             self._n_flushed += len(batch)
             self.emit("debug", "metrics_flushed", n_points=len(batch), file=name)
+            if self._fanout is not None:
+                self._fanout.submit(batch)  # never blocks, never raises (runs/forwarding.py)
 
     def log_artifact(
         self, path: Path, *, kind: ArtifactKind, meta: Mapping[str, Any] | None = None
@@ -287,12 +293,16 @@ class RunHandle:
             n_points=self._n_flushed,
             duration_ms=round((self._clock() - self._started) * 1000, 1),
         )
+        if self._fanout is not None:
+            self._fanout.close(status)  # waits at most CLOSE_TIMEOUT_S
         self._store.close()
 
     def abandon(self) -> None:
         """Flush what is buffered and release the store without changing the status."""
         if not self._closed:
             self.flush()
+            if self._fanout is not None:
+                self._fanout.close(self._status)
             self._store.close()
             self._closed = True
 
@@ -306,8 +316,13 @@ def start_run(
     flush_points: int = FLUSH_POINTS,
     flush_interval_s: float = FLUSH_INTERVAL_S,
     clock: Callable[[], float] = time.monotonic,
+    forwarders: Sequence[Forwarder] = (),
 ) -> RunHandle:
-    """Persist a new run (and its diff artifact) and return its handle."""
+    """Persist a new run (and its diff artifact) and return its handle.
+
+    ``forwarders`` (already resolved, see ``resolve_forwarders``) receive every flushed batch on
+    their own worker threads; see ``cvpilot.runs.forwarding`` for the isolation guarantees.
+    """
     store = open_store(meta.project, store_dir)
     try:
         store.put_run(meta, repro)
@@ -316,8 +331,17 @@ def start_run(
     except BaseException:
         store.close()
         raise
+    fanout: Fanout | None = None
+    if forwarders:
+        fanout = Fanout(forwarders, meta, repro)
+        fanout.start()
     handle = RunHandle(
-        meta, store, flush_points=flush_points, flush_interval_s=flush_interval_s, clock=clock
+        meta,
+        store,
+        flush_points=flush_points,
+        flush_interval_s=flush_interval_s,
+        clock=clock,
+        fanout=fanout,
     )
     handle.emit(
         "info",

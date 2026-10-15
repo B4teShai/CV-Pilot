@@ -37,7 +37,8 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `checkpoint_save_failed` | ERROR | `run_id`, `step`, `exc_info` | `ckpt/` | planned |
 | `checkpoint_restore_empty` | INFO | `run_id`, `dir`, `remote` | `ckpt/` | planned |
 | `preemption_signal_received` | INFO | `run_id`, `signal`, `grace_seconds` | `ckpt/` | planned |
-| `forward_failed` | WARN | `forwarder`, `run_id`, `n_points`, `reason` | `forward/` | planned |
+| `forward_failed` | WARN | `forwarder`, `run_id`, `n_points`, `reason` (`exception`, `open_failed`, `queue_full`, `stalled`, `construct_failed`, `submit_failed`), `error_type` (the exception class only, never its text) | `runs/forwarding.py` | built; logged once per forwarder |
+| `forward_summary` | WARN | `forwarder`, `run_id`, `failed_calls`, `dropped_batches`, `dropped_points`, `disabled_reason`, `abandoned` | `runs/forwarding.py` at finish, only when something went wrong | built |
 | `sync_batch_sent`, `sync_batch_failed`, `sync_outbox_full`, `sync_schema_mismatch` | DEBUG / WARN | `run_id`, `seq_from`, `seq_to`, `status_code`, `retry_in_s`, `outbox_size` | `sync/` | planned |
 | `alert_fired`, `alert_delivered`, `alert_delivery_failed` | INFO / INFO / WARN | `rule`, `run_id`, `channel`, `reason` | `alerts/`, `notify/` | planned |
 | `nvml_unavailable` | INFO | `reason` | `capture/` | planned (capture currently falls back to `nvidia-smi` or none without logging) |
@@ -104,6 +105,8 @@ browser ↔ server; server ↔ notification channels; CV-Pilot ↔ third-party p
 | Malicious or buggy third-party plugin | registries | plugins load only from installed distributions' entry points; no dynamic import from configuration strings; plugin exceptions are caught at the registry boundary and logged with the plugin name | planned |
 | Telegram `/stop` abuse | server | commands accepted only from allow-listed chat ids; `/stop` requires a confirmation reply within 60 s | planned |
 | Share-link enumeration | server | 32-byte random tokens, expiry ≤ 7 days, read-only, revocable | planned |
+| Tracker adapter leaking credentials or weakening TLS | `forward/*` | adapters read no credential, take no token argument, refuse credentials in URLs, plain http outside dev and the SDK switches that disable TLS verification, and never log exception text or a URL (a test scans the adapter sources for credential variable names and for verification switches) | built |
+| A tracker outage, hang or slow call stalling training | `runs/forwarding.py` | bounded queue with `put_nowait`, one daemon thread per forwarder, stall timeout (30 s), `close` bounded at 5 s, every adapter exception counted and logged once, never raised | built |
 | Dependency compromise | all | committed lockfile, `uv sync --locked` in CI, pinned actions, dependency scanning in CI | built (lockfile), planned (scanning) |
 | Credential exposure in `doctor` | CLI | `doctor` reports whether `CVPILOT_TOKEN` is set, never its value | planned |
 | Copyleft contamination of the distribution through the Ultralytics extra | `hooks/` | `ultralytics` is declared only in the `[ultralytics]` extra and imported only inside `hooks/ultralytics.py`; an import-linter contract forbids it elsewhere; no code is vendored or derived; the AGPL-3.0 notice is shown in `--help` and the runtime docs | planned |

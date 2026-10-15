@@ -6,7 +6,7 @@
 
 | Where | What runs | Threads and subprocesses |
 |---|---|---|
-| Training process (built: `api.py`, `runs/`, store and capture in-process; planned: hooks, `eval/`, `ckpt/`, forwarders, alerts) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training and the hook callbacks; `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; signal handlers for SIGTERM/SIGUSR1 set a flag only. No subprocess except `git` once at `init`. |
+| Training process (built: `api.py`, `runs/`, store and capture in-process; planned: hooks, `eval/`, `ckpt/`, forwarders, alerts) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training and the hook callbacks; `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; signal handlers for SIGTERM/SIGUSR1 set a flag only. No subprocess except `git` once at `init`. |
 | `cvpilot` CLI (built: `--version`, `doctor`, `runs`, `repro`) | one command per invocation, single-threaded | none; planned `compare` uses a `ThreadPoolExecutor` of `min(4, cpu_count)` for bootstrap resamples |
 | Server container (planned) | Uvicorn with one FastAPI worker per CPU, websocket broadcaster, alert delivery worker | each worker is a process; alert delivery is an asyncio task; SQLite requires one worker, Postgres allows several |
 | CI runner (planned) | `cvpilot gate` as a step; exit code gates the job | same as CLI |
@@ -15,7 +15,7 @@ The hook never blocks training on I/O: `log()` appends to an in-memory buffer bo
 10 000 points; the store flush happens on the caller's thread when the buffer is full or 2 s
 have passed since the last flush, checked on each `log()` call (one Parquet write, tens of
 milliseconds, built; a failed write keeps the points and raises `StoreError`); forwarders are called after the flush and their failures are logged,
-not raised; the sync thread owns all network I/O.
+not raised; forwarders run on their own daemon threads behind bounded queues (`runs/forwarding.py`, ADR-0008) and own all tracker network I/O; the sync thread, when it exists, owns the server I/O.
 
 ## Deployment nodes
 
@@ -57,7 +57,7 @@ variable; default. There is no configuration file.
 | `CVPILOT_TOKEN` | per-project token | none | sync client, CLI calls to the server; sent as `Authorization: Bearer` | planned, secret |
 | `CVPILOT_CHECKPOINT_DIR` | directory path | none | `CheckpointManager` default `dir` | planned |
 | `CVPILOT_CHECKPOINT_REMOTE` | fsspec URL | none | `CheckpointManager` default `remote` | planned |
-| `CVPILOT_FORWARD_TO` | comma-separated forwarder names | empty | `init()` default `forward_to` | planned |
+| `CVPILOT_FORWARD_TO` | comma-separated forwarder names `[a-z][a-z0-9_-]{0,31}`, at most 8, no repeats | empty | `init()` default `forward_to`; an unknown name or a missing extra fails `init()` before a run exists | built (`settings.py` parses it, `init` passes it to the fan-out; tests run it through the real `init` path) |
 | `CVPILOT_ALERT_CHANNELS` | comma-separated channel names | empty | client-side alert delivery | planned |
 | `CVPILOT_SERVER_DATABASE_URL` | SQLAlchemy URL | `sqlite:////data/cvpilot.sqlite` | server only | planned |
 | `CVPILOT_SERVER_TOKEN_HASHES` | path to a file of `project:sha256(token)` lines | `/data/tokens` | server only | planned |
@@ -72,6 +72,7 @@ variable; default. There is no configuration file.
 | `CVPILOT_TOKEN` (project token) | environment of the training process and CI (CI secret store), the `Authorization` header over TLS | logs, `Repro.command_line`, `Repro.config`, reports, the run store, URLs, `doctor` output |
 | Server token hashes | the file named by `CVPILOT_SERVER_TOKEN_HASHES` (SHA-256 of the token only) | the server database in clear text, logs, HTTP responses |
 | Telegram bot token, Slack and webhook URLs, SMTP URL | environment of the process that delivers alerts (server, or training process for client-side delivery) | logs, alert messages, share links, the run store |
+| Tracker credentials (`MLFLOW_TRACKING_TOKEN`, `WANDB_API_KEY`, the tracker's own variables) | the training process's environment, read by the tracker SDK only | CV-Pilot configuration, logs (exception text of an adapter is never logged, only its type), the run store, URLs |
 | Cloud credentials for fsspec | the backend's own mechanism (instance role, `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`) | CV-Pilot configuration, logs, manifests |
 | Share links | server database (random 32-byte token, expiry ≤ 7 days) | logs |
 
@@ -87,7 +88,7 @@ fields are never used for secrets.
 | `cvpilot[lightning]` | Lightning logger and callback hook | `lightning`, `torch` | GPU recommended for training; CPU works for tests |
 | `cvpilot[hf]` | HF `Trainer` callback hook | `transformers`, `torch` | same |
 | `cvpilot[mmdet]` | MMEngine hook and vis backend | `mmengine`, `mmdet`, `torch` | same |
-| `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker | the tracker SDK | none |
+| `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker (`init(forward_to=["mlflow"])`) | `mlflow-skinny`, `wandb`, `trackio` | none |
 | `cvpilot[alerts]` | Telegram, Slack and generic webhook channels (SMTP needs no extra) | `httpx` | none |
 | `cvpilot[server]` | `cvpilot server`, websocket live view, htmx UI, share links | `fastapi`, `uvicorn[standard]`, `websockets`, `sqlalchemy`, `asyncpg` (Postgres optional) | 1 vCPU, 512 MB RAM for SQLite mode |
 | `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), per-class AP and confusion capture, verified `resume=` | `ultralytics` (AGPL-3.0), `torch` | GPU recommended |
