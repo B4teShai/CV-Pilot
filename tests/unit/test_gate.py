@@ -151,7 +151,7 @@ def test_a_per_class_threshold_that_gates_nothing_fails() -> None:
 
 def test_non_finite_class_value_fails() -> None:
     good = build_snapshot()
-    rows = {**good.per_class, "cat": {"AP50_95": math.nan, "support": 3.0}}
+    rows = {**good.per_class, "cat": {"AP50_95": math.nan, "support": 20.0}}
     broken = EvalSnapshot.model_construct(**{**good.__dict__, "per_class": rows})
     result = gate(
         compare(broken, good), Thresholds(per_class_max_drop={"AP50_95": 50.0}, min_images=1)
@@ -253,7 +253,7 @@ def test_at_least_one_threshold_is_required() -> None:
         Thresholds()
 
 
-@pytest.mark.parametrize("bad", [-0.1, math.nan, math.inf, 100.5])
+@pytest.mark.parametrize("bad", [-0.1, math.nan, math.inf, 100.0, 100.5])
 def test_limits_must_be_finite_and_within_0_to_100(bad: float) -> None:
     with pytest.raises(ThresholdError):
         Thresholds(max_drop={"mAP50_95": bad})
@@ -269,7 +269,6 @@ def test_min_images_must_be_positive() -> None:
     [
         ("mAP50_95=0.5", ("mAP50_95", 0.5)),
         ("AP50=2", ("AP50", 2.0)),
-        ("x=100", ("x", 100.0)),
         ("x=0", ("x", 0.0)),
     ],
 )
@@ -290,6 +289,7 @@ def test_parse_drop(text: str, expected: tuple[str, float]) -> None:
         "a=1_0",
         "a= 1",
         "a=1.5.2",
+        "a=100",
         "a=101",
         "1a=1",
         "a b=1",

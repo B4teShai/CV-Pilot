@@ -49,7 +49,8 @@ Option B, with these rules (each has a test):
    bounded amount of memory in points as well as in batches;
    `CALL_TIMEOUT_S` (30 s): a call running longer disables the forwarder the next time a batch is
    offered. A hung call occupies only its own worker; the SDK's own timeouts end it eventually.
-3. **Failures are counted and logged once.** The first failure per forwarder is `forward_failed`
+3. **Failures are counted and logged once.** A `BaseException` from an adapter (an SDK calling
+   `sys.exit`) is handled the same way, disables the forwarder and calls `adapter.close` once. The first failure per forwarder is `forward_failed`
    (WARN) with the forwarder, run id, reason and the exception *type*; the exception text is never
    logged because it can contain a URL or a credential. `forward_summary` at close carries the
    counters. A failed call is retried with the next batch; a failed `open` or a stall disables

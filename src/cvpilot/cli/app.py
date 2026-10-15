@@ -14,8 +14,12 @@ from cvpilot.cli.eval_cmds import eval_command
 from cvpilot.cli.gate_cmds import compare_command, gate_command
 from cvpilot.cli.runs_cmds import repro_command, runs_app
 from cvpilot.core.errors import CvpilotError
+from cvpilot.core.text import safe_text
 from cvpilot.logging import clear_request_context, configure_logging, get_logger, scrub
 from cvpilot.settings import SettingsError, load_settings
+
+ERROR_LINE_CHARS = 2000
+"""Longest error line printed for a human (the structured event keeps the full text)."""
 
 app = typer.Typer(add_completion=False, pretty_exceptions_show_locals=False, help="CV-Pilot")
 
@@ -87,10 +91,15 @@ def main() -> NoReturn:
     try:
         result = app(standalone_mode=False)
         code = result if isinstance(result, int) else 0
-    except typer.Abort:
+    except (typer.Abort, KeyboardInterrupt):
         code = 130
+    except SystemExit as exc:
+        # A command that calls exit(0) or sys.exit("...") is not a success: only a clean
+        # typer.Exit (returned by the app above) is. A non-zero integer code is kept.
+        code = exc.code if isinstance(exc.code, int) and exc.code != 0 else 1
+        get_logger("cvpilot.cli").error("command_failed", command=command, exc_info=exc)
     except CvpilotError as exc:  # expected failure: one line for the human, one event for machines
-        typer.echo(f"error: {scrub(str(exc))}", err=True)
+        typer.echo(f"error: {scrub(safe_text(str(exc), ERROR_LINE_CHARS))}", err=True)
         get_logger("cvpilot.cli").error(
             exc.event, command=command, exc_info=exc, **exc.log_fields()
         )

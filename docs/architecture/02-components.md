@@ -232,7 +232,7 @@ def set_baseline(project, tag, run_id, *, eval_set=None, step=None, replace=Fals
 
 `compare()` raises `CompareRefusedError` (`EvalSetMismatchError` for a different
 `eval_set_hash`) unless `eval_set_hash`, `task`, `class_names` (order included), the
-evaluation parameters and `slice_hash` are equal and every slice holds the same number of images; snapshots without recorded parameters are refused because
+evaluation parameters and `slice_hash` are equal, every slice holds the same number of images and every class has the same support (`class_support`); snapshots without recorded parameters are refused because
 they cannot be checked. The CLI logs `compare_refused` with `reason` and both hashes and exits
 1; no result or report exists. Deltas are `(candidate - baseline) * 100` points, negative
 being a regression. Headline deltas carry the stored bootstrap intervals and whether they

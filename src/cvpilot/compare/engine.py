@@ -180,6 +180,15 @@ def check_comparable(candidate: EvalSnapshot, baseline: EvalSnapshot) -> None:
             candidate,
             baseline,
         )
+    for name in baseline.class_names:
+        support_b = baseline.per_class.get(name, {}).get("support")
+        if support_b != candidate.per_class.get(name, {}).get("support"):
+            raise _refuse(
+                "class_support",
+                "a class has a different number of ground-truth objects in the two snapshots",
+                candidate,
+                baseline,
+            )
     if candidate.slice_hash != baseline.slice_hash:
         raise _refuse(
             "slice_hash",

@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import tempfile
 import threading
 from collections.abc import Iterator, Mapping, Sequence
@@ -65,6 +66,8 @@ DB_NAME = "runs.sqlite"
 _BUSY_TIMEOUT_S = 30.0
 _PARQUET_COMPRESSION = "zstd"
 _COMPACTED = "all.parquet"
+MAX_OPEN_ARTIFACT_BYTES = 1 << 30
+"""Largest artifact ``open_artifact`` reads into memory (1 GiB, the Parquet reader's limit)."""
 
 
 def _ts(value: datetime) -> str:
@@ -650,29 +653,42 @@ class LocalRunStore:
             return False
 
     def open_artifact(self, sha256: str) -> BinaryIO:
-        """Open a stored artifact for reading after verifying its SHA-256.
+        """The stored artifact as an in-memory file, after verifying its SHA-256.
+
+        The file is read once, from one descriptor opened without following symbolic links, and
+        the digest is computed over exactly those bytes: what the caller reads is what was
+        hashed, so a later change of the file cannot reach the reader. At most
+        ``MAX_OPEN_ARTIFACT_BYTES`` are read.
 
         Raises:
-            StoreError: the address is malformed or the file is missing.
+            StoreError: the address is malformed, the file is missing, not a regular file or
+                too large.
             SnapshotIntegrityError: the stored bytes do not hash to the address.
         """
+        import io
+
         path = self.artifact_path(sha256)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         try:
-            handle = path.open("rb")
+            fd = os.open(path, flags)
         except FileNotFoundError:
             raise StoreError(f"artifact {sha256[:12]} is missing") from None
         except OSError as exc:
-            raise StoreError(f"cannot read artifact {sha256[:12]}: {exc}") from exc
-        digest = hashlib.sha256()
-        while chunk := handle.read(1 << 20):
-            digest.update(chunk)
-        if digest.hexdigest() != sha256:
-            handle.close()
+            raise StoreError(f"cannot read artifact {sha256[:12]}: {exc.strerror}") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise StoreError(f"artifact {sha256[:12]} is not a regular file")
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                data = handle.read(MAX_OPEN_ARTIFACT_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(data) > MAX_OPEN_ARTIFACT_BYTES:
+            raise StoreError(f"artifact {sha256[:12]} is too large to open")
+        if hashlib.sha256(data).hexdigest() != sha256:
             raise SnapshotIntegrityError(
                 f"artifact {sha256[:12]} failed its integrity check: digest mismatch"
             )
-        handle.seek(0)
-        return handle
+        return io.BytesIO(data)
 
     def _register(
         self, run_id: str, kind: ArtifactKind, meta: Mapping[str, Any], sha: str, size: int

@@ -56,8 +56,9 @@ Option B.
    fails when the candidate is more than 0.5 points (0.005) below the baseline. A drop equal
    to the limit passes; drops are rounded to 1e-9 points before comparing so float noise does
    not fail an exact boundary. A negative drop (an improvement) never fails, not even against
-   a limit of 0. Limits are finite numbers from 0 to 100 written without exponent or
-   separators.
+   a limit of 0. Limits are finite numbers from 0 up to (not including) 100 written without exponent
+   or separators: a drop cannot exceed 100 points, so a limit of 100 could never fail and is
+   refused. `--min-images` has an explicit floor of 1 (the CLI refuses 0).
 2. **Comparable only when equal.** `eval_set_hash`, `task`, `class_names` (order included) and
    `params` (IoU grid, confusion settings, `max_dets`) must match. Missing `params` count as
    different. Otherwise `CompareRefusedError` (`EvalSetMismatchError` for the hash): event

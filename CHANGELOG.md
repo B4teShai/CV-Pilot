@@ -7,6 +7,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Smaller hardening: the error boundary maps `SystemExit` and `KeyboardInterrupt` (an `exit(0)` inside
+  a command is a failure, never success); a limit of 100 points is refused because it can never
+  fail; snapshots whose per-class support differs are refused (`class_support`); `open_artifact`
+  reads the file once from one descriptor, hashes those bytes and returns them from memory; a
+  forwarder worker survives a `BaseException` from an adapter (disable, log once, close); error
+  lines pass through `safe_text`; the repository workflow checks out with
+  `persist-credentials: false`.
 - Hardening: report files are written only inside `--report-dir` (default the current directory),
   never in the store or onto `$GITHUB_ENV`/`$GITHUB_OUTPUT`/`$GITHUB_PATH`/`$GITHUB_STEP_SUMMARY`,
   and only over files cvpilot created unless `--force` (`--allow-outside` lifts the root rule);

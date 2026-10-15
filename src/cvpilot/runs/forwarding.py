@@ -116,6 +116,7 @@ class _Worker:
         self.stop = threading.Event()
         self.status: RunStatus = "finished"
         self.opened = False
+        self._adapter_closed = False
         self._lock = threading.Lock()
         self._logged = False
         self.thread = threading.Thread(
@@ -198,8 +199,26 @@ class _Worker:
                 self.stats.failed_calls += 1
             self._note(reason, exc=exc, n_points=n_points)
             return False
+        except BaseException as exc:  # an SDK calling sys.exit, an interrupt delivered here
+            with self._lock:
+                self.stats.failed_calls += 1
+            self._note("base_exception", exc=exc, n_points=n_points)
+            self._disable("base_exception")
+            self._close_adapter("failed")
+            return False
         finally:
             self.busy_since = None
+
+    def _close_adapter(self, status: RunStatus) -> None:
+        """Call ``adapter.close`` at most once, whatever it raises."""
+        with self._lock:
+            if self._adapter_closed or not self.opened:
+                return
+            self._adapter_closed = True
+        try:
+            self.adapter.close(status)
+        except BaseException:  # noqa: BLE001, S110  # best effort: the forwarder is already disabled
+            pass
 
     def _loop(self) -> None:
         meta, repro = self._fan.meta, self._fan.repro
@@ -220,7 +239,8 @@ class _Worker:
                 self._call(partial(self.adapter.log_points, batch), n_points=len(batch))
             with self._lock:
                 self.pending_points -= len(batch)
-        if self.opened:
+        if self.opened and not self._adapter_closed:
+            self._adapter_closed = True
             self._call(lambda: self.adapter.close(self.status))
 
 

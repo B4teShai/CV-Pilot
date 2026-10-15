@@ -69,6 +69,12 @@ def lint(doc: dict[str, Any], *, composite: bool = False) -> list[str]:
             for ref in unquoted_env_refs(script):
                 problems.append(f"{label}: unquoted variable {ref}")
         uses = step.get("uses")
+        if (
+            isinstance(uses, str)
+            and uses.startswith("actions/checkout@")
+            and (step.get("with") or {}).get("persist-credentials") is not False
+        ):
+            problems.append(f"{label}: checkout must set persist-credentials: false")
         if isinstance(uses, str) and not uses.startswith("./"):
             _, _, ref = uses.partition("@")
             if not FULL_SHA.fullmatch(ref):

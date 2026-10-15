@@ -31,6 +31,7 @@ from cvpilot.compare.text import safe_text
 from cvpilot.core.errors import CvpilotError
 
 MAX_LIMIT_POINTS = 100.0
+"""A drop is at most 100 points, so a limit of 100 or more could never fail and is refused."""
 DEFAULT_MIN_IMAGES = 30
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 _NUMBER = re.compile(r"(?:0|[1-9][0-9]{0,2})(?:\.[0-9]{1,6})?")
@@ -47,8 +48,11 @@ def _number(text: str, what: str) -> float:
             f"{what}: expected a number from 0 to 100 such as 0.5, got {safe_text(text, 24)!r}"
         )
     value = float(text)
-    if value > MAX_LIMIT_POINTS:
-        raise ThresholdError(f"{what}: limit {value} is above {MAX_LIMIT_POINTS:g} points")
+    if value >= MAX_LIMIT_POINTS:
+        raise ThresholdError(
+            f"{what}: a limit of {MAX_LIMIT_POINTS:g} points or more can never fail "
+            "(a metric cannot drop by more than 100 points)"
+        )
     return value
 
 
@@ -93,10 +97,11 @@ def _check_limits(limits: Mapping[str, float], what: str) -> None:
         if (
             not isinstance(value, (int, float))
             or not math.isfinite(value)
-            or not 0.0 <= value <= MAX_LIMIT_POINTS
+            or not 0.0 <= value < MAX_LIMIT_POINTS
         ):
             raise ThresholdError(
-                f"{what} limit for {safe_text(name, 40)!r} must be a finite number from 0 to 100"
+                f"{what} limit for {safe_text(name, 40)!r} must be a finite number from 0 up to "
+                "(not including) 100"
             )
 
 
