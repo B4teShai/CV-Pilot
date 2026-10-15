@@ -2,7 +2,7 @@
   "cvpilot": {
     "CheckpointManager": {
       "bases": [],
-      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 8589934592, remote_max_candidate_bytes: 'int' = 4294967296, remote_max_total_bytes: 'int' = 8589934592, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None, min_step: 'int | None' = None, allow_weaker_trust: 'bool' = False) -> 'None'",
+      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 8589934592, remote_max_candidate_bytes: 'int' = 4294967296, remote_max_total_bytes: 'int' = 8589934592, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None, min_step: 'int | None' = None, allow_weaker_trust: 'bool' = False, restart_chain: 'bool' = False) -> 'None'",
       "kind": "class",
       "members": {
         "adopt": "(self, path: 'str | Path', step: 'int') -> 'CheckpointManifest'",
@@ -67,7 +67,7 @@
   "cvpilot.ckpt": {
     "CheckpointManager": {
       "bases": [],
-      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 8589934592, remote_max_candidate_bytes: 'int' = 4294967296, remote_max_total_bytes: 'int' = 8589934592, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None, min_step: 'int | None' = None, allow_weaker_trust: 'bool' = False) -> 'None'",
+      "init": "(run: 'Any', *, dir: 'str | Path | None' = None, remote: 'str | None' = None, remote_store: 'RemoteStore | None' = None, remote_retries: 'int' = 3, remote_deadline: 'float' = 300.0, remote_timeout: 'float' = 10.0, remote_sleep: 'Callable[[float], None]' = <built-in function sleep>, remote_clock: 'Callable[[], float]' = <built-in function monotonic>, keep_last: 'int' = 3, keep_best: 'int' = 2, monitor: 'str | None' = None, mode: \"Literal['max', 'min']\" = 'max', every_n_minutes: 'float | None' = None, every_n_steps: 'int | None' = None, signals: 'Sequence[int] | None' = None, grace_seconds: 'float' = 30.0, format: 'CheckpointFormat' = 'safetensors', max_checkpoint_bytes: 'int' = 8589934592, remote_max_candidate_bytes: 'int' = 4294967296, remote_max_total_bytes: 'int' = 8589934592, verify_after_save: 'bool' = True, install_signal_handlers: 'bool' = True, notice_source: 'preempt.NoticeSource | str | None' = None, notice_interval: 'float' = 5.0, clock: 'Callable[[], float]' = <built-in function monotonic>, lock_timeout: 'float' = 30.0, require_trust: 'RequireTrust | None' = None, allow_pt_format: 'bool | None' = None, min_step: 'int | None' = None, allow_weaker_trust: 'bool' = False, restart_chain: 'bool' = False) -> 'None'",
       "kind": "class",
       "members": {
         "adopt": "(self, path: 'str | Path', step: 'int') -> 'CheckpointManifest'",
@@ -170,6 +170,14 @@
         "CheckpointError"
       ],
       "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
+    "CheckpointChainError": {
+      "bases": [
+        "CheckpointError"
+      ],
+      "init": "(message: 'str', *, reason: 'str' = 'chain_unavailable') -> 'None'",
       "kind": "class",
       "members": {}
     },

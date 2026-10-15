@@ -150,6 +150,7 @@ def _row(run_id: str, entry: Any) -> dict[str, Any]:
         "sha256": None if manifest is None else manifest.sha256,
         "format": None if manifest is None else manifest.format,
         "created_at": None if manifest is None else manifest.created_at.isoformat(),
+        "chain_reset": False if manifest is None else manifest.chain_reset,
     }
 
 
@@ -157,7 +158,7 @@ def _failed_row(run_id: str, kind: str, reason: str, policy: str) -> dict[str, A
     return {
         "run_id": run_id, "kind": kind, "step": None, "name": run_id, "status": "corrupt",
         "reason": reason, "trust": None, "size_bytes": None, "sha256": None, "format": None,
-        "created_at": None, "policy": policy,
+        "created_at": None, "policy": policy, "chain_reset": False,
     }  # fmt: skip
 
 
@@ -296,6 +297,51 @@ def ckpt_verify(
         raise typer.Exit(1)
     if bad or not any(r["status"] == "valid" for r in rows):
         raise typer.Exit(1)
+
+
+@ckpt_app.command("quarantine")
+def ckpt_quarantine(
+    ctx: typer.Context,
+    directory: DirArg,
+    run: Annotated[
+        str, typer.Option("--run", callback=run_id_argument, help="Run whose quarantine to show.")
+    ],
+    clear: Annotated[
+        bool,
+        typer.Option(
+            "--clear",
+            help="Delete the quarantined entries (you are saying they are not yours); the step "
+            "floor they imposed falls away.",
+        ),
+    ] = False,
+    as_json: JsonOpt = False,
+) -> None:
+    """Show what a save set aside, or discard it with ``--clear``.
+
+    A save quarantines a manifest it does not trust whose step is above every trusted one (a
+    planted high step would otherwise block every later save). Quarantined entries keep counting
+    toward the step floor until you clear them. Exit 0; exit 2 on a usage error.
+    """
+    root = _root(directory)
+    session = _Session(ctx, root, None, None)
+    try:
+        found = session.open(run)
+        try:
+            entries = found.quarantined()
+            cleared = found.clear_quarantine() if clear else 0
+        except CheckpointError as exc:
+            raise _usage(str(exc)) from None
+        rows = [{"run_id": run, "kind": e.kind, "step": e.step, "name": e.name} for e in entries]
+        if as_json:
+            typer.echo(json.dumps({"entries": rows, "cleared": cleared} if clear else rows))
+        else:
+            for row in rows:
+                step = "-" if row["step"] is None else f"{row['step']:09d}"
+                typer.echo(f"{run}  {row['kind']:<4}  {step:>9}  quarantined")
+            if clear:
+                typer.echo(f"cleared {cleared} quarantined manifest(s)")
+    finally:
+        session.close()
 
 
 @ckpt_app.command("prune")

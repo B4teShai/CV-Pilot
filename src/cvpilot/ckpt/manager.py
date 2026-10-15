@@ -178,6 +178,7 @@ class CheckpointManager:
         allow_pt_format: bool | None = None,
         min_step: int | None = None,
         allow_weaker_trust: bool = False,
+        restart_chain: bool = False,
     ) -> None:
         settings = load_settings()
         key = auth.load_key()  # environment only; never stored, logged or passed on
@@ -189,6 +190,8 @@ class CheckpointManager:
             remote = settings.checkpoint_remote
         if not isinstance(allow_weaker_trust, bool):
             raise ValueError("allow_weaker_trust must be True or False")
+        if not isinstance(restart_chain, bool):
+            raise ValueError("restart_chain must be True or False")
         require_trust = auth.resolve_policy(  # type: ignore[assignment]
             require_trust, settings.ckpt_require_trust, key, allow_weaker=allow_weaker_trust
         )
@@ -264,6 +267,8 @@ class CheckpointManager:
             floors = [min_step]
         self.min_step: int | None = max(floors) if floors else None
         self.allow_weaker_trust = allow_weaker_trust
+        self.restart_chain = restart_chain  # explicit, never from the environment
+        self._remote_max: dict[str, int | None] = {}
         self._anchor = _HandleAnchor(self._handle)
         self.require_trust: RequireTrust = require_trust
         self.allow_pt = allow_pt_format
@@ -494,6 +499,8 @@ class CheckpointManager:
                 metric_mode=self.mode if metric is not None else None,
                 verify=self._verify,
                 before_publish=self._record,
+                floor_hint=self._floor_hint(kind),
+                restart_chain=self.restart_chain,
             )
         except Exception as exc:  # noqa: BLE001  # logged and re-raised; callers decide
             self._emit(
@@ -505,9 +512,14 @@ class CheckpointManager:
                 exc_info=exc,
             )
             raise
+        if manifest.chain_reset:
+            self._emit(
+                "warning", "checkpoint_chain_reset", step=manifest.step, kind=kind,
+                reason=manifest.chain_reset_reason,
+            )  # fmt: skip
         self._emit(
             "info",
-            "checkpoint_saved",
+            "checkpoint_already_saved" if self._own.last_save_noop else "checkpoint_saved",
             step=manifest.step,
             kind=kind,
             size_bytes=manifest.size_bytes,
@@ -560,12 +572,34 @@ class CheckpointManager:
                     remote=self._mirror.label,
                 )  # fmt: skip
                 return
+            known = self._remote_max.get(manifest.kind)
+            if known is None or manifest.step > known:
+                self._remote_max[manifest.kind] = manifest.step
             self._emit(
                 "info", "checkpoint_uploaded", step=manifest.step, kind=manifest.kind,
                 size_bytes=manifest.size_bytes, sha256_prefix=manifest.sha256[:12],
                 remote=self._mirror.label,
                 duration_ms=round((time.perf_counter() - started) * 1000, 1),
             )  # fmt: skip
+
+    def _floor_hint(self, kind: CheckpointKind) -> int | None:
+        """A step known to have existed that no local file proves: ``min_step`` and the newest step
+        the remote lists for this run (looked up once, then kept up to date by our own uploads)."""
+        hints = [self.min_step] if self.min_step is not None else []
+        if self._mirror is not None:
+            if kind not in self._remote_max:
+                try:
+                    steps = self._mirror.list_steps(self._handle.run_id, kind)
+                except OSError:
+                    steps = []
+                    self._emit(
+                        "warning", "checkpoint_floor_unavailable", kind=kind, source="the remote"
+                    )
+                self._remote_max[kind] = max(steps, default=None)
+            remote = self._remote_max[kind]
+            if remote is not None:
+                hints.append(remote)
+        return max(hints, default=None)
 
     def _record(self, manifest: CheckpointManifest, digest: str) -> None:
         """Store the manifest digest (the external anchor); a failure weakens trust, not saves."""

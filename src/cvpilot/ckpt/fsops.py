@@ -25,6 +25,7 @@ from cvpilot.core.errors import (
     CheckpointBusyError,
     CheckpointCorruptError,
     CheckpointError,
+    CheckpointExistsError,
     CheckpointPathError,
 )
 
@@ -306,6 +307,28 @@ def replace(dir_fd: int, source: str, target: str) -> None:
         os.replace(source, target, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
     except OSError as exc:
         raise CheckpointError(f"cannot rename {source} to {target}: {exc}") from exc
+
+
+def link_noreplace(dir_fd: int, source: str, target: str) -> None:
+    """Give ``source`` the name ``target`` without ever replacing an existing ``target``.
+
+    A hard link fails with ``FileExistsError`` when the name is taken (a dangling symlink counts),
+    on Linux and macOS alike, where a rename would silently overwrite. The temporary ``source``
+    name is removed afterwards.
+
+    Raises:
+        CheckpointExistsError: ``target`` exists; nothing was changed.
+        CheckpointError: the link could not be made for another reason.
+    """
+    try:
+        os.link(source, target, src_dir_fd=dir_fd, dst_dir_fd=dir_fd, follow_symlinks=False)
+    except FileExistsError:
+        raise CheckpointExistsError(
+            f"{target} already exists; checkpoint files are never replaced"
+        ) from None
+    except OSError as exc:
+        raise CheckpointError(f"cannot link {source} as {target}: {exc}") from exc
+    os.unlink(source, dir_fd=dir_fd)
 
 
 def unlink_quiet(dir_fd: int, name: str) -> bool:

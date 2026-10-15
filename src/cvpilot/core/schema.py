@@ -551,6 +551,10 @@ class CheckpointManifest(_Model):
     prev_manifest_sha256: str
     prev_chain_sha256: str
     chain_sha256: str
+    chain_reset: bool = False
+    """True when this manifest deliberately starts a new chain although earlier progress was known
+    to exist (``restart_chain=True``); covered by the tag, so it is visible in every verify."""
+    chain_reset_reason: str | None = Field(default=None, max_length=200)
     prev_step: StrictInt | None = Field(default=None, ge=0, le=MAX_STEP)
     """Step of the manifest ``prev_manifest_sha256`` names: lets a reader tell a predecessor that
     was replaced (same step, other digest) from one that retention removed (a gap)."""

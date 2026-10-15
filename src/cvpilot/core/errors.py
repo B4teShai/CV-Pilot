@@ -237,6 +237,15 @@ class CheckpointStepError(CheckpointError, ValueError):
     """A save would not advance the step of its kind (steps only increase per ``(run, kind)``)."""
 
 
+class CheckpointChainError(CheckpointError):
+    """A save found no trusted checkpoint to chain to although progress is known to have existed
+    (``reason`` ``chain_unavailable``); ``restart_chain=True`` starts a visibly reset chain."""
+
+    def __init__(self, message: str, *, reason: str = "chain_unavailable") -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 class CheckpointUntrustedError(CheckpointError):
     """Checkpoints exist but none reaches the trust level the policy requires (fail closed), or the
     newest one that does is older than a checkpoint known to have existed (``rolled_back``)."""

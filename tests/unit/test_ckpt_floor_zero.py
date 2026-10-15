@@ -237,12 +237,13 @@ def test_the_floor_moves_forward_only_with_verified_saves_after_an_acceptance(
         for suffix in (".manifest.json", ".safetensors"):
             os.unlink(tmp_path / "ckpt" / run.run_id / "last" / f"step_{step:09d}{suffix}")
     assert mgr.restore(accept_rollback_to=0) is None  # starting over, on purpose
-    mgr.save_now(1, model=weights(1.0))  # an old step number: the store already holds step 1
-    with pytest.raises(CheckpointUntrustedError) as info:
-        mgr.restore()  # the acceptance was for starting over, not for forgetting step 3
-    assert info.value.reason == "rolled_back"
-    with pytest.raises(CheckpointUntrustedError):
-        mgr.restore(accept_rollback_to=1)  # and it does not launder a checkpoint the store denies
+    from cvpilot.core.errors import CheckpointChainError, CheckpointStepError
+
+    with pytest.raises(CheckpointStepError):  # starting over is allowed, going under step 3 is not
+        mgr.save_now(1, model=weights(1.0))
+    with pytest.raises(CheckpointChainError):  # and nothing trusted is left to chain a save to
+        mgr.save_now(4, model=weights(4.0))
+    mgr.restart_chain = True  # the explicit, recorded way to begin a new chain
     mgr.save_now(4, model=weights(4.0))  # a verified save past the floor moves it forward
     caught_up = mgr.restore()
     assert caught_up is not None and caught_up.manifest.step == 4

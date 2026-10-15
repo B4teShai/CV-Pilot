@@ -65,6 +65,34 @@ random moments and at four chosen points inside a save. A concurrent saver waits
 lock. A full disk raises `CheckpointError` to your loop and leaves the previous checkpoint
 untouched.
 
+## What a save refuses
+
+A save only ever adds. Its step must exceed the **floor**: the highest step of any self-consistent
+manifest in the directory (trusted or not, and those already quarantined), the run store's highest
+step for the run and kind, a tag-valid pointer, `min_step` and the newest step the remote lists. A
+rejected or forged entry therefore still counts, so deleting the newest checkpoint or planting a
+lower-step forgery cannot make the next save look like a healthy continuation.
+
+* **Quarantine.** A manifest the policy does not trust whose step is above every trusted one (a
+  planted `step_999999`) is moved to `<run>/quarantine/<kind>/`, logged as `checkpoint_quarantined`,
+  and the save fails with `CheckpointStepError` saying so: it keeps counting toward the floor until
+  you decide. `cvpilot ckpt quarantine DIR --run ID` lists it, `--clear` discards it
+  (`checkpoint_quarantine_cleared`) and saving resumes.
+* **Chain.** A new manifest chains to the newest *trusted* checkpoint. With none, but a floor above
+  zero (or a rejected higher entry), the save fails closed with `CheckpointChainError`
+  (`chain_unavailable`). `CheckpointManager(restart_chain=True)` (never an environment setting)
+  starts a new chain on purpose: the manifest records `chain_reset: true` and the reason inside the
+  tagged record, `checkpoint_chain_reset` is logged and `ckpt verify` shows it in every later run.
+  Genesis is only for the very first save of a run with no floor.
+* **Never replaced.** Data and manifest files are created exclusively and given their final name
+  with a hard link, which cannot overwrite (a rename would): a save at an existing step is refused
+  (`CheckpointExistsError`), or is a no-op logged as `checkpoint_already_saved` when the existing
+  checkpoint verifies and the bytes are identical. `adopt` and the remote install go through the
+  same rule, a marker is never rewritten in place, and the pointer only moves forward (a stale
+  process cannot move it back: `checkpoint_pointer_regression_refused`). Retention never deletes the
+  checkpoint the pointer names. Predecessors the retention removed leave a gap that `prev_step`
+  explains, so they need not be kept.
+
 ## What a restore does
 
 It walks back from the newest manifest. A checkpoint is skipped, counted and logged

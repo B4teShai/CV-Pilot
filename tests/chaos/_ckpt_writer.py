@@ -57,16 +57,16 @@ def main(root: str, store: str, point: str, megabytes: float) -> None:
         run, dir=Path(root) / "ckpt", keep_last=100, every_n_steps=1, install_signal_handlers=False
     )
     current = {"step": 0, "replace_calls": 0}
-    real_replace = fsops.replace
+    real_link = fsops.link_noreplace
 
-    def replace(dir_fd: int, source: str, target: str) -> None:
+    def link(dir_fd: int, source: str, target: str) -> None:
         if current["step"] == STALL_STEP:
             current["replace_calls"] += 1
             if (point, current["replace_calls"]) in {("data_written", 1), ("manifest_renamed", 2)}:
                 stall(point)
-        real_replace(dir_fd, source, target)
+        real_link(dir_fd, source, target)
 
-    fsops.replace = replace  # type: ignore[assignment]
+    fsops.link_noreplace = link  # type: ignore[assignment]
     real_record = CheckpointManager._record
     real_pointer = RunCheckpoints._write_pointer
 

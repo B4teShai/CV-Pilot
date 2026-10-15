@@ -109,6 +109,17 @@ Option C, implemented by `ckpt/` with the following rules.
    guarantee and stays on; retention reuses what the save verified instead of hashing again. The
    rule is kept as the target, and the measured numbers are in the overview.
 
+## Amendment (2026-10-16): the rules of a save
+
+A save must exceed a floor made of every self-consistent manifest (trusted or not, quarantined
+included), the run store's highest step, a tag-valid pointer, `min_step` and the remote's newest
+step; untrusted manifests above every trusted one are quarantined (never silently ignored) until an
+operator clears them. A new manifest chains only to the newest trusted checkpoint; with none and a
+floor known it fails closed (`chain_unavailable`) unless the manager was built with
+`restart_chain=True`, which is recorded as `chain_reset` inside the tagged manifest. Files are
+created exclusively and linked into place without replacing; the pointer only moves forward; the
+pointer's target is never pruned. See the checkpoint guide.
+
 ## Amendment (2026-10-15): trust and formats as built
 
 - **Trust.** The directory's digests and chain detect damage, not an adversary who can write

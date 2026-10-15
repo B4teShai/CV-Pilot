@@ -79,6 +79,17 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Security
 
+- Saves follow strict rules. The step must exceed a floor made of every self-consistent manifest
+  (trusted or not, quarantined included), the run store, a tag-valid pointer, `min_step` and the
+  remote; an untrusted manifest above every trusted one is quarantined and reported
+  (`cvpilot ckpt quarantine DIR --run ID [--clear]`) instead of silently blocking or being chained
+  to. A manifest chains only to a trusted predecessor; with none and a floor known the save raises
+  `CheckpointChainError` unless `restart_chain=True`, which is recorded as `chain_reset` in the
+  tagged manifest. Data, manifests and markers are never replaced (hard link, never rename), a
+  same-bytes save is a logged no-op, `adopt` and the remote install obey the same rule, the pointer
+  only moves forward and the pointer's target is never pruned. The earlier change that let a
+  planted high step be ignored is superseded: it now counts, visibly.
+
 - A save took "the newest checkpoint" and "the previous one" from every manifest in the directory,
   admitted or not. A planted manifest at a huge step therefore made every later save fail, and a
   forged one could become the predecessor a genuine checkpoint chained to. Both now come only from

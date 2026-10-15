@@ -280,6 +280,28 @@ exit 2 when the path is not a directory or the options are invalid.
 | `--accept-rollback-to` | int range |  | Accept a rollback from the run store or pointer down to this step, on purpose (logged); it never lowers --expect-min-step or CVPILOT_CKPT_MIN_STEP. |
 | `--json` | flag |  | Print JSON instead of text. |
 
+### `cvpilot ckpt quarantine`
+
+```text
+cvpilot ckpt quarantine [OPTIONS] {directory}
+```
+
+Show what a save set aside, or discard it with ``--clear``.
+
+A save quarantines a manifest it does not trust whose step is above every trusted one (a
+planted high step would otherwise block every later save). Quarantined entries keep counting
+toward the step floor until you clear them. Exit 0; exit 2 on a usage error.
+
+| Argument | Type | Description |
+|---|---|---|
+| `directory` | path | Checkpoint directory (holds one folder per run). |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--run` | str |  | Run whose quarantine to show. Required. |
+| `--clear` | flag |  | Delete the quarantined entries (you are saying they are not yours); the step floor they imposed falls away. |
+| `--json` | flag |  | Print JSON instead of text. |
+
 ### `cvpilot ckpt prune`
 
 ```text

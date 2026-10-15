@@ -60,13 +60,18 @@ def plant(tmp: Path, run_id: str, step: int) -> None:
 @pytest.mark.parametrize(
     ("policy", "keyed"), [("authenticated", True), ("anchored", False), ("any", False)]
 )
-def test_a_planted_high_step_manifest_does_not_block_later_saves(
+def test_a_planted_high_step_is_quarantined_and_cleared_by_the_operator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str, keyed: bool
 ) -> None:
+    from cvpilot.core.errors import CheckpointStepError
+
     run, mgr = start(tmp_path, monkeypatch, keyed=keyed, policy=policy)
     plant(tmp_path, run.run_id, 999_999)
-    manifest = mgr.save_now(3, model=weights(3.0))  # would raise CheckpointStepError before
-    assert manifest.step == 3
+    with pytest.raises(CheckpointStepError, match="quarantine"):
+        mgr.save_now(3, model=weights(3.0))
+    rc = RunCheckpoints(tmp_path / "ckpt", run.run_id)
+    assert rc.clear_quarantine() == 1
+    assert mgr.save_now(3, model=weights(3.0)).step == 3
     run.finish()
 
 
@@ -81,7 +86,7 @@ def test_a_planted_manifest_never_becomes_the_predecessor(
         (tmp_path / "ckpt" / run.run_id / "last" / "step_000000002.manifest.json").read_text()
     )
     plant(tmp_path, run.run_id, 50)
-    saved = mgr.save_now(3, model=weights(3.0))
+    saved = mgr.save_now(60, model=weights(3.0))  # above the planted step, so it is allowed
     assert saved.prev_chain_sha256 == genuine["chain_sha256"]  # chained to step 2, not to step 50
     assert saved.prev_step == 2
     run.finish()

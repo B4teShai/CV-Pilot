@@ -32,6 +32,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -44,6 +45,7 @@ from pydantic import ValidationError
 from cvpilot.ckpt import auth, fsops
 from cvpilot.ckpt.serializers import get_serializer
 from cvpilot.core.errors import (
+    CheckpointChainError,
     CheckpointCorruptError,
     CheckpointError,
     CheckpointExistsError,
@@ -331,6 +333,15 @@ def list_runs(root: Path, *, limit: int = 100_000) -> list[str]:
         os.close(fd)
 
 
+def os_replace_across(src_fd: int, src: str, dst_fd: int, dst: str) -> None:
+    """Move a file between two directories of the same run (quarantine only; the destination is
+    junk by definition, so replacing a previous quarantined copy is fine)."""
+    try:
+        os.replace(src, dst, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+    except OSError as exc:
+        raise CheckpointError(f"cannot move {src} to quarantine: {exc}") from exc
+
+
 class RunCheckpoints:
     """The checkpoints of one run below a checkpoint root. See the module docstring."""
 
@@ -371,6 +382,7 @@ class RunCheckpoints:
         self.require_trust: RequireTrust = require_trust
         self.allow_pt = allow_pt
         self.skipped: list[Skipped] = []
+        self.last_save_noop = False
         self._verified_files: dict[tuple[str, str], tuple[tuple[int, ...], str]] = {}
         try:
             self.path = Path(root).expanduser().resolve() / run_id
@@ -568,6 +580,15 @@ class RunCheckpoints:
                 }
             )
         target = _POINTER_NAME[manifest.kind]
+        current = self._pointer_unchecked(run_fd, manifest.kind)
+        if current is not None and current.step > manifest.step:
+            self._emit(  # compare-and-swap under the lock: a pointer only moves forward
+                "warning", "checkpoint_pointer_regression_refused", kind=manifest.kind,
+                step=manifest.step, pointer_step=current.step,
+            )  # fmt: skip
+            return
+        if self._key is not None and pointer.auth_tag is None:  # pragma: no cover
+            raise CheckpointError("a pointer written under a key must carry its tag")
         temp = fsops.temp_name(target)
         try:
             fsops.write_exclusive(run_fd, temp, (pointer.model_dump_json() + "\n").encode())
@@ -576,6 +597,138 @@ class RunCheckpoints:
             fsops.unlink_quiet(run_fd, temp)
             raise
         fsops.fsync_dir(run_fd)
+
+    def _pointer_unchecked(self, run_fd: int, kind: str) -> CheckpointPointer | None:
+        """A pointer that is valid (and tag-valid under a key) and whose manifest is present: the
+        one a newer pointer must not move behind."""
+        import os
+
+        pointer = self._pointer(run_fd, kind)
+        if pointer is None:
+            return None
+        try:
+            os.stat(pointer.manifest, dir_fd=run_fd, follow_symlinks=False)
+        except OSError:
+            return None
+        return pointer
+
+    def _pointer_floor(self, run_fd: int, kind: str) -> int | None:
+        """The step of a tag-valid pointer (only a key makes a pointer evidence of progress)."""
+        if self._key is None:
+            return None
+        pointer = self._pointer(run_fd, kind)
+        return None if pointer is None else pointer.step
+
+    def _anchor_floor(self, kind: str) -> int | None:
+        """The run store's highest step; a store that cannot answer is reported, not fatal."""
+        try:
+            return self._anchor_max(kind)
+        except CheckpointUntrustedError:
+            self._emit("warning", "checkpoint_floor_unavailable", kind=kind, source="run store")
+            return None
+
+    # -- quarantine ---------------------------------------------------------------------------
+
+    def _quarantine(self, run_fd: int, kind_fd: int, kind: str, cand: _Cand) -> None:
+        """Move a rejected manifest and its data out of the way (``<run>/quarantine/<kind>/``).
+        They keep counting toward the step floor until an operator clears them."""
+        manifest = cand.manifest
+        if manifest is None or cand.step is None:
+            return
+        q_run = fsops.open_subdir(run_fd, "quarantine", create=True)
+        try:
+            q_kind = fsops.open_subdir(q_run, kind, create=True)
+            try:
+                for name in (manifest_name(cand.step), manifest.path.split("/", 1)[1]):
+                    if fsops.exists(kind_fd, name):
+                        os_replace_across(kind_fd, name, q_kind, name)
+                fsops.fsync_dir(q_kind)
+            finally:
+                os.close(q_kind)
+        finally:
+            os.close(q_run)
+        fsops.fsync_dir(kind_fd)
+        self._emit(
+            "warning", "checkpoint_quarantined", kind=kind, step=cand.step,
+            reason=cand.reason, recovery="cvpilot ckpt quarantine <dir> --run <id> --clear",
+        )  # fmt: skip
+
+    def _quarantine_max(self, run_fd: int, kind: str) -> int | None:
+        try:
+            q_run = fsops.open_subdir(run_fd, "quarantine", create=False)
+        except CheckpointError:
+            return None
+        try:
+            try:
+                q_kind = fsops.open_subdir(q_run, kind, create=False)
+            except CheckpointError:
+                return None
+            try:
+                steps = [
+                    c.step
+                    for c in self._candidates(q_kind, kind)
+                    if c.reason is None and c.step is not None
+                ]
+            finally:
+                os.close(q_kind)
+        finally:
+            os.close(q_run)
+        return max(steps, default=None)
+
+    def quarantined(self) -> list[Entry]:
+        """What a save set aside: the rejected manifests below ``quarantine/``, newest first."""
+        found: list[Entry] = []
+        with self._open_run(create=False) as run_fd:
+            if run_fd is None:
+                return found
+            try:
+                q_run = fsops.open_subdir(run_fd, "quarantine", create=False)
+            except CheckpointError:
+                return found
+            try:
+                for kind in KINDS:
+                    try:
+                        q_kind = fsops.open_subdir(q_run, kind, create=False)
+                    except CheckpointError:
+                        continue
+                    try:
+                        for cand in self._candidates(q_kind, kind):
+                            if cand.step is not None:
+                                found.append(
+                                    Entry(cand.name, cand.step, kind, "corrupt", "quarantined")
+                                )
+                    finally:
+                        os.close(q_kind)
+            finally:
+                os.close(q_run)
+        found.sort(key=lambda e: e.step if e.step is not None else -1, reverse=True)
+        return found
+
+    def clear_quarantine(self) -> int:
+        """Delete everything in quarantine (the operator's acknowledgement that those entries are
+        not theirs): the floor they imposed falls away. Returns the number of manifests removed."""
+        removed = 0
+        with self._locked() as run_fd:
+            try:
+                q_run = fsops.open_subdir(run_fd, "quarantine", create=False)
+            except CheckpointError:
+                return 0
+            try:
+                for kind in KINDS:
+                    try:
+                        q_kind = fsops.open_subdir(q_run, kind, create=False)
+                    except CheckpointError:
+                        continue
+                    try:
+                        for name in fsops.listdir(q_kind, limit=self.max_entries):
+                            if fsops.unlink_quiet(q_kind, name) and _MANIFEST.fullmatch(name):
+                                removed += 1
+                    finally:
+                        os.close(q_kind)
+            finally:
+                os.close(q_run)
+        self._emit("warning", "checkpoint_quarantine_cleared", removed=removed)
+        return removed
 
     def _stored_digest(self, kind: str, step: int) -> tuple[str | None, bool]:
         """``(digest, errored)``: the digest recorded in the run store, if any, and whether the
@@ -1013,8 +1166,16 @@ class RunCheckpoints:
         created_at: datetime | None = None,
         verify: bool = True,
         before_publish: Callable[[CheckpointManifest, str], None] | None = None,
+        floor_hint: int | None = None,
+        restart_chain: bool = False,
     ) -> CheckpointManifest:
         """Write one checkpoint atomically and return its manifest.
+
+        ``floor_hint`` is a step the caller knows existed (``min_step``, a remote listing): the
+        save must exceed it, like the highest step of any self-consistent manifest, the run store
+        and a tag-valid pointer. The new manifest chains to the newest trusted one; with none
+        trusted but a floor known the save raises ``CheckpointChainError`` unless
+        ``restart_chain`` is true (the manifest then says ``chain_reset``).
 
         Raises:
             CheckpointPathError: invalid kind or step.
@@ -1036,7 +1197,7 @@ class RunCheckpoints:
                 return self._save_locked(
                     run_fd, kind_fd, kind, step, data, format, serializer.suffix, versions,
                     dataset_hash, metric_key, metric_value, metric_mode, git_commit, uri,
-                    created_at, verify, before_publish,
+                    created_at, verify, before_publish, floor_hint, restart_chain,
                 )  # fmt: skip
             finally:
                 os.close(kind_fd)
@@ -1060,45 +1221,104 @@ class RunCheckpoints:
         created_at: datetime | None,
         verify: bool,
         before_publish: Callable[[CheckpointManifest, str], None] | None,
+        floor_hint: int | None = None,
+        restart_chain: bool = False,
     ) -> CheckpointManifest:
         self._cleanup(kind_fd, run_fd, kind)
-        # only manifests the gate admits count as "the newest" and as "the previous": a planted
-        # manifest at a huge step must not block every later save, and a forged one must not
-        # become the predecessor a genuine checkpoint chains to
-        cands = [
+        self.last_save_noop = False
+        # Which manifests count for what. FLOOR: every self-consistent manifest, trusted or not
+        # (and those already quarantined), the run store's highest step, a tag-valid pointer and
+        # what the caller knows (min_step, a remote listing): a save must exceed all of them, so a
+        # rejected, forged or quarantined entry still stops a rollback from being papered over.
+        # CHAIN: only the newest TRUSTED manifest, never one a writer of the directory planted.
+        consistent = [
             c
-            for c in self._judge(run_fd, kind_fd, kind)
-            if c.reason is None and c.manifest is not None
+            for c in self._candidates(kind_fd, kind)
+            if c.reason is None and c.manifest is not None and c.step is not None
         ]
-        newest = max((c.step for c in cands if c.step is not None), default=None)
-        if newest is not None and step <= newest:
-            same = next((c for c in cands if c.step == step and c.manifest is not None), None)
+        judged = self._judge(run_fd, kind_fd, kind)
+        trusted = [c for c in judged if c.reason is None and c.manifest is not None]
+        newest_trusted = max((c.step for c in trusted if c.step is not None), default=None)
+        rejected = [
+            c
+            for c in judged
+            if c.reason is not None
+            and c.manifest is not None
+            and c.step is not None
+            and (newest_trusted is None or c.step > newest_trusted)
+            and any(k.step == c.step for k in consistent)
+        ]
+        for cand in rejected:  # reported and set aside, never silently left to block the save
+            self._quarantine(run_fd, kind_fd, kind, cand)
+        sources: dict[str, int] = {}
+        for label, value in (
+            (
+                "a manifest in the directory",
+                max((c.step for c in consistent if c.step is not None), default=None),
+            ),
+            ("a quarantined manifest", self._quarantine_max(run_fd, kind)),
+            ("the run store", self._anchor_floor(kind)),
+            ("the pointer", self._pointer_floor(run_fd, kind)),
+            ("min_step or the remote", floor_hint),
+        ):
+            if value is not None:
+                sources[label] = value
+        floor = max(sources.values(), default=None)
+        if newest_trusted is not None and step <= newest_trusted:
+            same = next((c for c in trusted if c.step == step and c.manifest is not None), None)
             if (
                 same is not None
                 and same.manifest is not None
                 and isinstance(data, (bytes, bytearray))
                 and hashlib.sha256(data).hexdigest() == same.manifest.sha256
                 and len(data) == same.manifest.size_bytes
+                and self._data_ok(kind_fd, same.manifest)
             ):
+                self.last_save_noop = True
                 return same.manifest
-            if step == newest:
+            if step == newest_trusted:
                 raise CheckpointExistsError(
                     f"{kind} checkpoint at step {step} exists with other content; "
                     "checkpoints are immutable"
                 )
+        if floor is not None and step <= floor:
+            held = [r.step for r in rejected if r.step == floor]
+            if held:
+                raise CheckpointStepError(
+                    f"step {step} does not exceed {floor}: an untrusted manifest at step {floor} "
+                    "was quarantined and still counts as the floor. If you know it is not "
+                    "yours, discard it with: cvpilot ckpt quarantine <dir> --run "
+                    f"{self.run_id} --clear"
+                )
+            origin = next(label for label, value in sources.items() if value == floor)
             raise CheckpointStepError(
-                f"step {step} does not exceed the newest {kind} checkpoint (step {newest})"
+                f"step {step} does not exceed the {kind} floor {floor} ({origin}); "
+                "steps only increase"
             )
         previous = next(
             (
                 c
-                for c in cands
+                for c in trusted
                 if c.manifest is not None
                 and c.digest is not None
                 and fsops.exists(kind_fd, c.manifest.path.split("/", 1)[1])
             ),
             None,
         )
+        reset_reason: str | None = None
+        if previous is None and (floor is not None or rejected):
+            why = (
+                "no trusted checkpoint to chain to, but progress up to step "
+                f"{floor} is known to have existed"
+            )
+            if not restart_chain:
+                raise CheckpointChainError(
+                    f"chain_unavailable: {why}. Restore or recover the trusted checkpoints, or "
+                    "start a new chain on purpose with restart_chain=True (it is recorded in the "
+                    "manifest and logged)"
+                )
+            reset_reason = f"chain_unavailable: {why}"
+            self._emit("warning", "checkpoint_chain_reset", kind=kind, step=step, floor=floor)
         prev_digest = previous.digest if previous and previous.digest else GENESIS_DIGEST
         prev_chain = (
             previous.manifest.chain_sha256 if previous and previous.manifest else GENESIS_DIGEST
@@ -1106,7 +1326,7 @@ class RunCheckpoints:
         final_data = f"step_{step:09d}.{suffix}"
         final_manifest = manifest_name(step)
         temp_data, temp_manifest = fsops.temp_name(final_data), fsops.temp_name(final_manifest)
-        published = False
+        linked_manifest = linked_data = False
         try:
             sha256, size = fsops.write_exclusive(kind_fd, temp_data, data, max_bytes=self.max_bytes)
             if size < 1:
@@ -1130,6 +1350,8 @@ class RunCheckpoints:
                 prev_manifest_sha256=prev_digest,
                 prev_chain_sha256=prev_chain,
                 prev_step=previous.step if previous and previous.digest else None,
+                chain_reset=reset_reason is not None,
+                chain_reset_reason=reset_reason,
                 chain_sha256=checkpoint_chain(prev_chain, self.run_id, kind, step, sha256, size),
             )
             if self._key is not None:
@@ -1146,9 +1368,10 @@ class RunCheckpoints:
             raw = (manifest.model_dump_json() + "\n").encode()
             fsops.write_exclusive(kind_fd, temp_manifest, raw)
             fsops.fsync_dir(kind_fd)
-            fsops.replace(kind_fd, temp_manifest, final_manifest)
-            published = True
-            fsops.replace(kind_fd, temp_data, final_data)
+            fsops.link_noreplace(kind_fd, temp_manifest, final_manifest)  # never replaces
+            linked_manifest = True
+            fsops.link_noreplace(kind_fd, temp_data, final_data)
+            linked_data = True
             fsops.fsync_dir(kind_fd)
             if verify:
                 digest, total = fsops.hash_regular(kind_fd, final_data, max_bytes=self.max_bytes)
@@ -1161,9 +1384,13 @@ class RunCheckpoints:
         except BaseException:
             fsops.unlink_quiet(kind_fd, temp_data)
             fsops.unlink_quiet(kind_fd, temp_manifest)
-            if published:  # the pair is not complete or not verified: nothing may point at it
+            # the pair is not complete or not verified: nothing may point at it. Only what this
+            # save created is removed; a file that was already there is never touched.
+            if linked_manifest:
                 fsops.unlink_quiet(kind_fd, final_manifest)
+            if linked_data:
                 fsops.unlink_quiet(kind_fd, final_data)
+            if linked_manifest or linked_data:
                 fsops.fsync_dir(kind_fd)
             raise
         manifest_digest = hashlib.sha256(raw).hexdigest()
@@ -1317,14 +1544,23 @@ class RunCheckpoints:
                     )
                 fsops.write_exclusive(kind_fd, temp_manifest, raw_manifest)
                 fsops.fsync_dir(kind_fd)
-                fsops.replace(kind_fd, temp_manifest, final_manifest)
-                fsops.replace(kind_fd, temp_data, final_data)
+                linked = False
+                try:
+                    fsops.link_noreplace(kind_fd, temp_manifest, final_manifest)
+                    linked = True
+                    fsops.link_noreplace(kind_fd, temp_data, final_data)
+                except CheckpointExistsError:
+                    if linked:  # we made the manifest, the data name was taken: undo ours only
+                        fsops.unlink_quiet(kind_fd, final_manifest)
+                    return None  # an existing file is never overwritten: the step is left alone
+                except BaseException:
+                    if linked:
+                        fsops.unlink_quiet(kind_fd, final_manifest)
+                    raise
                 fsops.fsync_dir(kind_fd)
-            except BaseException:
-                fsops.unlink_quiet(kind_fd, temp_data)
-                fsops.unlink_quiet(kind_fd, temp_manifest)
-                raise
             finally:
+                fsops.unlink_quiet(kind_fd, temp_data)  # whatever is left of a temporary name
+                fsops.unlink_quiet(kind_fd, temp_manifest)
                 os.close(kind_fd)
         return manifest
 
@@ -1352,10 +1588,15 @@ class RunCheckpoints:
                     "size_bytes": manifest.size_bytes,
                 }
                 name = marker_name(manifest.step)
+                if self._marker_valid(kind_fd, manifest):
+                    return  # already confirmed: a marker is never rewritten in place
+                if fsops.exists(kind_fd, name):  # a stale or forged marker: remove, then create
+                    fsops.unlink_quiet(kind_fd, name)
+                    self._emit("warning", "checkpoint_marker_repaired", step=manifest.step)
                 temp = fsops.temp_name(name)
                 try:
                     fsops.write_exclusive(kind_fd, temp, json.dumps(marker).encode())
-                    fsops.replace(kind_fd, temp, name)
+                    fsops.link_noreplace(kind_fd, temp, name)
                 except BaseException:
                     fsops.unlink_quiet(kind_fd, temp)
                     raise
@@ -1363,10 +1604,23 @@ class RunCheckpoints:
             finally:
                 os.close(kind_fd)
 
+    def _marker_valid(self, kind_fd: int, manifest: CheckpointManifest) -> bool:
+        try:
+            raw = fsops.read_regular(
+                kind_fd, marker_name(manifest.step), max_bytes=MAX_MANIFEST_BYTES
+            )
+            marker = json.loads(raw)
+            return bool(
+                isinstance(marker, dict)
+                and marker.get("manifest_sha256") == self._manifest_digest(kind_fd, manifest)
+                and marker.get("sha256") == manifest.sha256
+                and marker.get("size_bytes") == manifest.size_bytes
+            )
+        except (CheckpointError, ValueError):
+            return False
+
     def is_uploaded(self, manifest: CheckpointManifest) -> bool:
         """True when a marker names this exact manifest (digest, file digest and size)."""
-        import os
-
         with self._open_run(create=False) as run_fd:
             if run_fd is None:
                 return False
@@ -1374,18 +1628,7 @@ class RunCheckpoints:
             if kind_fd is None:
                 return False
             try:
-                raw = fsops.read_regular(
-                    kind_fd, marker_name(manifest.step), max_bytes=MAX_MANIFEST_BYTES
-                )
-                marker = json.loads(raw)
-                return bool(
-                    isinstance(marker, dict)
-                    and marker.get("manifest_sha256") == self._manifest_digest(kind_fd, manifest)
-                    and marker.get("sha256") == manifest.sha256
-                    and marker.get("size_bytes") == manifest.size_bytes
-                )
-            except (CheckpointError, ValueError):
-                return False
+                return self._marker_valid(kind_fd, manifest)
             finally:
                 os.close(kind_fd)
 
@@ -1466,8 +1709,17 @@ class RunCheckpoints:
                     if newest not in kept:
                         kept.append(newest)
                 # only a checkpoint that verifies is ever deleted: a damaged one is left alone
+                # the target of the pointer is never deleted, even when it is not among the newest
+                # (a kill before the pointer moved leaves it behind): it is what a restart reads
+                held = self._pointer(run_fd, kind)
                 doomed = sorted(
-                    (m for m in cands if m not in kept and self._data_ok(kind_fd, m)),
+                    (
+                        m
+                        for m in cands
+                        if m not in kept
+                        and (held is None or m.step != held.step)
+                        and self._data_ok(kind_fd, m)
+                    ),
                     key=lambda m: m.step,
                 )
                 if doomed and is_confirmed is not None and not is_confirmed(newest):

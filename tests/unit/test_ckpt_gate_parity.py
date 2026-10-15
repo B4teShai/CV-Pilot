@@ -44,6 +44,10 @@ Invoke = Callable[..., CliResult]
 # -- the registry ---------------------------------------------------------------------------------
 
 GATED = {
+    "CheckpointManager.maybe_save": "write: floor, chain, no replace (test_ckpt_save_rules.py)",
+    "CheckpointManager.save_now": "write: floor, chain, no replace (test_ckpt_save_rules.py)",
+    "CheckpointManager.adopt": "write: floor, chain, no replace (test_ckpt_save_rules.py)",
+    "RunCheckpoints.save": "write: floor, chain, no replace (test_ckpt_save_rules.py)",
     "CheckpointManager.restore": "state",
     "CheckpointManager.restore_latest_valid": "state",
     "cvpilot.resume_path": "path",
@@ -60,9 +64,6 @@ GATED = {
 }
 EXEMPT = {
     # they do not decide what may be returned; the reason says why
-    "CheckpointManager.maybe_save": "writes a new checkpoint from the caller's own state",
-    "CheckpointManager.save_now": "writes a new checkpoint from the caller's own state",
-    "CheckpointManager.adopt": "writes a checkpoint; its step is checked against admitted ones",
     "CheckpointManager.close": "releases resources",
     "CheckpointManager.list": "lists the manager's own run through RunCheckpoints.inspect (gated)",
     "CheckpointManager.verify": "answers through RunCheckpoints.inspect (gated)",
@@ -87,11 +88,13 @@ EXEMPT = {
     "RunCheckpoints.trusted_steps": "an input of the gate",
     "RunCheckpoints.judge_single": "an input of the gate (trust verdict of one candidate)",
     "RunCheckpoints.read_pointer": "returns a tag-checked pointer record, never data",
-    "RunCheckpoints.save": "writes; newest and previous come from admitted candidates",
     "RunCheckpoints.existing": "internal helper for adopt (manifest only, never data)",
     "RunCheckpoints.read_range": "the mirror's reader of the local file it is uploading",
     "RunCheckpoints.read_manifest_bytes": "the mirror's reader of the local manifest",
     "RunCheckpoints.mark_uploaded": "writes a marker",
+    "RunCheckpoints.quarantined": "lists what a save set aside; hands out no state",
+    "RunCheckpoints.clear_quarantine": "an operator's acknowledgement; deletes, hands out nothing",
+    "cli ckpt quarantine": "lists or clears the quarantine; hands out no state",
     "RunCheckpoints.is_uploaded": "reads a marker (authenticated when a key is set)",
     "RunCheckpoints.hold_lease": "liveness",
     "RunCheckpoints.lease_state": "liveness",
@@ -618,7 +621,8 @@ for _name, (_adapter, _skip) in list(ENTRIES.items()):
 
 def test_every_gated_entry_point_has_an_adapter() -> None:
     names = {n.split("(")[0] for n in ENTRIES}
-    gated = {n for n in GATED if n not in {"cli ckpt list", "RunCheckpoints.install"}}
+    write = {n for n, why in GATED.items() if why.startswith("write")}
+    gated = {n for n in GATED if n not in {"cli ckpt list", "RunCheckpoints.install"} | write}
     assert gated <= names, gated - names
 
 
