@@ -109,6 +109,22 @@ Option C, implemented by `ckpt/` with the following rules.
   `prev_chain_sha256`, `chain_sha256`, `metric_mode` and `auth_tag`; `uri` is the intended
   remote location, and a `step_N.remote.json` marker records a verified upload.
 
+- **One parser.** What is checked is what is loaded. The safetensors header is parsed once
+  by a strict reader (duplicate keys including a repeated `__metadata__`, NaN and Infinity,
+  fractions, negative or oversized integers, non-UTF-8 or BOM text, trailing bytes, unknown
+  dtype spellings, wrong byte counts, overlapping, gapped or unsorted spans, bounded rank,
+  element and tensor counts), and after the library loads the same bytes the loaded names,
+  dtypes, shapes and byte total must equal what the strict parse declared. A `.pt` archive is
+  read by our own bounded zip reader, not by the loader: central and local headers must agree,
+  nothing may precede, separate or follow the members, names are unique ignoring case, there
+  are no encrypted, descriptor, zip64, extra-field or comment constructs (a local header may
+  carry the framework's alignment padding only), `data.pkl` is decompressed and its checksum
+  verified here, and the loaded state is bounded against the archive's tensor data. Residual
+  risk for `.pt`: the reader has been exercised on archives built by the standard library and
+  by hand, not on files written by a real framework release, archives over 4 GiB are refused
+  (zip64), and tensor names and dtypes cannot be derived from the pickle without executing it,
+  so they are bounded, not compared.
+
 ## Consequences
 
 - Easier: any kill, at any point of save or upload, leaves a loadable checkpoint; resume is

@@ -7,6 +7,7 @@ import os
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -180,3 +181,37 @@ def test_temp_names_are_unpredictable_and_recognised() -> None:
     )
     assert a != b and fsops.is_temp_name(a)
     assert not fsops.is_temp_name("step_000000001.safetensors")
+
+
+def test_the_lock_file_survives_a_creation_race(
+    root_fd: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Some filesystems answer ENOENT to a plain O_CREAT while another process creates the file."""
+    real = os.open
+    calls = {"n": 0}
+
+    def flaky(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if path == fsops.LOCK_NAME and calls["n"] < 3:
+            calls["n"] += 1
+            raise FileNotFoundError(errno.ENOENT, "raced")
+        return real(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(fsops, "require_posix", lambda: None)  # the stand-in is not in the set
+    monkeypatch.setattr(fsops.os, "open", flaky)
+    with fsops.lock(root_fd, timeout=1.0):
+        pass
+    assert calls["n"] == 3
+
+
+def test_the_lock_file_gives_up_after_bounded_retries(
+    root_fd: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def always(path: Any, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        raise FileNotFoundError(errno.ENOENT, "gone")
+
+    monkeypatch.setattr(fsops, "require_posix", lambda: None)
+    monkeypatch.setattr(fsops.os, "open", always)
+    monkeypatch.setattr(fsops.time, "sleep", lambda s: None)
+    with pytest.raises(CheckpointError):
+        with fsops.lock(root_fd, timeout=1.0):
+            pass

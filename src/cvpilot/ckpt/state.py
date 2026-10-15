@@ -6,7 +6,7 @@ their path; everything else (numbers, strings, bytes, lists, dicts, ``None``) st
 skeleton in which each tensor is replaced by ``{"$tensor": "<name>"}``. The skeleton is bounded
 to ``MAX_STATE_JSON_BYTES`` and ``MAX_DEPTH`` levels; tuples come back as lists; floats that JSON
 cannot hold (inf, nan), bytes and dicts keyed by integers (optimizer state) use the markers
-``$float``, ``$bytes`` and ``$intdict``. Nothing here executes
+``$float``, ``$bytes``, ``$intdict`` and (0-d arrays) ``$scalar``. Nothing here executes
 code on load: the skeleton is parsed as JSON and only these markers are interpreted.
 """
 
@@ -30,7 +30,8 @@ TENSOR = "$tensor"
 FLOAT = "$float"
 BYTES = "$bytes"
 INTDICT = "$intdict"
-_MARKERS = {TENSOR, FLOAT, BYTES, INTDICT}
+SCALAR = "$scalar"
+_MARKERS = {TENSOR, FLOAT, BYTES, INTDICT, SCALAR}
 _FLOATS = {"inf": math.inf, "-inf": -math.inf, "nan": math.nan}
 
 
@@ -47,7 +48,8 @@ def _to_array(value: Any) -> np.ndarray[Any, Any] | None:
         return None
     if array.dtype.hasobject:
         raise CheckpointError("an array of Python objects cannot be stored in a checkpoint")
-    return np.ascontiguousarray(array)
+    # ascontiguousarray would turn a 0-d array into a 1-d one; 0-d arrays are contiguous already
+    return array if array.flags.c_contiguous else np.ascontiguousarray(array)
 
 
 def split_state(state: Mapping[str, Any]) -> tuple[dict[str, np.ndarray[Any, Any]], dict[str, Any]]:
@@ -68,6 +70,9 @@ def split_state(state: Mapping[str, Any]) -> tuple[dict[str, np.ndarray[Any, Any
             name = "/".join(_escape(p) for p in path)
             if len(tensors) >= MAX_TENSORS:
                 raise CheckpointError(f"checkpoint state has more than {MAX_TENSORS} tensors")
+            if array.ndim == 0:  # the tensor file stores a scalar as one element: say so
+                tensors[name] = array.reshape(1)
+                return {SCALAR: name}
             tensors[name] = array
             return {TENSOR: name}
         if value is None or isinstance(value, (bool, str)):
@@ -147,6 +152,14 @@ def merge_state(
                     if not isinstance(name, str) or name not in remaining:
                         raise ValueError("state refers to a tensor that is not in the file")
                     return remaining.pop(name)
+                if key == SCALAR:
+                    name = value[key]
+                    if not isinstance(name, str) or name not in remaining:
+                        raise ValueError("state refers to a tensor that is not in the file")
+                    scalar = remaining.pop(name)
+                    if scalar.shape != (1,):
+                        raise ValueError("a scalar tensor must hold exactly one element")
+                    return scalar.reshape(())
                 if key == INTDICT:
                     inner = value[key]
                     if not isinstance(inner, dict) or not all(

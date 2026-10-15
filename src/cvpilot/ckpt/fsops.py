@@ -286,6 +286,29 @@ def fsync_dir(dir_fd: int) -> None:
             raise CheckpointError(f"cannot fsync the checkpoint directory: {exc}") from exc
 
 
+def _open_lock_file(dir_fd: int) -> int:
+    """Open ``.lock``, creating it exclusively when absent. Several processes may race to create
+    it (some filesystems answer ENOENT to a plain O_CREAT in that window), so the open and the
+    exclusive create alternate a few times instead of trusting one call."""
+    base = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+    last: OSError | None = None
+    for attempt in range(20):
+        try:
+            return os.open(LOCK_NAME, base, dir_fd=dir_fd)
+        except FileNotFoundError as exc:
+            last = exc
+        except OSError as exc:
+            raise CheckpointError(f"cannot open the checkpoint lock: {exc}") from exc
+        try:
+            return os.open(LOCK_NAME, base | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=dir_fd)
+        except (FileExistsError, FileNotFoundError) as exc:
+            last = exc
+        except OSError as exc:
+            raise CheckpointError(f"cannot open the checkpoint lock: {exc}") from exc
+        time.sleep(0.005 * (attempt + 1))
+    raise CheckpointError(f"cannot open the checkpoint lock: {last}")
+
+
 @contextlib.contextmanager
 def lock(dir_fd: int, *, timeout: float) -> Iterator[None]:
     """Hold an exclusive ``flock`` on ``<dir>/.lock`` for the duration of a save or prune.
@@ -296,15 +319,7 @@ def lock(dir_fd: int, *, timeout: float) -> Iterator[None]:
         CheckpointBusyError: it could not be taken within ``timeout`` seconds.
     """
     require_posix()
-    try:
-        fd = os.open(
-            LOCK_NAME,
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
-            0o600,
-            dir_fd=dir_fd,
-        )
-    except OSError as exc:
-        raise CheckpointError(f"cannot open the checkpoint lock: {exc}") from exc
+    fd = _open_lock_file(dir_fd)
     deadline = time.monotonic() + timeout
     try:
         while True:
