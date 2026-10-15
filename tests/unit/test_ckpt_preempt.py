@@ -171,7 +171,8 @@ def test_poller_reports_a_stop_request_and_a_crash() -> None:
 
     crashing: list[tuple[str, dict[str, Any]]] = []
     bad = preempt.NoticePoller(
-        Scripted([SystemExit()])  # ends a thread without a traceback, preempt.PreemptionFlag(), interval=1.0, sleep=lambda s: None,
+        Scripted([SystemExit()]),  # SystemExit ends a thread without a traceback
+        preempt.PreemptionFlag(), interval=1.0, sleep=lambda s: None,
         report=lambda event, **fields: crashing.append((event, fields)),
     )  # fmt: skip
     bad.start()
