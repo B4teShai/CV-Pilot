@@ -11,7 +11,7 @@ from cvpilot.runs.lifecycle import (
     resume_from,
     start_run,
 )
-from cvpilot.runs.queries import RunView, get_run_view, list_runs
+from cvpilot.runs.queries import RunView, get_run_view, list_runs, open_anchor
 
 __all__ = [
     "Fanout",
@@ -22,6 +22,7 @@ __all__ = [
     "finish_run",
     "get_run_view",
     "list_runs",
+    "open_anchor",
     "log_points",
     "recover_run",
     "resolve_forwarders",

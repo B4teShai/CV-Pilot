@@ -69,3 +69,20 @@ def invoke(
         return CliResult(int(exc.value.code or 0), out, err, records)
 
     return run
+
+
+@pytest.fixture
+def events() -> Iterator[Callable[[], list[dict[str, Any]]]]:
+    """Structured log records emitted so far (dev settings, DEBUG kept), as dictionaries."""
+    import io
+
+    from cvpilot.logging import configure_logging
+    from cvpilot.settings import Settings
+
+    buffer = io.StringIO()
+    configure_logging("cvpilot-client", Settings(env="dev", log_level="DEBUG"), stream=buffer)
+    yield lambda: [
+        json.loads(line) for line in buffer.getvalue().splitlines() if line.startswith("{")
+    ]
+    clear_request_context()
+    structlog.reset_defaults()

@@ -28,6 +28,7 @@ from pydantic import (
 from cvpilot.core.errors import InvalidTransitionError
 from cvpilot.core.redact import redact_command_line, redact_mapping
 from cvpilot.core.ulid import is_valid_ulid
+from cvpilot.core.uri import parse_remote_uri
 
 if TYPE_CHECKING:
     import numpy as np
@@ -511,6 +512,167 @@ class Baseline(_Model):
         return _utc(value)
 
 
+CheckpointKind = Literal["last", "best"]
+CheckpointFormat = Literal["safetensors", "pt"]
+CHECKPOINT_SUFFIX: dict[str, str] = {"safetensors": "safetensors", "pt": "pt"}
+MAX_MANIFEST_BYTES = 64 * 1024
+"""Largest manifest or pointer file read back; a real one is under 2 KB."""
+GENESIS_DIGEST = "0" * 64
+_CKPT_PATH = re.compile(r"(last|best)/step_([0-9]{9,19})\.(safetensors|pt)")
+_PEER_KEY = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+class CheckpointManifest(_Model):
+    """Sidecar record of one checkpoint file (ADR-0006, invariant 7).
+
+    The file and the manifest are immutable once written. ``chain_sha256`` commits to the file's
+    digest and size and to the previous manifest of the same ``(run, kind)``; the digest of this
+    manifest's own bytes is held by the next manifest (``prev_manifest_sha256``), by the
+    ``LATEST``/``BEST`` pointer and by the run store.
+    """
+
+    run_id: str
+    step: StrictInt = Field(ge=0, le=MAX_STEP)
+    kind: CheckpointKind
+    path: str
+    uri: str | None = None
+    sha256: str
+    size_bytes: StrictInt = Field(ge=1)
+    format: CheckpointFormat
+    metric_key: str | None = None
+    metric_value: float | None = None
+    metric_mode: Literal["max", "min"] | None = None
+    versions: dict[str, str]
+    git_commit: str | None = None
+    dataset_hash: str
+    created_at: AwareDatetime
+    prev_manifest_sha256: str
+    prev_chain_sha256: str
+    chain_sha256: str
+
+    @field_validator("run_id")
+    @classmethod
+    def _ulid(cls, value: str) -> str:
+        if not is_valid_ulid(value):
+            raise ValueError("must be a valid ULID")
+        return value
+
+    @field_validator("sha256", "prev_manifest_sha256", "prev_chain_sha256", "chain_sha256")
+    @classmethod
+    def _sha(cls, value: str) -> str:
+        if not _SHA256.fullmatch(value):
+            raise ValueError("must be 64 lower-case hex characters")
+        return value
+
+    @field_validator("git_commit")
+    @classmethod
+    def _commit(cls, value: str | None) -> str | None:
+        if value is not None and not _GIT_COMMIT.fullmatch(value):
+            raise ValueError("must be 7 to 64 lower-case hex characters")
+        return value
+
+    @field_validator("created_at")
+    @classmethod
+    def _to_utc(cls, value: datetime) -> datetime:
+        return _utc(value)
+
+    @field_validator("metric_value")
+    @classmethod
+    def _finite(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("metric_value must be finite")
+        return value
+
+    @field_validator("metric_key")
+    @classmethod
+    def _metric_key(cls, value: str | None) -> str | None:
+        if value is not None:
+            _no_control_chars(value, "metric_key")
+            if len(value) > _MAX_KEY:
+                raise ValueError("metric_key is too long")
+        return value
+
+    @field_validator("versions")
+    @classmethod
+    def _versions(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > 16 or any(
+            not _PEER_KEY.fullmatch(k) or len(v) > 64 or any(ord(c) < 32 for c in v)
+            for k, v in value.items()
+        ):
+            raise ValueError("versions: at most 16 short name to version entries")
+        return value
+
+    @field_validator("dataset_hash")
+    @classmethod
+    def _dataset_hash(cls, value: str) -> str:
+        prefix, _, rest = value.partition(":")
+        if prefix not in ("dcp", "merkle") or not rest or len(value) > 200:
+            raise ValueError('must be "dcp:<version>" or "merkle:<hex>"')
+        return value
+
+    @field_validator("uri")
+    @classmethod
+    def _uri(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_remote_uri(value)
+        return value
+
+    @model_validator(mode="after")
+    def _consistent(self) -> CheckpointManifest:
+        match = _CKPT_PATH.fullmatch(self.path)
+        if match is None:
+            raise ValueError("path must be <kind>/step_<digits>.<safetensors|pt>")
+        kind, digits, suffix = match.groups()
+        if kind != self.kind or int(digits) != self.step:
+            raise ValueError("path disagrees with kind and step")
+        if suffix != CHECKPOINT_SUFFIX[self.format]:
+            raise ValueError("path suffix disagrees with format")
+        if digits != f"{self.step:09d}":
+            raise ValueError("step is not zero-padded canonically")
+        if (self.metric_key is None) != (self.metric_value is None):
+            raise ValueError("metric_key and metric_value are set together")
+        if self.kind == "best" and self.metric_key is None:
+            raise ValueError("a best checkpoint records the metric it is best by")
+        return self
+
+
+class CheckpointPointer(_Model):
+    """The ``LATEST`` or ``BEST`` file: names a manifest and holds its digest and chain value.
+
+    ``pointer_sha256`` covers the other fields; it detects partial edits and a pointer copied
+    from another directory, not an adversary who recomputes it (nothing is signed).
+    """
+
+    run_id: str
+    kind: CheckpointKind
+    step: StrictInt = Field(ge=0, le=MAX_STEP)
+    manifest: str
+    manifest_sha256: str
+    chain_sha256: str
+    pointer_sha256: str
+
+    @field_validator("run_id")
+    @classmethod
+    def _ulid(cls, value: str) -> str:
+        if not is_valid_ulid(value):
+            raise ValueError("must be a valid ULID")
+        return value
+
+    @field_validator("manifest_sha256", "chain_sha256", "pointer_sha256")
+    @classmethod
+    def _sha(cls, value: str) -> str:
+        if not _SHA256.fullmatch(value):
+            raise ValueError("must be 64 lower-case hex characters")
+        return value
+
+    @field_validator("manifest")
+    @classmethod
+    def _manifest(cls, value: str) -> str:
+        if not re.fullmatch(r"(last|best)/step_[0-9]{9,19}\.manifest\.json", value):
+            raise ValueError("manifest must be <kind>/step_<digits>.manifest.json")
+        return value
+
+
 class MetricSink(Protocol):
     """What framework hooks talk to; implemented by ``runs``.
 
@@ -608,6 +770,9 @@ class RunStore(Protocol):
     def get_baseline(self, tag: str) -> Baseline: ...
     def list_baselines(self, *, history: bool = False) -> list[Baseline]: ...
     def baseline_head(self) -> tuple[int, str] | None: ...
+    def put_manifest(self, manifest: CheckpointManifest, manifest_sha256: str) -> None: ...
+    def get_manifest_digest(self, run_id: str, kind: CheckpointKind, step: int) -> str | None: ...
+    def list_manifests(self, run_id: str) -> list[CheckpointManifest]: ...
     def artifact_path(self, sha256: str) -> Path: ...
     def open_artifact(self, sha256: str) -> BinaryIO: ...
     def close(self) -> None: ...

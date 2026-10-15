@@ -36,6 +36,23 @@ def sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
     return digest.hexdigest()
 
 
+def checkpoint_chain(
+    previous_chain: str, run_id: str, kind: str, step: int, sha256: str, size_bytes: int
+) -> str:
+    """Chain value of a checkpoint manifest: commits to the file digest, its size and the
+    previous manifest of the same ``(run, kind)`` (the first one chains from 64 zeros)."""
+    text = f"{previous_chain}\n{run_id}\n{kind}\n{step}\n{sha256}\n{size_bytes}"
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
+def pointer_digest(
+    run_id: str, kind: str, step: int, manifest: str, manifest_sha256: str, chain_sha256: str
+) -> str:
+    """Digest over the fields of a ``LATEST``/``BEST`` pointer (see ``CheckpointPointer``)."""
+    text = f"{run_id}\n{kind}\n{step}\n{manifest}\n{manifest_sha256}\n{chain_sha256}"
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
 def merkle_hash(root: Path) -> str:
     """Merkle hash of the regular files under ``root``.
 

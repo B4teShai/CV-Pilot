@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from cvpilot.core.errors import InvalidRunIdError, RunNotFoundError, StoreNotFoundError
 from cvpilot.core.schema import (
     Artifact,
+    CheckpointKind,
     EvalSnapshot,
     MetricStats,
     Repro,
@@ -93,3 +95,15 @@ def get_run_view(project: str, run_id: str, *, store_dir: Path | None = None) ->
         )
     finally:
         store.close()
+
+
+def open_anchor(
+    project: str, store_dir: Path | None
+) -> tuple[Callable[[str, CheckpointKind, int], str | None], Callable[[], None]] | None:
+    """A read-only ``anchor(run_id, kind, step)`` over the project's recorded checkpoint digests
+    and the function that closes it, or None when the project has no store."""
+    try:
+        store = open_store(project, store_dir, create=False)
+    except StoreNotFoundError:
+        return None
+    return store.get_manifest_digest, store.close

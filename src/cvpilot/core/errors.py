@@ -200,3 +200,38 @@ class RecomputeMismatchError(CvpilotError, ValueError):
 
     def log_fields(self) -> dict[str, Any]:
         return {k: v for k, v in self._fields.items() if v is not None}
+
+
+class CheckpointError(CvpilotError, OSError):
+    """A checkpoint could not be written, read or removed."""
+
+    event = "checkpoint_save_failed"
+
+
+class CheckpointPathError(CheckpointError, ValueError):
+    """A checkpoint directory, run id, step or remote URI is invalid or leaves its root."""
+
+
+class CheckpointCorruptError(CheckpointError):
+    """A checkpoint file, manifest or pointer failed verification; it is never loaded."""
+
+    event = "checkpoint_verify_failed"
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    def log_fields(self) -> dict[str, Any]:
+        return {"reason": self.reason}
+
+
+class CheckpointExistsError(CheckpointError):
+    """A checkpoint for this ``(run, kind, step)`` exists with other content; they are immutable."""
+
+
+class CheckpointBusyError(CheckpointError):
+    """Another process holds the save lock of this run's checkpoint directory."""
+
+
+class CheckpointStepError(CheckpointError, ValueError):
+    """A save would not advance the step of its kind (steps only increase per ``(run, kind)``)."""

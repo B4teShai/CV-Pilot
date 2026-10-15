@@ -29,6 +29,8 @@ mlflow = ["mlflow-skinny>=2.14"]
 wandb = ["wandb>=0.17"]
 trackio = ["trackio>=0.2"]
 alerts = []
+safetensors = ["safetensors>=0.4"]
+remote = ["fsspec>=2024.2"]
 
 [project.scripts]
 cvpilot = "cvpilot.cli.app:main"
@@ -70,6 +72,8 @@ dev = [
     "mypy>=1.11",
     "pycocotools==2.0.11",
     "pyyaml>=6",
+    "safetensors>=0.4",
+    "fsspec>=2024.2",
 ]
 
 [tool.ruff]

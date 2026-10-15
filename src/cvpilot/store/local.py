@@ -44,6 +44,7 @@ from cvpilot.core.schema import (
     Artifact,
     ArtifactKind,
     Baseline,
+    CheckpointManifest,
     EvalSnapshot,
     MetricPoint,
     MetricStats,
@@ -55,6 +56,7 @@ from cvpilot.core.schema import (
 )
 from cvpilot.store import additive as _additive
 from cvpilot.store import baselines as _baselines
+from cvpilot.store import checkpoints as _checkpoints
 from cvpilot.store import migrations as _migrations
 from cvpilot.store import snapshots as _snapshots
 from cvpilot.store.paths import require_run_id, require_sha256, resolve_project_dir
@@ -850,6 +852,26 @@ class LocalRunStore:
     def baseline_head(self) -> tuple[int, str] | None:
         """``(seq, chain digest)`` of the newest baseline row (verified), None when empty."""
         return _baselines.baseline_head(self)
+
+    # -- checkpoint index (see store/checkpoints.py) ---------------------
+
+    def put_manifest(self, manifest: CheckpointManifest, manifest_sha256: str) -> None:
+        """Record the digest of a checkpoint manifest (append-only; the same digest is a no-op).
+
+        Raises:
+            RunNotFoundError: unknown run.
+            StoreError: another digest is recorded for this ``(run, kind, step)``, the digest is
+                malformed, or the write failed.
+        """
+        _checkpoints.put_manifest(self, manifest, manifest_sha256)
+
+    def get_manifest_digest(self, run_id: str, kind: str, step: int) -> str | None:
+        """The recorded manifest digest, or None when nothing was recorded for the key."""
+        return _checkpoints.get_manifest_digest(self, run_id, kind, step)
+
+    def list_manifests(self, run_id: str) -> list[CheckpointManifest]:
+        """The recorded manifests of a run ordered by step."""
+        return _checkpoints.list_manifests(self, run_id)
 
 
 def open_store(project: str, root: Path | None = None, *, create: bool = True) -> LocalRunStore:

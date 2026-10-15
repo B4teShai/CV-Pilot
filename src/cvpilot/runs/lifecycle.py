@@ -29,11 +29,14 @@ from cvpilot.core.errors import (
     InvalidTransitionError,
     MetricOrderError,
     RunClosedError,
+    RunNotFoundError,
 )
 from cvpilot.core.schema import (
     MAX_STEP,
     Artifact,
     ArtifactKind,
+    CheckpointKind,
+    CheckpointManifest,
     Forwarder,
     MetricPoint,
     Repro,
@@ -314,6 +317,40 @@ class RunHandle:
             emit=self.emit,
             provenance=provenance,
         )
+
+    # -- checkpoints (what ``cvpilot.ckpt`` needs from a run) ---------------------
+
+    def ancestors(self, limit: int = 64) -> list[str]:
+        """Run ids this run resumed, nearest first (parent, grandparent, ...), at most ``limit``.
+
+        The chain stops at a parent this store does not know and never revisits an id.
+        """
+        chain: list[str] = []
+        seen = {self.run_id}
+        current = self.meta.parent_run_id
+        while current is not None and len(chain) < limit and current not in seen:
+            chain.append(current)
+            seen.add(current)
+            try:
+                current = self._store.get_run(current).parent_run_id
+            except RunNotFoundError:
+                break
+        return chain
+
+    def repro_facts(self) -> tuple[str, str | None]:
+        """``(dataset_hash, git_commit)`` captured at ``init``, copied into checkpoint manifests."""
+        repro = self._store.get_repro(self.run_id)
+        return repro.dataset_hash, repro.git_commit
+
+    def record_checkpoint(self, manifest: CheckpointManifest, manifest_sha256: str) -> None:
+        """Record a checkpoint manifest's digest in the store (the directory's external anchor)."""
+        if self._closed:
+            raise self._closed_error()
+        self._store.put_manifest(manifest, manifest_sha256)
+
+    def checkpoint_digest(self, run_id: str, kind: CheckpointKind, step: int) -> str | None:
+        """The digest recorded for a checkpoint manifest of this project, or None."""
+        return self._store.get_manifest_digest(run_id, kind, step)
 
     # -- finishing --------------------------------------------------------
 

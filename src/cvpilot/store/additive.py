@@ -8,8 +8,10 @@ writes. It fails loudly instead of recreating an empty ``eval_snapshot`` table w
 files exist on disk (the table was dropped), and when the table has an unknown layout.
 
 The ``baseline`` table (pins of a snapshot under a tag, append-only, digested and chained, see
-``store/baselines.py``) is created the same way. The triggers (no UPDATE or DELETE on
-``eval_snapshot``, ``artifact`` and ``baseline``) are defence in depth
+``store/baselines.py``) and the ``checkpoint_manifest`` table (the digest of every checkpoint
+manifest, the external anchor of the checkpoint directory, see ``store/checkpoints.py``) are
+created the same way. The triggers (no UPDATE or DELETE on
+``eval_snapshot``, ``artifact``, ``baseline`` and ``checkpoint_manifest``) are defence in depth
 against mistakes and casual edits. Anyone who can write the database file can drop them; the
 real control is the SHA-256 digest of every snapshot file and the hash chain over the rows
 (``store/snapshots.py``).
@@ -74,13 +76,35 @@ BASELINE = (
     "CREATE INDEX IF NOT EXISTS baseline_tag ON baseline (tag, seq)",
 )
 
+CHECKPOINT_COLUMNS = (
+    "run_id", "kind", "step", "sha256", "size_bytes", "manifest_sha256", "chain_sha256", "record",
+    "created_at",
+)  # fmt: skip
+
+CHECKPOINT = (
+    """
+    CREATE TABLE IF NOT EXISTS checkpoint_manifest (
+        run_id TEXT NOT NULL REFERENCES run_meta (run_id),
+        kind TEXT NOT NULL CHECK (kind IN ('last', 'best')),
+        step INTEGER NOT NULL CHECK (step >= 0),
+        sha256 TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        manifest_sha256 TEXT NOT NULL,
+        chain_sha256 TEXT NOT NULL,
+        record TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, kind, step)
+    )
+    """,
+)
+
 _TRIGGER_BODY = "BEGIN SELECT RAISE(ABORT, '{table} rows are immutable'); END"
 TRIGGERS = {
     f"{table}_no_{op}": (
         f"CREATE TRIGGER IF NOT EXISTS {table}_no_{op} BEFORE {op.upper()} ON {table} "
         + _TRIGGER_BODY.format(table=table if table != "eval_snapshot" else "eval snapshot")
     )
-    for table in ("eval_snapshot", "artifact", "baseline")
+    for table in ("eval_snapshot", "artifact", "baseline", "checkpoint_manifest")
     for op in ("update", "delete")
 }
 
@@ -107,11 +131,17 @@ def ensure(conn: sqlite3.Connection, evals_dir: Path) -> None:
         columns = tuple(r[1] for r in conn.execute("PRAGMA table_info(baseline)"))
         if columns != BASELINE_COLUMNS:
             raise StoreError("baseline has an unsupported column layout")
-    if {"eval_snapshot", "baseline"} <= present and set(TRIGGERS) <= triggers:
+    if "checkpoint_manifest" in present:
+        columns = tuple(r[1] for r in conn.execute("PRAGMA table_info(checkpoint_manifest)"))
+        if columns != CHECKPOINT_COLUMNS:
+            raise StoreError("checkpoint_manifest has an unsupported column layout")
+    if {"eval_snapshot", "baseline", "checkpoint_manifest"} <= present and set(
+        TRIGGERS
+    ) <= triggers:
         return
     conn.execute("BEGIN IMMEDIATE")
     try:
-        for statement in (*EVAL_SNAPSHOT, *BASELINE):
+        for statement in (*EVAL_SNAPSHOT, *BASELINE, *CHECKPOINT):
             conn.execute(statement)
         for statement in TRIGGERS.values():
             conn.execute(statement)
