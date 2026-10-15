@@ -6,14 +6,19 @@ Optional, off by default, and deliberately small: each adapter talks to one fixe
 a timeout of at most 10 seconds, no redirects, no credentials, and answers read only up to a few
 kilobytes. The URL is never taken from configuration, so there is nothing to point elsewhere.
 ``check`` returns True when a notice is pending, False when there is none and raises ``OSError``
-for anything unexpected; the poller (``ckpt/preempt.py``) counts those errors and gives up.
+for anything unexpected (``NoticeUnavailable`` for 401 and 403); the poller (``ckpt/preempt.py``)
+retries with backoff and reports it. AWS counts only a JSON answer whose ``action`` is terminate,
+stop or hibernate; both adapters use the link-local address, so no DNS answer can redirect them.
 """
 
 from __future__ import annotations
 
 import http.client
+import json
 import math
 import urllib.parse
+
+from cvpilot.core.errors import NoticeUnavailable
 
 MAX_BODY = 4096
 MAX_TIMEOUT_S = 10.0
@@ -66,6 +71,22 @@ class _Metadata:
         return response.status, body
 
 
+INTERRUPTION_ACTIONS = ("terminate", "stop", "hibernate")
+
+
+def _interruption(body: bytes) -> bool:
+    """A 200 from ``instance-action`` is a notice only when it says what AWS will do: a JSON
+    object whose ``action`` is terminate, stop or hibernate. Anything else (an empty page, a
+    captive portal, another JSON) is an unexpected answer, not a reason to stop training."""
+    try:
+        document = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise OSError("the spot instance-action answer is not JSON") from None
+    if not isinstance(document, dict) or document.get("action") not in INTERRUPTION_ACTIONS:
+        raise OSError("the spot instance-action answer names no known action")
+    return True
+
+
 class AwsSpotNotice(_Metadata):
     """True when the instance has a pending spot interruption (IMDSv2, token per poll)."""
 
@@ -78,17 +99,21 @@ class AwsSpotNotice(_Metadata):
         status, token = self._request(
             "PUT", "/latest/api/token", {"X-aws-ec2-metadata-token-ttl-seconds": "60"}
         )
+        if status in (401, 403):
+            raise NoticeUnavailable(f"metadata token request answered {status}", status)
         if status != 200 or not token or len(token) > 512:
             raise OSError(f"metadata token request answered {status}")
-        status, _ = self._request(
+        status, body = self._request(
             "GET",
             "/latest/meta-data/spot/instance-action",
             {"X-aws-ec2-metadata-token": token.decode("ascii", "replace")},
         )
         if status == 200:
-            return True
+            return _interruption(body)
         if status == 404:
             return False
+        if status in (401, 403):
+            raise NoticeUnavailable(f"spot instance-action answered {status}", status)
         raise OSError(f"spot instance-action answered {status}")
 
 
@@ -97,14 +122,16 @@ class GcpPreemptionNotice(_Metadata):
 
     name = "gcp"
 
-    def __init__(
-        self, *, base_url: str = "http://metadata.google.internal", timeout: float = 1.0
-    ) -> None:
+    def __init__(self, *, base_url: str = "http://169.254.169.254", timeout: float = 1.0) -> None:
+        # the link-local address, not the name: no DNS lookup an attacker on the network could
+        # answer; the Host header still names the service, as the metadata server expects
         super().__init__(base_url, timeout)
 
     def check(self) -> bool:
         status, body = self._request(
-            "GET", "/computeMetadata/v1/instance/preempted", {"Metadata-Flavor": "Google"}
+            "GET",
+            "/computeMetadata/v1/instance/preempted",
+            {"Metadata-Flavor": "Google", "Host": "metadata.google.internal"},
         )
         if status != 200:
             raise OSError(f"preempted answered {status}")

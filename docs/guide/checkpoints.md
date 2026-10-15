@@ -141,7 +141,18 @@ as the local checkpoint is verified; the upload then gets only what is left of t
 (`preemption_upload_deferred` when it is cut short or the window is spent) and retention runs last.
 
 Platform notices are optional and off by default: `notice_source="aws"` or `"gcp"` polls the
-instance metadata service (fixed host, short timeout, bounded errors) from a daemon thread.
+instance metadata service (the fixed link-local address, so no DNS answer can redirect it; short
+timeout) from a daemon thread. AWS counts only a JSON answer whose `action` is `terminate`, `stop`
+or `hibernate`; any other 200 is an error, not a notice. The poller never gives up: a failing
+service (timeouts, 401 or 403 from a disabled metadata service) is retried with exponential
+backoff up to five minutes and logged as `notice_poller_degraded` and `notice_poller_recovered`, and
+`preemption_poller_stopped` says why the thread ended (`notice`, `stopped` or `crashed`). There is
+no Azure notice source: use the signal path there.
+
+Handlers are installed after everything that can fail has succeeded (an unknown notice source or an
+invalid interval leaves your handlers untouched). A handler you had installed for the same signal
+keeps running after the flag is set, is reported once as `signal_handler_displaced` and is put back
+by `close()`; a default or ignored disposition is never chained.
 
 ## Remote mirror
 

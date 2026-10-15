@@ -16,6 +16,16 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Fixed
 
+- Signal handlers and the notice poller are installed all or nothing: an unknown `notice_source`, an
+  invalid interval or a poller that cannot start no longer leaves handlers installed and the
+  liveness lease held. A handler that was already installed for the same signal is chained after
+  the flag is set, reported once (`signal_handler_displaced`) and restored by `close()`.
+- The notice poller gave up silently after five errors and its thread could die unseen. It now
+  retries with exponential backoff, logs `notice_poller_degraded` and `notice_poller_recovered`, and
+  `preemption_poller_stopped` with the reason. AWS counts a 200 only when its JSON `action` is
+  terminate, stop or hibernate, treats 401 and 403 as an unavailable service, and GCP is polled at
+  the link-local address instead of a DNS name. The ADR no longer lists an Azure notice source.
+
 - Retention re-hashed every kept checkpoint after every save (and `verify_after_save` hashed the new
   one twice), which made a steady-state save at `keep_last=3` about three times as slow as
   necessary (0.52 s against 0.19 s for a 128 MB state on macOS arm64, `benchmarks/ckpt_save.py`).

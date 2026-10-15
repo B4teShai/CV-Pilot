@@ -28,6 +28,7 @@ import hashlib
 import math
 import os
 import platform
+import signal
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -305,16 +306,43 @@ class CheckpointManager:
         self._guard = preempt.SignalGuard(
             self.flag, preempt.default_signals() if signals is None else signals
         )
-        self.installed_signals: list[int] = self._guard.install() if install_signal_handlers else []
+        self.installed_signals: list[int] = []
         self._poller: preempt.NoticePoller | None = None
-        source = (
-            spot_notices.get(notice_source)() if isinstance(notice_source, str) else notice_source
-        )
-        if source is not None:
-            self._poller = preempt.NoticePoller(source, self.flag, interval=notice_interval)
-            self._poller.start()
+        try:
+            # everything that can fail comes before anything process-wide is changed
+            source = (
+                spot_notices.get(notice_source)()
+                if isinstance(notice_source, str)
+                else notice_source
+            )
+            poller = (
+                None
+                if source is None
+                else preempt.NoticePoller(
+                    source, self.flag, interval=notice_interval, report=self._report_poller
+                )
+            )
+            if install_signal_handlers:
+                self.installed_signals = self._guard.install()
+                for signum, chained in self._guard.displaced:
+                    self._emit(
+                        "warning", "signal_handler_displaced",
+                        signal=signal.Signals(signum).name, chained=chained,
+                    )  # fmt: skip
+            if poller is not None:
+                self._poller = poller
+                poller.start()
+        except BaseException:
+            self.close()  # handlers back, poller stopped, lease released: all or nothing
+            raise
 
     # -- plumbing ---------------------------------------------------------------------------
+
+    def _report_poller(self, event: str, **fields: Any) -> None:
+        level = "info" if event in ("notice_poller_recovered",) else "warning"
+        if event == "preemption_poller_stopped" and fields.get("reason") in ("notice", "stopped"):
+            level = "info"
+        self._emit(level, event, **fields)
 
     def _emit(self, level: str, event: str, **fields: Any) -> None:
         owner = fields.pop("run_id", None)

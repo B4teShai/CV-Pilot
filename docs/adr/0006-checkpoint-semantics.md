@@ -85,7 +85,8 @@ Option C, implemented by `ckpt/` with the following rules.
    `restore(discover=True)`, by listing the newest runs on the remote and ordering their
    candidates by step; every candidate passes the same gate before a byte is installed.
 6. **Preemption.** A handler for SIGTERM and SIGUSR1 (configurable) and a poller for cloud
-   preemption notices (AWS, GCP, Azure metadata endpoints) set a flag; `maybe_save` saves
+   preemption notices (AWS and GCP metadata endpoints; Azure has no notice source and relies on
+   the signal) set a flag; `maybe_save` saves
    at the next call inside the grace window regardless of `every_n_minutes`. The run is
    marked `preempted`. A run that calls `restore_latest_valid()` and finds a state starts
    as a new run with `parent_run_id` set to the preempted run and continues its step

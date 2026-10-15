@@ -253,3 +253,13 @@ class CheckpointUntrustedError(CheckpointError):
 
 class CheckpointFormatError(CheckpointError):
     """A checkpoint format may not be used here (not opted in, or the loader is too old)."""
+
+
+class NoticeUnavailable(OSError):
+    """The metadata service answered, but not in a way that can say whether a preemption notice is
+    pending (for example 401 or 403: the service is disabled or the token hop limit is too low).
+    The notice poller retries with backoff and reports it as degraded."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status

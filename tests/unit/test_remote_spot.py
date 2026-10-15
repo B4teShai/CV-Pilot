@@ -133,3 +133,64 @@ def test_timeouts_are_bounded() -> None:
 def test_the_adapters_are_registered_by_name() -> None:
     assert registry.spot_notices.names() == ["aws", "gcp"]
     assert registry.spot_notices.get("aws") is spot.AwsSpotNotice
+
+
+ACTION = ("GET", "/latest/meta-data/spot/instance-action")
+TOKEN = ("PUT", "/latest/api/token")
+
+
+@pytest.mark.parametrize("action", ["terminate", "stop", "hibernate"])
+def test_aws_accepts_each_documented_action(server: str, action: str) -> None:
+    Handler.routes[TOKEN] = (200, b"tok", {})
+    Handler.routes[ACTION] = (200, f'{{"action": "{action}", "time": "t"}}'.encode(), {})
+    assert spot.AwsSpotNotice(base_url=server).check() is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"", b"<html>captive portal</html>", b"{}", b'{"action": "reboot"}', b'["terminate"]',
+     b'{"action": 7}', b"\xff\xfe", b"null"],
+)  # fmt: skip
+def test_aws_200_without_a_known_action_is_an_error_not_a_notice(server: str, body: bytes) -> None:
+    Handler.routes[TOKEN] = (200, b"tok", {})
+    Handler.routes[ACTION] = (200, body, {})
+    with pytest.raises(OSError, match="instance-action"):
+        spot.AwsSpotNotice(base_url=server).check()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_aws_401_and_403_mean_the_service_is_unavailable_not_that_there_is_no_notice(
+    server: str, status: int
+) -> None:
+    from cvpilot.core.errors import NoticeUnavailable
+
+    Handler.routes[TOKEN] = (200, b"tok", {})
+    Handler.routes[ACTION] = (status, b"", {})
+    with pytest.raises(NoticeUnavailable) as caught:
+        spot.AwsSpotNotice(base_url=server).check()
+    assert caught.value.status == status
+    Handler.routes[TOKEN] = (status, b"", {})
+    with pytest.raises(NoticeUnavailable):
+        spot.AwsSpotNotice(base_url=server).check()
+
+
+def test_aws_timeout_is_an_error(server: str) -> None:
+    Handler.routes[TOKEN] = (200, b"tok", {})
+    Handler.delay = 1.0
+    with pytest.raises(OSError):
+        spot.AwsSpotNotice(base_url=server, timeout=0.2).check()
+
+
+def test_gcp_uses_the_link_local_address_so_no_dns_answer_can_redirect_it(server: str) -> None:
+    assert spot.GcpPreemptionNotice()._host == "169.254.169.254"
+    assert spot.AwsSpotNotice()._host == "169.254.169.254"
+    Handler.routes[("GET", "/computeMetadata/v1/instance/preempted")] = (200, b"TRUE", {})
+    assert spot.GcpPreemptionNotice(base_url=server).check() is True
+    assert Handler.seen[0]["headers"]["Host"] == "metadata.google.internal"
+    assert Handler.seen[0]["headers"]["Metadata-Flavor"] == "Google"
+
+
+def test_the_named_gcp_host_is_still_accepted_when_asked_for_explicitly() -> None:
+    assert spot.GcpPreemptionNotice(base_url="http://metadata.google.internal")._host == (
+        "metadata.google.internal"
+    )
