@@ -52,6 +52,12 @@ class Run:
         )
 
     @property
+    def handle(self) -> runs.RunHandle:
+        """The underlying run handle (advanced use: ``CheckpointManager`` reads lineage and
+        records checkpoint digests through it)."""
+        return self._handle
+
+    @property
     def run_id(self) -> str:
         return self._handle.run_id
 
@@ -297,6 +303,30 @@ def autolog(
         license_notice=hook.license_notice,
     )
     return run
+
+
+def resume_path(
+    project: str,
+    *,
+    checkpoint_dir: str | Path | None = None,
+) -> Path | None:
+    """The path of the newest verified ``last`` checkpoint to resume from, or ``None``.
+
+    Searches the project's ``preempted``, ``failed`` and crashed (``running``) runs, newest
+    first, in ``checkpoint_dir`` (default ``CVPILOT_CHECKPOINT_DIR``), and returns the first
+    checkpoint that passes size, structure, SHA-256 and the trust policy
+    (``CVPILOT_CKPT_REQUIRE_TRUST``); corrupt, truncated, forged or symlinked files are skipped.
+    Never the string ``"last"``: pass the result to ``Trainer.fit(ckpt_path=...)`` or load it
+    yourself. See ``cvpilot.ckpt.find_resume_point`` for the run it came from.
+
+    Raises:
+        ValueError: no checkpoint directory is given or configured.
+        CheckpointUntrustedError: checkpoints exist but none reaches the required trust level.
+    """
+    from cvpilot.ckpt.resume import resume_path as _resume_path
+
+    ensure_configured("cvpilot-client", load_settings())
+    return _resume_path(project, checkpoint_dir=checkpoint_dir)
 
 
 def _require_active() -> Run:

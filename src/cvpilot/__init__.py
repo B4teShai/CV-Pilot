@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Any
 
 __version__ = "0.0.1.dev0"
 
-_LAZY = {"init", "log", "log_artifact", "log_eval", "finish", "autolog", "Run"}
+_LAZY = {
+    "init", "log", "log_artifact", "log_eval", "finish", "autolog", "Run", "resume_path",
+}  # fmt: skip
 
 if TYPE_CHECKING:
-    from cvpilot.api import Run, autolog, finish, init, log, log_artifact, log_eval
+    from cvpilot.api import Run, autolog, finish, init, log, log_artifact, log_eval, resume_path
 
 __all__ = [
     "Run",
@@ -20,6 +22,7 @@ __all__ = [
     "log",
     "log_artifact",
     "log_eval",
+    "resume_path",
 ]
 
 

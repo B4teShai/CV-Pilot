@@ -23,16 +23,18 @@ marked ``preempted`` with the previous checkpoint as its resume point.
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import math
 import platform
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal
 
-from cvpilot.ckpt import auth, preempt
+from cvpilot.ckpt import auth, fsops, preempt
 from cvpilot.ckpt.directory import (
     DEFAULT_MAX_BYTES,
     POLICIES,
@@ -53,6 +55,7 @@ from cvpilot.core.errors import (
     RunClosedError,
 )
 from cvpilot.core.schema import (
+    CHECKPOINT_SUFFIX,
     CheckpointFormat,
     CheckpointKind,
     CheckpointManifest,
@@ -95,6 +98,10 @@ def _state_of(name: str, value: Any) -> Any:
     if callable(getter):
         return getter()
     raise CheckpointError(f"{name} must be a mapping or have a state_dict() method")
+
+
+def _head(data: bytes, n: int) -> bytes:
+    return data[:n]
 
 
 def _is_number(value: object) -> bool:
@@ -330,17 +337,35 @@ class CheckpointManager:
     ) -> CheckpointManifest:
         started = time.perf_counter()
         try:
-            data = self._serializer.dumps(self._build_state(kind, state))
+            data: bytes | Iterable[bytes] = self._serializer.dumps(self._build_state(kind, state))
+        except (CheckpointError, OSError, ValueError, TypeError) as exc:
+            self._emit(
+                "error", "checkpoint_save_failed", step=step, kind=kind,
+                error_type=type(exc).__name__, exc_info=exc,
+            )  # fmt: skip
+            raise
+        return self._publish(kind, step, data, self._format, metric, started)
+
+    def _publish(
+        self,
+        kind: CheckpointKind,
+        step: int,
+        data: bytes | Iterable[bytes],
+        format: CheckpointFormat,  # noqa: A002
+        metric: tuple[str, float] | None,
+        started: float,
+    ) -> CheckpointManifest:
+        try:
             dataset_hash, git_commit = self._handle.repro_facts()
             manifest = self._own.save(
                 kind=kind,
                 step=step,
                 data=data,
-                format=self._format,
+                format=format,
                 versions=self._versions(),
                 dataset_hash=dataset_hash,
                 git_commit=git_commit,
-                uri=self._intended_uri(kind, step),
+                uri=self._intended_uri(kind, step, format),
                 metric_key=None if metric is None else metric[0],
                 metric_value=None if metric is None else metric[1],
                 metric_mode=self.mode if metric is not None else None,
@@ -382,10 +407,10 @@ class CheckpointManager:
         self._retain(kind)
         return manifest
 
-    def _intended_uri(self, kind: str, step: int) -> str | None:
+    def _intended_uri(self, kind: str, step: int, format: str) -> str | None:  # noqa: A002
         if self._mirror is None:
             return None
-        name = f"step_{step:09d}.{self._serializer.suffix}"
+        name = f"step_{step:09d}.{CHECKPOINT_SUFFIX[format]}"
         return f"{self._mirror.location.url}/{self._handle.run_id}/{kind}/{name}"
 
     def _mirror_pending(self, limit: int = 3) -> None:
@@ -464,6 +489,47 @@ class CheckpointManager:
             return self._save("best", step, state, metric=metric)
         state = {k: v for k, v in state.items() if k != "metrics"}
         return self._save("last", step, state)
+
+    def adopt(self, path: str | Path, step: int) -> CheckpointManifest:
+        """Bring a checkpoint file a framework wrote (Lightning ``last.ckpt``, Ultralytics
+        ``last.pt``) under verification: it is streamed into the ``last`` timeline as a ``pt``
+        checkpoint with a manifest, a digest in the run store and a mirror upload, so that
+        ``resume_path`` can hand back a file that was verified instead of one that merely
+        exists. The source must be a regular file (never a symlink), within the size limit and
+        a zip archive; its content is scanned again at resume time, before any framework loads it.
+
+        Raises:
+            CheckpointFormatError: the ``pt`` format was not opted into (``allow_pt_format``).
+            CheckpointError: the source is missing, a symlink, too large or not an archive.
+            CheckpointStepError, CheckpointExistsError: the step does not advance or exists
+                with other content (identical bytes are a no-op).
+        """
+        if not self.allow_pt:
+            raise CheckpointFormatError(
+                "adopting a framework file stores it in the pt format; opt in with "
+                "allow_pt_format=True (or CVPILOT_CKPT_ALLOW_PT=1), or save safetensors"
+            )
+        source = Path(path)
+        started = time.perf_counter()
+        digest = hashlib.sha256()
+        size = 0
+        for chunk in fsops.iter_regular_file(source, max_bytes=self._max_bytes):
+            if size == 0:
+                get_serializer("pt").check(functools.partial(_head, chunk), len(chunk))
+            digest.update(chunk)
+            size += len(chunk)
+        if size == 0:
+            raise CheckpointError("a checkpoint cannot be empty")
+        existing = self._own.existing("last", step)
+        if existing is not None and (existing.sha256, existing.size_bytes) == (
+            digest.hexdigest(),
+            size,
+        ):
+            return existing
+        return self._publish(
+            "last", step, fsops.iter_regular_file(source, max_bytes=self._max_bytes), "pt", None,
+            started,
+        )  # fmt: skip
 
     def _improves(self, value: float) -> bool:
         if not self._best_loaded:

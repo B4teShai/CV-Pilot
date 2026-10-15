@@ -83,7 +83,7 @@ TRUST_REASONS = frozenset(
 POLICIES = ("authenticated", "anchored", "any")
 
 Emit = Callable[..., None]
-Anchor = Callable[[str, str, int], "str | None"]
+Anchor = Callable[[str, CheckpointKind, int], "str | None"]
 """``anchor(run_id, kind, step)``: the manifest digest recorded outside the directory, or None."""
 
 
@@ -422,7 +422,7 @@ class RunCheckpoints:
         if self._anchor is None:
             return None, False
         try:
-            digest = self._anchor(self.run_id, kind, step)
+            digest = self._anchor(self.run_id, _check_kind(kind), step)
         except Exception as exc:  # noqa: BLE001  # a broken anchor is reported, never ignored
             self._emit("warning", "checkpoint_anchor_failed", error_type=type(exc).__name__)
             return None, True
@@ -840,6 +840,24 @@ class RunCheckpoints:
             before_publish(manifest, manifest_digest)
         self._write_pointer(run_fd, manifest, manifest_digest)
         return manifest
+
+    def existing(self, kind: CheckpointKind, step: int) -> CheckpointManifest | None:
+        """The self-checked manifest at ``(kind, step)`` if there is one (data not re-hashed)."""
+        _check_kind(kind)
+        _check_step(step)
+        with self._open_run(create=False) as run_fd:
+            kind_fd = None if run_fd is None else self._open_kind(run_fd, kind, create=False)
+            if kind_fd is None:
+                return None
+            import os
+
+            try:
+                cand = self._load_manifest(kind_fd, kind, manifest_name(step), step)
+            except CheckpointError:
+                return None
+            finally:
+                os.close(kind_fd)
+        return cand.manifest
 
     # -- bytes for the remote mirror ------------------------------------------------------------
 

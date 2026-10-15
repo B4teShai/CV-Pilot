@@ -190,6 +190,46 @@ def hash_regular(dir_fd: int, name: str, *, max_bytes: int) -> tuple[str, int]:
     return digest.hexdigest(), total
 
 
+def iter_regular_file(path: Path, *, max_bytes: int) -> Iterator[bytes]:
+    """Stream a regular file at an arbitrary path in chunks: never through a symlink, never a
+    FIFO or directory, never more than ``max_bytes`` (a file that grows while read is refused)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise CheckpointCorruptError(f"{path.name} is missing", reason="missing") from None
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENXIO, errno.EISDIR):
+            raise CheckpointCorruptError(
+                f"{path.name} is not a regular file", reason="not_regular_file"
+            ) from None
+        raise CheckpointError(f"cannot open {path.name}: {exc}") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise CheckpointCorruptError(
+                f"{path.name} is not a regular file", reason="not_regular_file"
+            )
+        if info.st_size > max_bytes:
+            raise CheckpointCorruptError(
+                f"{path.name} is over the limit of {max_bytes} bytes", reason="too_large"
+            )
+        total = 0
+        while True:
+            chunk = os.read(fd, CHUNK)
+            if not chunk:
+                return
+            total += len(chunk)
+            if total > max_bytes:
+                raise CheckpointCorruptError(f"{path.name} grew past the limit", reason="too_large")
+            yield chunk
+    except OSError as exc:
+        if isinstance(exc, CheckpointError):
+            raise
+        raise CheckpointError(f"cannot read {path.name}: {exc}") from exc
+    finally:
+        os.close(fd)
+
+
 def read_at(dir_fd: int, name: str, offset: int, length: int, *, max_bytes: int) -> bytes:
     """``length`` bytes of a regular file starting at ``offset`` (one open, one ``pread``)."""
     fd, _ = _open_regular(dir_fd, name, max_bytes)
