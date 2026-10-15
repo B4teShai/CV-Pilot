@@ -278,15 +278,17 @@ class RunCheckpoints:
         return fsops.listdir(kind_fd, limit=self.max_entries)
 
     def _load_manifest(self, kind_fd: int, kind: str, name: str, step: int) -> _Cand:
-        cand = _Cand(name=name, step=step)
         if name != manifest_name(step):
-            cand.reason = "name_mismatch"
-            return cand
+            return _Cand(name=name, step=step, reason="name_mismatch")
         try:
             raw = fsops.read_regular(kind_fd, name, max_bytes=MAX_MANIFEST_BYTES)
         except CheckpointCorruptError:
-            cand.reason = "manifest_unreadable"
-            return cand
+            return _Cand(name=name, step=step, reason="manifest_unreadable")
+        return self._cand_from_bytes(raw, kind, name, step)
+
+    def _cand_from_bytes(self, raw: bytes, kind: str, name: str, step: int) -> _Cand:
+        """Parse and self-check manifest bytes: schema, agreement with name and run, chain, tag."""
+        cand = _Cand(name=name, step=step)
         try:
             manifest = CheckpointManifest.model_validate_json(raw)
         except (ValidationError, ValueError):
@@ -317,9 +319,12 @@ class RunCheckpoints:
             if manifest.auth_tag is None:
                 cand.tag_state = "absent"
             else:
-                signed = self._manifest_bytes(manifest)
                 valid = auth.verify(
-                    self._key, auth.MANIFEST_LABEL, self.run_id, signed, manifest.auth_tag
+                    self._key,
+                    auth.MANIFEST_LABEL,
+                    self.run_id,
+                    self._manifest_bytes(manifest),
+                    manifest.auth_tag,
                 )
                 cand.tag_state = "valid" if valid else "invalid"
         return cand
@@ -834,6 +839,98 @@ class RunCheckpoints:
         if before_publish is not None:
             before_publish(manifest, manifest_digest)
         self._write_pointer(run_fd, manifest, manifest_digest)
+        return manifest
+
+    # -- bytes for the remote mirror ------------------------------------------------------------
+
+    def read_range(self, manifest: CheckpointManifest, offset: int, length: int) -> bytes:
+        """``length`` bytes of a checkpoint's data file at ``offset`` (regular files only)."""
+        name = manifest.path.split("/", 1)[1]
+        with self._open_run(create=False) as run_fd:
+            kind_fd = (
+                None if run_fd is None else self._open_kind(run_fd, manifest.kind, create=False)
+            )
+            if kind_fd is None:
+                raise CheckpointCorruptError("the checkpoint directory is gone", reason="missing")
+            import os
+
+            try:
+                return fsops.read_at(kind_fd, name, offset, length, max_bytes=self.max_bytes)
+            finally:
+                os.close(kind_fd)
+
+    def read_manifest_bytes(self, manifest: CheckpointManifest) -> bytes:
+        """The exact bytes of the manifest file (what the pointer and the store digest cover)."""
+        import os
+
+        with self._open_run(create=False) as run_fd:
+            kind_fd = (
+                None if run_fd is None else self._open_kind(run_fd, manifest.kind, create=False)
+            )
+            if kind_fd is None:
+                raise CheckpointCorruptError("the checkpoint directory is gone", reason="missing")
+            try:
+                return fsops.read_regular(
+                    kind_fd, manifest_name(manifest.step), max_bytes=MAX_MANIFEST_BYTES
+                )
+            finally:
+                os.close(kind_fd)
+
+    def install(
+        self, kind: CheckpointKind, step: int, raw_manifest: bytes, chunks: Iterable[bytes]
+    ) -> CheckpointManifest | None:
+        """Install a checkpoint fetched from the remote: the manifest must pass every self-check
+        for this run, kind and step, and the data must match its size and SHA-256 while it is
+        written. The pointer is not touched (the walk finds it); an existing step is left alone.
+
+        Returns:
+            The manifest, or None when this step already exists locally.
+
+        Raises:
+            CheckpointCorruptError: the manifest or the data does not verify; nothing is kept.
+        """
+        _check_kind(kind)
+        _check_step(step)
+        cand = self._cand_from_bytes(raw_manifest, kind, manifest_name(step), step)
+        manifest = cand.manifest
+        if manifest is None:
+            raise CheckpointCorruptError(
+                "the remote manifest does not verify", reason=cand.reason or "manifest_invalid"
+            )
+        if manifest.size_bytes > self.max_bytes:
+            raise CheckpointCorruptError(
+                "the remote checkpoint is over the size limit", reason="too_large"
+            )
+        final_data = manifest.path.split("/", 1)[1]
+        final_manifest = manifest_name(step)
+        with self._locked() as run_fd:
+            kind_fd = self._open_kind(run_fd, kind, create=True)
+            assert kind_fd is not None  # noqa: S101  # create=True never returns None
+            import os
+
+            temp_data, temp_manifest = fsops.temp_name(final_data), fsops.temp_name(final_manifest)
+            try:
+                if fsops.exists(kind_fd, final_manifest) or fsops.exists(kind_fd, final_data):
+                    return None
+                sha256, size = fsops.write_exclusive(
+                    kind_fd, temp_data, chunks, max_bytes=manifest.size_bytes
+                )
+                if (sha256, size) != (manifest.sha256, manifest.size_bytes):
+                    raise CheckpointCorruptError(
+                        "the downloaded checkpoint does not match its manifest",
+                        reason="digest_mismatch",
+                    )
+                fsops.write_exclusive(kind_fd, temp_manifest, raw_manifest)
+                fsops.fsync_dir(kind_fd)
+                fsops.replace(kind_fd, temp_manifest, final_manifest)
+                fsops.replace(kind_fd, temp_data, final_data)
+                fsops.fsync_dir(kind_fd)
+            except BaseException:
+                fsops.unlink_quiet(kind_fd, temp_data)
+                fsops.unlink_quiet(kind_fd, temp_manifest)
+                raise
+            finally:
+                os.close(kind_fd)
         return manifest
 
     # -- remote markers -------------------------------------------------------------------------

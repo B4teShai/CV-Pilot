@@ -190,6 +190,17 @@ def hash_regular(dir_fd: int, name: str, *, max_bytes: int) -> tuple[str, int]:
     return digest.hexdigest(), total
 
 
+def read_at(dir_fd: int, name: str, offset: int, length: int, *, max_bytes: int) -> bytes:
+    """``length`` bytes of a regular file starting at ``offset`` (one open, one ``pread``)."""
+    fd, _ = _open_regular(dir_fd, name, max_bytes)
+    try:
+        return os.pread(fd, length, offset)
+    except OSError as exc:
+        raise CheckpointError(f"cannot read {name}: {exc}") from exc
+    finally:
+        os.close(fd)
+
+
 def read_prefix(dir_fd: int, name: str, length: int, *, max_bytes: int) -> bytes:
     """The first ``length`` bytes of a regular file (used for header checks)."""
     fd, _ = _open_regular(dir_fd, name, max_bytes)

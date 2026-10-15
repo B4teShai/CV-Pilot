@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, Literal, Protocol
@@ -797,6 +797,23 @@ class RunStore(Protocol):
     def close(self) -> None: ...
 
 
+class RemoteStore(Protocol):
+    """Object storage for checkpoint mirrors; adapters register under ``remotes`` by scheme.
+
+    Keys are relative to the remote's root (``<run_id>/<kind>/<file>``) and validated by the
+    adapter. Every method raises ``OSError`` (never the backend's own exception, whose text may
+    carry credentials) for transient or unexpected failures.
+    """
+
+    def size(self, key: str) -> int | None: ...
+    def read_range(self, key: str, start: int, length: int) -> bytes: ...
+    def read_bounded(self, key: str, max_bytes: int) -> bytes: ...
+    def write(self, key: str, chunks: Iterable[bytes], *, append: bool = False) -> None: ...
+    def move(self, source: str, target: str) -> None: ...
+    def delete(self, key: str) -> None: ...
+    def list(self, prefix: str) -> list[str]: ...
+
+
 class TableIO(Protocol):
     """Columnar file adapter used by the eval engine; registered under ``tables``."""
 
@@ -825,4 +842,5 @@ class TableIO(Protocol):
 
 
 StoreFactory = Callable[..., RunStore]
+RemoteFactory = Callable[..., RemoteStore]
 TableIOFactory = Callable[[], TableIO]

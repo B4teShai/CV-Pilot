@@ -39,6 +39,8 @@ _FIELDS: dict[str, tuple[str, Callable[[str], str]]] = {
     "store_dir": ("STORE_DIR", str),
     "forward_to": ("FORWARD_TO", str),
     "forward_hosts": ("FORWARD_HOSTS", str),
+    "checkpoint_dir": ("CHECKPOINT_DIR", str),
+    "checkpoint_remote": ("CHECKPOINT_REMOTE", str),
     "ckpt_require_trust": ("CKPT_REQUIRE_TRUST", str.lower),
     "ckpt_allow_pt": ("CKPT_ALLOW_PT", _bool_text),
 }
@@ -126,6 +128,8 @@ class Settings(BaseModel, frozen=True):
     store_dir: Path | None = None
     forward_to: tuple[str, ...] = ()
     forward_hosts: tuple[str, ...] = ()
+    checkpoint_dir: Path | None = None
+    checkpoint_remote: str | None = None
     ckpt_require_trust: Literal["authenticated", "anchored", "any"] = "any"
     ckpt_allow_pt: bool = False
 
@@ -146,7 +150,7 @@ class Settings(BaseModel, frozen=True):
             raise ValueError("invalid project name")
         return value
 
-    @field_validator("store_dir", mode="before")
+    @field_validator("store_dir", "checkpoint_dir", mode="before")
     @classmethod
     def _store_dir(cls, value: Any) -> Path | None:
         if value is None:

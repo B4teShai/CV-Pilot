@@ -50,6 +50,12 @@ mlflow = "cvpilot.forward.mlflow:MlflowForwarder"
 wandb = "cvpilot.forward.wandb:WandbForwarder"
 trackio = "cvpilot.forward.trackio:TrackioForwarder"
 
+[project.entry-points."cvpilot.remotes"]
+s3 = "cvpilot.remote.fsspec_store:open_remote"
+gs = "cvpilot.remote.fsspec_store:open_remote"
+az = "cvpilot.remote.fsspec_store:open_remote"
+memory = "cvpilot.remote.fsspec_store:open_remote"
+
 [project.entry-points."cvpilot.spot_notices"]
 aws = "cvpilot.remote.spot:AwsSpotNotice"
 gcp = "cvpilot.remote.spot:GcpPreemptionNotice"

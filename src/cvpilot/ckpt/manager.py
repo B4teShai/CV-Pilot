@@ -41,12 +41,14 @@ from cvpilot.ckpt.directory import (
     RunCheckpoints,
     Skipped,
 )
+from cvpilot.ckpt.remote import Mirror
 from cvpilot.ckpt.rng import capture_rng
 from cvpilot.ckpt.serializers import get_serializer
 from cvpilot.core.errors import (
     CheckpointCorruptError,
     CheckpointError,
     CheckpointFormatError,
+    CheckpointPathError,
     CheckpointUntrustedError,
     RunClosedError,
 )
@@ -54,13 +56,16 @@ from cvpilot.core.schema import (
     CheckpointFormat,
     CheckpointKind,
     CheckpointManifest,
+    RemoteStore,
     RequireTrust,
     TrustLevel,
 )
-from cvpilot.registry import spot_notices
+from cvpilot.core.uri import parse_remote_uri
+from cvpilot.registry import remotes, spot_notices
 from cvpilot.settings import load_settings
 
 DEFAULT_INTERVAL_MINUTES = 10.0
+MAX_REMOTE_CANDIDATES = 10
 MAX_GRACE_S = 3600.0
 _WEIGHT_KEYS = ("model", "ema")
 _STATE_OBJECTS = ("model", "optimizer", "scheduler", "scaler", "ema")
@@ -103,7 +108,14 @@ class CheckpointManager:
         self,
         run: Any,
         *,
-        dir: str | Path,  # noqa: A002  # the documented parameter name
+        dir: str | Path | None = None,  # noqa: A002  # the documented parameter name
+        remote: str | None = None,
+        remote_store: RemoteStore | None = None,
+        remote_retries: int = 3,
+        remote_deadline: float = 300.0,
+        remote_timeout: float = 10.0,
+        remote_sleep: Callable[[float], None] = time.sleep,
+        remote_clock: Callable[[], float] = time.monotonic,
         keep_last: int = 3,
         keep_best: int = 2,
         monitor: str | None = None,
@@ -124,6 +136,12 @@ class CheckpointManager:
         allow_pt_format: bool | None = None,
     ) -> None:
         settings = load_settings()
+        if dir is None:
+            dir = settings.checkpoint_dir
+        if dir is None:
+            raise ValueError("dir is required: pass dir= or set CVPILOT_CHECKPOINT_DIR")
+        if remote is None:
+            remote = settings.checkpoint_remote
         if require_trust is None:
             require_trust = settings.ckpt_require_trust
         if require_trust not in POLICIES:
@@ -185,6 +203,24 @@ class CheckpointManager:
         self.allow_pt = allow_pt_format
         self._clock = clock
         self._dirs: dict[str, RunCheckpoints] = {}
+        self._mirror: Mirror | None = None
+        if remote is not None or remote_store is not None:
+            if remote is None:
+                raise ValueError("remote_store needs remote= (the location it serves)")
+            try:
+                location = parse_remote_uri(remote)
+            except ValueError as exc:
+                raise CheckpointPathError(str(exc)) from None
+            self._mirror = Mirror(
+                location,
+                remote_store
+                if remote_store is not None
+                else remotes.get(location.scheme)(location, timeout=remote_timeout),
+                retries=remote_retries,
+                deadline=remote_deadline,
+                sleep=remote_sleep,
+                clock=remote_clock,
+            )
         self._own = self._dir_for(self._handle.run_id)
         self._last_step: int | None = None
         self._last_time = clock()
@@ -241,6 +277,11 @@ class CheckpointManager:
         if name and version and name not in versions:
             versions[name[:64]] = version[:64]
         return versions
+
+    @property
+    def remote_url(self) -> str | None:
+        """The validated remote location (no credentials can be in it), or None."""
+        return None if self._mirror is None else self._mirror.location.url
 
     def close(self) -> None:
         """Stop the notice poller and put the previous signal handlers back."""
@@ -299,6 +340,7 @@ class CheckpointManager:
                 versions=self._versions(),
                 dataset_hash=dataset_hash,
                 git_commit=git_commit,
+                uri=self._intended_uri(kind, step),
                 metric_key=None if metric is None else metric[0],
                 metric_value=None if metric is None else metric[1],
                 metric_mode=self.mode if metric is not None else None,
@@ -336,8 +378,45 @@ class CheckpointManager:
         self._last_time = self._clock()
         if kind == "last":
             self._last_step = step
+        self._mirror_pending()
         self._retain(kind)
         return manifest
+
+    def _intended_uri(self, kind: str, step: int) -> str | None:
+        if self._mirror is None:
+            return None
+        name = f"step_{step:09d}.{self._serializer.suffix}"
+        return f"{self._mirror.location.url}/{self._handle.run_id}/{kind}/{name}"
+
+    def _mirror_pending(self, limit: int = 3) -> None:
+        """Upload the newest checkpoints that the remote does not hold yet (at most ``limit``);
+        stop at the first failure, which is logged and never raised."""
+        if self._mirror is None:
+            return
+        pending = [
+            e.manifest
+            for kind in ("last", "best")
+            for e in self._own.inspect(kind, check_data=False)
+            if e.manifest is not None and not self._own.is_uploaded(e.manifest)
+        ]
+        pending.sort(key=lambda m: (m.step, m.kind), reverse=True)
+        for manifest in pending[:limit]:
+            started = time.perf_counter()
+            try:
+                self._mirror.upload(self._own, manifest)
+            except (OSError, CheckpointError) as exc:
+                self._emit(
+                    "warning", "checkpoint_upload_failed", step=manifest.step,
+                    kind=manifest.kind, error_type=type(exc).__name__,
+                    remote=self._mirror.label,
+                )  # fmt: skip
+                return
+            self._emit(
+                "info", "checkpoint_uploaded", step=manifest.step, kind=manifest.kind,
+                size_bytes=manifest.size_bytes, sha256_prefix=manifest.sha256[:12],
+                remote=self._mirror.label,
+                duration_ms=round((time.perf_counter() - started) * 1000, 1),
+            )  # fmt: skip
 
     def _record(self, manifest: CheckpointManifest, digest: str) -> None:
         """Store the manifest digest (the external anchor); a failure weakens trust, not saves."""
@@ -352,7 +431,12 @@ class CheckpointManager:
     def _retain(self, kind: CheckpointKind) -> None:
         keep = self.keep_last if kind == "last" else self.keep_best
         try:
-            self._own.prune(kind, keep=keep, mode=self.mode)
+            self._own.prune(
+                kind,
+                keep=keep,
+                mode=self.mode,
+                is_confirmed=self._own.is_uploaded if self._mirror is not None else None,
+            )
         except CheckpointError as exc:
             self._emit(
                 "warning", "checkpoint_prune_failed", kind=kind, error_type=type(exc).__name__
@@ -505,35 +589,12 @@ class CheckpointManager:
         )
         skipped: list[Skipped] = []
         for run_id in order:
-            found = self._dir_for(run_id)
-            for verified in found.iter_valid(kind, load=True):
-                try:
-                    assert verified.data is not None  # noqa: S101  # load=True always sets it
-                    state = get_serializer(verified.manifest.format).loads(
-                        verified.data, map_location=map_location
-                    )
-                except (CheckpointCorruptError, CheckpointFormatError) as exc:
-                    reason = (
-                        exc.reason if isinstance(exc, CheckpointCorruptError) else "unsafe_loader"
-                    )
-                    skipped.append(
-                        Skipped(verified.manifest.step, kind, verified.manifest.path, reason)
-                    )
-                    self._emit(
-                        "warning", "checkpoint_skipped_corrupt", run_id=run_id,
-                        step=verified.manifest.step, kind=kind, reason=reason,
-                    )  # fmt: skip
-                    continue
-                skipped.extend(found.skipped)
-                manifest = verified.manifest
-                self._emit(
-                    "info", "checkpoint_restored", run_id=run_id, step=manifest.step, kind=kind,
-                    size_bytes=manifest.size_bytes, sha256_prefix=manifest.sha256[:12],
-                    skipped=len(skipped), trust_level=verified.trust,
-                )  # fmt: skip
-                self.last_restore = Restored(state, manifest, run_id, skipped, verified.trust)
-                return self.last_restore
-            skipped.extend(found.skipped)
+            found = self._restore_local(run_id, kind, map_location, skipped)
+            if found is None and self._mirror is not None:
+                found = self._restore_remote(run_id, kind, map_location, skipped)
+            if found is not None:
+                self.last_restore = found
+                return found
         self.last_restore = None
         untrusted = [s for s in skipped if s.reason in TRUST_REASONS]
         if untrusted and self.require_trust != "any":
@@ -546,6 +607,69 @@ class CheckpointManager:
                 f"{self.require_trust!r}; nothing was restored (see CVPILOT_CKPT_REQUIRE_TRUST)"
             )
         self._emit("info", "checkpoint_restore_empty", dir=str(self._root), skipped=len(skipped))
+        return None
+
+    def _restore_local(
+        self, run_id: str, kind: CheckpointKind, map_location: str, skipped: list[Skipped]
+    ) -> Restored | None:
+        found = self._dir_for(run_id)
+        for verified in found.iter_valid(kind, load=True):
+            try:
+                assert verified.data is not None  # noqa: S101  # load=True always sets it
+                state = get_serializer(verified.manifest.format).loads(
+                    verified.data, map_location=map_location
+                )
+            except (CheckpointCorruptError, CheckpointFormatError) as exc:
+                reason = exc.reason if isinstance(exc, CheckpointCorruptError) else "unsafe_loader"
+                skipped.append(
+                    Skipped(verified.manifest.step, kind, verified.manifest.path, reason)
+                )
+                self._emit(
+                    "warning", "checkpoint_skipped_corrupt", run_id=run_id,
+                    step=verified.manifest.step, kind=kind, reason=reason,
+                )  # fmt: skip
+                continue
+            skipped.extend(found.skipped)
+            manifest = verified.manifest
+            self._emit(
+                "info", "checkpoint_restored", run_id=run_id, step=manifest.step, kind=kind,
+                size_bytes=manifest.size_bytes, sha256_prefix=manifest.sha256[:12],
+                skipped=len(skipped), trust_level=verified.trust,
+            )  # fmt: skip
+            return Restored(state, manifest, run_id, skipped, verified.trust)
+        skipped.extend(found.skipped)
+        return None
+
+    def _restore_remote(
+        self, run_id: str, kind: CheckpointKind, map_location: str, skipped: list[Skipped]
+    ) -> Restored | None:
+        """Nothing usable locally: fetch the newest remote checkpoints one by one (verified before
+        they are kept) and restore through the same local checks."""
+        assert self._mirror is not None  # noqa: S101  # the caller checked
+        found = self._dir_for(run_id)
+        try:
+            steps = self._mirror.list_steps(run_id, kind)
+        except OSError as exc:
+            self._emit(
+                "warning", "checkpoint_download_failed", kind=kind, error_type=type(exc).__name__
+            )
+            return None
+        for step in steps[:MAX_REMOTE_CANDIDATES]:
+            try:
+                self._mirror.fetch(found, kind, step)
+            except (CheckpointCorruptError, OSError) as exc:
+                reason = (
+                    exc.reason if isinstance(exc, CheckpointCorruptError) else "remote_unavailable"
+                )
+                skipped.append(Skipped(step, kind, f"remote:{kind}/{step}", reason))
+                self._emit(
+                    "warning", "checkpoint_skipped_corrupt", run_id=run_id, step=step, kind=kind,
+                    reason=reason, remote=self._mirror.label,
+                )  # fmt: skip
+                continue
+            restored = self._restore_local(run_id, kind, map_location, skipped)
+            if restored is not None:
+                return restored
         return None
 
     def restore_latest_valid(self, *, map_location: str = "cpu") -> dict[str, Any] | None:

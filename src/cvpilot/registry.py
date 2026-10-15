@@ -14,7 +14,13 @@ from importlib.metadata import EntryPoint, entry_points
 from typing import Any, Generic, TypeVar
 
 from cvpilot.core.errors import CvpilotError, MissingExtraError
-from cvpilot.core.schema import ForwarderFactory, HookFactory, StoreFactory, TableIOFactory
+from cvpilot.core.schema import (
+    ForwarderFactory,
+    HookFactory,
+    RemoteFactory,
+    StoreFactory,
+    TableIOFactory,
+)
 
 T = TypeVar("T")
 EntryPointLookup = Callable[..., Iterable[EntryPoint]]
@@ -93,3 +99,4 @@ forwarders: Registry[ForwarderFactory] = Registry("cvpilot.forwarders")
 hooks: Registry[HookFactory] = Registry("cvpilot.hooks")
 
 spot_notices: Registry[Callable[..., Any]] = Registry("cvpilot.spot_notices")
+remotes: Registry[RemoteFactory] = Registry("cvpilot.remotes")
