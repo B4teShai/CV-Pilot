@@ -166,8 +166,8 @@ def with_slices(
     base_rows: dict[str, Any], cand_rows: dict[str, Any]
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     return (
-        {"slices": base_rows, "slice_spec": SPEC},
-        {"slices": cand_rows, "slice_spec": SPEC},
+        {"slices": base_rows, "slice_spec": SPEC, "slice_hash": "a" * 64},
+        {"slices": cand_rows, "slice_spec": SPEC, "slice_hash": "a" * 64},
     )
 
 
@@ -192,14 +192,14 @@ def test_absent_slices_fail() -> None:
     base, cand = with_slices({"camera=c1": slice_row(0.6)}, {"camera=c2": slice_row(0.6)})
     assert "slice_missing" in kinds(run_gate(base, cand, slice_max_drop={"camera=*": 1.5}))
     assert kinds(run_gate(base, cand, slice_max_drop={"camera=c9": 1.5})) == ["slice_missing"]
-    none = {"slices": {}}
+    none = {"slices": {}, "slice_hash": "a" * 64}
     assert kinds(run_gate(none, none, slice_max_drop={"camera=*": 1.5})) == ["slice_no_match"]
 
 
 def test_slice_with_another_column_fails() -> None:
     row = {"camera=c1": slice_row(0.6)}
-    cand = {"slices": row, "slice_spec": {"camera": "cam_id"}}
-    base = {"slices": row, "slice_spec": SPEC}
+    cand = {"slices": row, "slice_spec": {"camera": "cam_id"}, "slice_hash": "a" * 64}
+    base = {"slices": row, "slice_spec": SPEC, "slice_hash": "a" * 64}
     assert kinds(run_gate(base, cand, slice_max_drop={"camera=*": 1.5})) == ["slice_spec_mismatch"]
 
 
@@ -211,7 +211,12 @@ def test_small_slices_fail_unless_skipping_is_asked_for() -> None:
     strict = run_gate(base, cand, slice_max_drop={"camera=*": 1.5}, min_images=30)
     assert kinds(strict) == ["slice_too_small"] and strict.violations[0].subject == "camera=c2"
     lenient = run_gate(
-        base, cand, slice_max_drop={"camera=*": 1.5}, min_images=30, skip_small_slices=True
+        base,
+        cand,
+        slice_max_drop={"camera=*": 1.5},
+        min_images=30,
+        skip_small_slices=True,
+        max_skipped=1,
     )
     assert lenient.passed and lenient.skipped == ("camera=c2",)
 
@@ -219,13 +224,20 @@ def test_small_slices_fail_unless_skipping_is_asked_for() -> None:
 def test_skipping_every_slice_still_fails() -> None:
     base, cand = with_slices({"camera=c1": slice_row(0.6, 5)}, {"camera=c1": slice_row(0.1, 5)})
     result = run_gate(
-        base, cand, slice_max_drop={"camera=*": 1.5}, min_images=30, skip_small_slices=True
+        base,
+        cand,
+        slice_max_drop={"camera=*": 1.5},
+        min_images=30,
+        skip_small_slices=True,
+        max_skipped=1,
     )
     assert kinds(result) == ["slice_none_gated"] and not result.passed
 
 
 def test_non_finite_slice_fails() -> None:
-    good = build_snapshot(slices={"camera=c1": slice_row(0.6)}, slice_spec=SPEC)
+    good = build_snapshot(
+        slices={"camera=c1": slice_row(0.6)}, slice_spec=SPEC, slice_hash="a" * 64
+    )
     broken = EvalSnapshot.model_construct(
         **{**good.__dict__, "slices": {"camera=c1": {"mAP50_95": math.nan, "n_images": 50.0}}}
     )

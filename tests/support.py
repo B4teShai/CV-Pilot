@@ -89,6 +89,7 @@ def build_snapshot(
     params: Mapping[str, Any] | None = PARAMS,
     confusion_sha256: str = SHA,
     predictions_sha256: str = SHA,
+    slice_hash: str | None = None,
 ) -> EvalSnapshot:
     """A snapshot object with chosen values; nothing is stored."""
     names = list(class_names)
@@ -112,6 +113,7 @@ def build_snapshot(
             "ci_status": "computed" if ci else "off",
             "params": None if params is None else dict(params),
             "slice_spec": dict(slice_spec or {}),
+            "slice_hash": slice_hash,
             "confusion_sha256": confusion_sha256,
             "predictions_sha256": predictions_sha256,
         }
@@ -152,10 +154,16 @@ def add_snapshot(
 
 
 def write_eval_files(
-    folder: Path, *, n: int = 40, broken: int = 0, shift_gt: bool = False
+    folder: Path,
+    *,
+    n: int = 40,
+    broken: int = 0,
+    shift_gt: bool = False,
+    cameras: list[str] | None = None,
 ) -> tuple[Path, Path, Path]:
     """Parquet predictions, ground truth and class names for ``cvpilot eval``.
 
+    ``cameras`` overrides the per-image ``camera`` metadata (same eval set hash, other slices).
     ``n`` images with one box each (alternating two classes and two cameras); the predictions
     of the first ``broken`` images sit away from the ground truth, so they are misses plus
     false positives. ``shift_gt`` moves every ground-truth box, which changes the eval set hash.
@@ -178,7 +186,7 @@ def write_eval_files(
                 "y2": [gt_box[3]] * n,
                 "width": [200] * n,
                 "height": [200] * n,
-                "camera": [f"c{i % 2}" for i in range(n)],
+                "camera": cameras or [f"c{i % 2}" for i in range(n)],
             }
         ),
         folder / "g.parquet",

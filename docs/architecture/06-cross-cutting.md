@@ -27,7 +27,8 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `store_write_failed`, `store_version_unsupported` | ERROR | `command`, `store_version`, `library_version`, `exc_info` | CLI boundary, from `StoreError` and `StoreVersionError` (the store raises, it does not log) | built |
 | `eval_completed` | INFO | `run_id`, `step`, `eval_set_hash`, `n_images`, `n_classes`, `n_predictions`, `task`, `duration_ms` | `eval/` | built |
 | `compare_completed` | INFO | `candidate_run_id`, `baseline_run_id`, `candidate_eval_set_hash`, `baseline_eval_set_hash`, `candidate_step`, `baseline_step` | `compare/` | built |
-| `compare_refused` | ERROR | `reason` (`eval_set_hash`, `task`, `class_names`, `params`, `params_missing`, `no_candidate_snapshot`, `no_baseline_snapshot`), `candidate_run_id`, `baseline_run_id`, `candidate_eval_set_hash`, `baseline_eval_set_hash` | `cli/` boundary, from `CompareRefusedError` | built |
+| `compare_refused` | ERROR | `reason` (`eval_set_hash`, `task`, `class_names`, `params`, `params_missing`, `slice_hash`, `slice_n_images`, `no_candidate_snapshot`, `no_baseline_snapshot`, `no_candidate_snapshot_at_step`, `baseline_is_candidate`, `baseline_not_finished`, `commit_mismatch`, `provenance_missing`, `no_baseline`), `candidate_run_id`, `baseline_run_id`, `candidate_eval_set_hash`, `baseline_eval_set_hash` | `cli/` boundary, from `CompareRefusedError` | built |
+| `gate_recompute_failed` | ERROR | `run_id`, `what` (the first thing that differed) | `cli/` boundary, from `RecomputeMismatchError` | built |
 | `gate_passed`, `gate_failed` | INFO / ERROR | `run_id`, `baseline_tag` (null for a run-id baseline), `n_violations`, and for a failure `worst_metric`, `worst_kind`, `worst_delta` (points, null when unverifiable) | `compare/` | built |
 | `slice_skipped` | WARN | `run_id`, `slice` | `compare/`, only with `--skip-small-slices` | built |
 | `baseline_set` | INFO | `project`, `tag`, `run_id`, `eval_set_hash`, `step`, `replaced` | `compare/` | built |
@@ -109,6 +110,7 @@ browser ↔ server; server ↔ notification channels; CV-Pilot ↔ third-party p
 | Tracker adapter leaking credentials or weakening TLS | `forward/*` | adapters read no credential, take no token argument, refuse credentials in URLs, plain http outside dev and the SDK switches that disable TLS verification, and never log exception text or a URL (a test scans the adapter sources for credential variable names and for verification switches) | built |
 | A tracker outage, hang or slow call stalling training | `runs/forwarding.py` | bounded queue with `put_nowait`, one daemon thread per forwarder, stall timeout (30 s), `close` bounded at 5 s, every adapter exception counted and logged once, never raised | built |
 | Shell injection through GitHub Action inputs, branch names or pull request titles | `action.yml`, `.github/workflows/` | inputs reach the script only through `env:` and are used only inside double quotes as single argv entries, options are passed as `--name=value` and the run id after `--`, no third-party action is used, shipped workflows pin actions to full SHAs, declare read-only permissions and never use `pull_request_target`; `tests/unit/test_action.py` parses the YAML, rejects any `${{ ... }}` in a `run:` block, unquoted variables, unpinned actions and write permissions, and runs the real script against hostile values | built |
+| Gate decided by data a pull request controls (forged metrics, moved slice images, rolled-back or self-referencing baseline, older good run) | `compare/service.py`, `compare/recompute.py`, `compare/engine.py` | see the trust model above: recomputation, `slice_hash`, commit binding, baseline rules, the external chain anchor | built |
 | Dependency compromise | all | committed lockfile, `uv sync --locked` in CI, actions pinned to full SHAs, dependency scanning in CI | built (lockfile, pinned actions), planned (scanning) |
 | Credential exposure in `doctor` | CLI | `doctor` reports whether `CVPILOT_TOKEN` is set, never its value | planned |
 | Copyleft contamination of the distribution through the Ultralytics extra | `hooks/` | the framework is declared only in the `[ultralytics]` extra and never imported by this package (the hook gets the model through `add_callback`); a layering test parses every module and fails on an import anywhere but `hooks/ultralytics.py`, and on a top-level one there; no code is vendored or derived; the AGPL-3.0 notice is in the adapter, in the `hook_attached` event and in the runtime docs | built |
@@ -125,6 +127,47 @@ acceptable, `CVPILOT_STORE_COMMAND_LINE=false` stores only the executable name a
 of arguments (see [05-runtime.md](05-runtime.md)).
 
 A `SECURITY.md` with a disclosure address is part of the first server release.
+
+## Trust model for CI gates
+
+`cvpilot gate` decides whether a pull request may merge, so the question is who controls its
+inputs. The gate is a trust boundary **only** under the conditions below; with fewer of them it
+protects against accidents (a stale file, a typo, an honest bug), not against a contributor who
+wants it to pass.
+
+What a contributor can do to an unprotected setup, and the control that stops it:
+
+| Attack | Why it works without the control | Control |
+|---|---|---|
+| Store metrics that were never measured | `put_snapshot` and `record_eval` are public API; a snapshot with the baseline's `eval_set_hash`, perfect metrics and valid digests verifies | `gate --recompute --gt GT --classes FILE`: the stored predictions (SHA-256 verified) are re-evaluated on ground truth from a trusted place with the recorded parameters, and every stored metric, per-class and slice row, the slice membership hash and the confusion matrix must match (tolerance 1e-9). Not covered: predictions that were forged consistently; produce them in the trusted job (below) and bind them with `--require-commit` |
+| Slice the same images differently | `eval_set_hash` covers annotations and classes, not image metadata, so a regressed camera can move into a bigger slice | `slice_hash` (digest of each slice column's per-image values) is stored in the snapshot, must be equal on both sides (refusal `slice_hash`), per-slice `n_images` must match (`slice_n_images`), and a gate with slice thresholds fails when a snapshot has no `slice_hash` |
+| Use an old good run | any run with the right eval set passes | `--require-commit SHA` against `provenance.git_commit` (the candidate must have been evaluated with `--git-commit`; absent provenance is refused) |
+| Be the baseline | `--baseline <run id>` accepted the candidate itself, a running or a failed run | refused: the candidate is never its own baseline, a baseline run must be `finished`, and the Action accepts only `tag:` baselines unless `allow-run-baseline` is set |
+| Roll back a `--replace` | deleting the newest baseline row makes the previous pin current and the chain still verifies | `--expect-baseline-chain SHA256`: the chain digest of the newest row (`cvpilot baseline show` prints `head_seq` and `head_chain_sha256`) kept in a protected variable; any removed, added or re-ordered row changes it |
+| Hide a regression in a small slice | `--skip-small-slices` skipped it silently | `--max-skipped N` (default 0): skipped slices are counted against a cap, listed in the output and in the Action summary, and exceeding the cap fails |
+| Change the code that runs | the workflow, `action.yml`, the CI scripts and the installed cvpilot all came from the pull request | the rules below |
+
+The rules for a CI gate (the README example follows them and `tests/unit/test_action.py` lints it):
+
+1. Install cvpilot from a pinned release with hashes (`pip install --require-hashes`), never from
+   the pull request.
+2. Take the baseline store and the ground truth from the base branch or a protected artifact,
+   not from the pull request. The recommended flow is: a trusted script from the base branch copies
+   the baseline store, runs `cvpilot eval --git-commit` on the pull request's predictions with the
+   trusted ground truth, and gates the resulting run. The pull request then supplies only
+   predictions (bounded Parquet, parsed with size and row limits).
+3. Gate with `--recompute` (trusted ground truth), `--require-commit` (the commit under test) and
+   `--expect-baseline-chain` (from a protected variable).
+4. Protect `.github/` and `action.yml` with CODEOWNERS or required workflow rulesets; check out
+   the base commit (`ref: github.event.pull_request.base.sha`, `persist-credentials: false`) and
+   use the action from that checkout.
+5. Trigger on `pull_request` with `permissions: contents: read`; never `pull_request_target`.
+
+Residual risks, stated plainly: nothing is signed, so anyone who can write both the store and the
+files can recompute every digest (the anchor and the recomputation are what remove that); a
+maintainer who can edit the protected variable or the base branch can change the baseline;
+`--recompute` verifies metrics against the stored predictions, not that the predictions came from
+the model under test.
 
 ## Licensing and extras policy
 

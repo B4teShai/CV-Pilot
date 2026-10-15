@@ -58,10 +58,12 @@ Failure paths:
 | Store write error (disk full, permissions) | `log()` raises `StoreError`; training loop decides | n/a | `store_write_failed` (ERROR) |
 | `gate` run, baseline tag or run not found, or the project has no store | one line on `stderr` | 1 | `command_failed` |
 | Unknown option, bad threshold syntax (`--max-drop mAP50_95`), no threshold given, `--min-images 0` | Typer usage error | 2 | none (usage errors are not logged) |
-| `eval_set_hash`, task, class names or evaluation parameters differ, or the candidate has no snapshot for the baseline's set | refused, no verdict and no report | 1 | `compare_refused` (with `reason`) |
+| `eval_set_hash`, task, class names, evaluation parameters or slice membership differ, a slice holds other images, the candidate has no snapshot for the baseline's set or step, the baseline is the candidate or not finished, the candidate's commit is not `--require-commit` | refused, no verdict and no report | 1 | `compare_refused` (with `reason`) |
+| `--recompute` finds a stored result that differs from a re-evaluation on the trusted ground truth | no verdict | 1 | `gate_recompute_failed` |
+| `--expect-baseline-chain` differs from the baseline table head (rollback) | no verdict | 1 | `baseline_integrity_failed` |
 | A snapshot, the baseline row or the baseline chain fails verification | one line on `stderr`, no verdict | 1 | `snapshot_integrity_failed` or `baseline_integrity_failed` |
 | Metric absent or not finite, slice absent or built from another column, evaluation set smaller than `--min-images`, per-class or slice threshold that gated nothing | violation listed | 1 | `gate_failed` |
-| Slice smaller than `--min-images` | violation `slice_too_small`; with `--skip-small-slices` it is listed as skipped and a threshold whose slices were all skipped still fails | 1 (0 with the flag, when the other checks hold) | `gate_failed`; `slice_skipped` (WARN) with the flag |
+| Slice smaller than `--min-images` | violation `slice_too_small`; with `--skip-small-slices` it is listed as skipped, counted against `--max-skipped` (default 0: any skip fails) and a threshold whose slices were all skipped still fails | 1 (0 with the flag and a sufficient `--max-skipped`, when the other checks hold) | `gate_failed`; `slice_skipped` (WARN) with the flag |
 | Any threshold exceeded (a drop above the limit, in points on the 0..100 scale) | violations printed, worst first | 1 | `gate_failed` |
 | All thresholds hold (improvements never fail) | verdict printed | 0 | `gate_passed` |
 | Unexpected exception anywhere in the command | one line on `stderr` | 1 | `command_failed` |

@@ -218,18 +218,21 @@ class Thresholds:
     slice_max_drop: Mapping[str, float]        # {"camera=*": 1.5} or {"camera=cam03": 1.5}
     min_images: int = 30
     skip_small_slices: bool = False            # explicit opt-in; the default fails small slices
+    max_skipped: int = 0                       # most slices the opt-in may skip
 
 def compare(candidate: EvalSnapshot, baseline: EvalSnapshot, *,
             confusion: ConfusionDelta | None = None) -> Comparison
 def gate(cmp: Comparison, thresholds: Thresholds) -> GateResult   # .passed, .violations, .skipped
-def resolve(project, run_id, baseline_ref, *, eval_set=None, step=None, with_confusion=False,
-            store_dir=None) -> Resolved                   # verified snapshots
+def resolve(project, run_id, baseline_ref, *, eval_set=None, step=None, store_dir=None,
+            require_commit=None, expect_chain=None,
+            recompute: RecomputeSpec | None = None) -> Resolved   # verified snapshots + confusion delta
+def verify(store, snapshot, spec: RecomputeSpec) -> None          # compare/recompute.py
 def set_baseline(project, tag, run_id, *, eval_set=None, step=None, replace=False, store_dir=None) -> Baseline
 ```
 
 `compare()` raises `CompareRefusedError` (`EvalSetMismatchError` for a different
-`eval_set_hash`) unless `eval_set_hash`, `task`, `class_names` (order included) and the
-evaluation parameters are equal; snapshots without recorded parameters are refused because
+`eval_set_hash`) unless `eval_set_hash`, `task`, `class_names` (order included), the
+evaluation parameters and `slice_hash` are equal and every slice holds the same number of images; snapshots without recorded parameters are refused because
 they cannot be checked. The CLI logs `compare_refused` with `reason` and both hashes and exits
 1; no result or report exists. Deltas are `(candidate - baseline) * 100` points, negative
 being a regression. Headline deltas carry the stored bootstrap intervals and whether they
@@ -241,6 +244,15 @@ absent slices and slices built from another column (`slice_spec`). The confusion
 (`compare/confusion.py`) reads both confusion artifacts through `open_artifact` (digest verified),
 bounds size, rows and values, and reports the changed cells largest first plus the change in
 missed ground truth (`[true, background]`) and spurious detections (`[background, pred]`).
+
+`resolve()` additionally refuses a baseline that is the candidate or not `finished`
+(`baseline_is_candidate`, `baseline_not_finished`), a candidate whose `provenance.git_commit`
+differs from `--require-commit` or is absent (`commit_mismatch`, `provenance_missing`), a tag baseline
+whose table head differs from `--expect-baseline-chain` (`BaselineIntegrityError`) and, with
+`--recompute`, any stored result that differs from a re-evaluation of the stored predictions on
+trusted ground truth (`RecomputeMismatchError`, event `gate_recompute_failed`); the confusion
+artifacts are verified on every call. See the trust model in
+[06-cross-cutting.md](06-cross-cutting.md).
 
 `gate()` fails closed (module docstring of `compare/gate.py`): an absent or non-finite
 metric, an absent, mismatched or too small slice, an evaluation set below `min_images`, a

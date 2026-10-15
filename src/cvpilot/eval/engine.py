@@ -15,6 +15,7 @@ from cvpilot.core import confusion as cf
 from cvpilot.core import metrics as m
 from cvpilot.core.errors import EvalInputError
 from cvpilot.core.hashing import eval_set_hash as _hash
+from cvpilot.core.hashing import slice_hash as _slice_hash
 from cvpilot.core.metrics import I64, BoolArray
 from cvpilot.core.schema import BootstrapInfo, CiStatus, EvalParams, EvalSnapshot, Task
 from cvpilot.eval import bootstrap as bs
@@ -62,6 +63,7 @@ class EvalResult:
     ci_status: CiStatus = "off"
     params: EvalParams | None = None
     slice_spec: dict[str, str] = field(default_factory=dict)
+    slice_hash: str | None = None
 
     def to_snapshot(
         self,
@@ -90,6 +92,7 @@ class EvalResult:
                 "params": self.params,
                 "provenance": dict(provenance) if provenance else None,
                 "slice_spec": self.slice_spec,
+                "slice_hash": self.slice_hash,
                 "confusion_sha256": confusion_sha256,
                 "predictions_sha256": predictions_sha256,
             }
@@ -250,9 +253,10 @@ def evaluate(
         confusion_iou=confusion_iou,
         confusion_score=confusion_score,
     )
+    membership = _slice_hash(dict(slices or {}), gt.image_ids.tolist(), gt.meta) if plan else None
     return EvalResult(
         task, digest, names, gt.n_images, metrics, per_class, confusion, slice_rows, ci, info,
-        status, params, dict(slices or {}),
+        status, params, dict(slices or {}), membership,
     )  # fmt: skip
 
 

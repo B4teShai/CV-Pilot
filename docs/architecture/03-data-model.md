@@ -90,6 +90,7 @@ One evaluation of one run on one evaluation set at one step.
 | `params` | `json?` | yes | added field; `{iou_thresholds, confusion_iou, confusion_score, max_dets}` so later comparisons can refuse snapshots made with other parameters |
 | `provenance` | `json?` | yes | added field; optional `{checkpoint_sha256, git_commit}` supplied by the caller |
 | `slice_spec` | `json` | no | added field; slice key to image metadata column, so slice rows are comparable |
+| `slice_hash` | `str?` | yes | added field; SHA-256 over every slice column's per-image values in canonical image order (`core/hashing.slice_hash`); null without slices and for snapshots written before it existed. `compare` refuses when it differs, so the same ground truth cannot be sliced differently |
 | `confusion_sha256` | `str` | no | artifact holding the `(C+1)×(C+1)` matrix as sparse Parquet rows `(true_class, pred_class, count)`; index `C` is background |
 | `predictions_sha256` | `str` | no | artifact holding predictions Parquet: `image_id, cls, score, x1, y1, x2, y2` |
 
@@ -175,9 +176,11 @@ raises `BaselineIntegrityError` (exit 1, event `baseline_integrity_failed`). Pin
 snapshot through `get_snapshot` first, so a baseline never points at a snapshot that fails its
 own verification, and the insert re-checks the digest inside the same `BEGIN IMMEDIATE`
 transaction. `UPDATE` and `DELETE` triggers are defence in depth. Not covered, as for snapshots:
-someone who can write the database and the snapshot files can recompute every digest, and
-deleting the newest row or dropping the table is invisible without an external anchor; either
-makes the tag unknown, and an unknown tag fails every gate. At most 10 000 rows per project.
+someone who can write the database and the snapshot files can recompute every digest. Deleting
+the newest row is invisible to the store itself and is not harmless: undoing a `--replace` makes
+the previous pin current again. The control is an external anchor: `baseline show` prints
+`head_seq` and `head_chain_sha256`, and `gate --expect-baseline-chain` compares the newest
+row's chain digest with a value kept outside the store. At most 10 000 rows per project.
 
 ## Relations
 

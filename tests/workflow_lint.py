@@ -82,3 +82,52 @@ def lint(doc: dict[str, Any], *, composite: bool = False) -> list[str]:
             if EXPRESSION.search(str((step.get("with") or {}).get("script", ""))):
                 problems.append(f"{label}: an expression inside a github-script script")
     return problems
+
+
+def lint_trusted_gate(doc: dict[str, Any]) -> list[str]:
+    """Extra rules for a workflow that gates a pull request (the documented CI example).
+
+    The gate is a trust boundary only if the code that runs, the baseline it compares with and
+    the settings it uses cannot be changed by the pull request being gated.
+    """
+    problems = lint(doc)
+    triggers = doc.get("on", doc.get(True)) or {}
+    names = set(triggers) if isinstance(triggers, (dict, list)) else {triggers}
+    if "pull_request" not in names:
+        problems.append("gate on pull_request, the only trigger that has no secrets for forks")
+    if doc.get("permissions") != {"contents": "read"}:
+        problems.append("permissions must be exactly contents: read")
+    steps = steps_of(doc)
+    checkouts = [s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@")]
+    if not checkouts:
+        problems.append("check out the trusted base explicitly")
+    for step in checkouts:
+        with_ = step.get("with") or {}
+        ref = str(with_.get("ref", ""))
+        if "pull_request.base" not in ref or "head" in ref:
+            problems.append("checkout must use the pull request's base commit, never its head")
+        if with_.get("persist-credentials") is not False:
+            problems.append("checkout must set persist-credentials: false")
+    for step in steps:
+        script = str(step.get("run", ""))
+        if "pip install" in script and "--require-hashes" not in script:
+            problems.append("install cvpilot from a pinned release with --require-hashes")
+        if re.search(r"pip install[^\n]*\bcvpilot\b", script) and "-r " not in script:
+            problems.append("do not install cvpilot by bare name")
+    if not any("--require-hashes" in str(s.get("run", "")) for s in steps):
+        problems.append("the example must install cvpilot with --require-hashes")
+    gates = [s for s in steps if s.get("uses") == "./"]
+    if len(gates) != 1:
+        problems.append("use the gate action from the trusted checkout exactly once")
+    for step in gates:
+        with_ = step.get("with") or {}
+        if not str(with_.get("baseline", "")).startswith("tag:"):
+            problems.append("baseline must be a tag")
+        if str(with_.get("recompute")) != "true":
+            problems.append("the gate step must set recompute: true")
+        for required in ("gt", "classes", "expect-baseline-chain", "require-commit"):
+            if not with_.get(required):
+                problems.append(f"the gate step must set {required}")
+        if "allow-run-baseline" in with_ and str(with_["allow-run-baseline"]) == "true":
+            problems.append("a baseline run id is not an anchor")
+    return problems

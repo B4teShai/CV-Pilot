@@ -25,7 +25,13 @@ from cvpilot.core.schema import EvalSnapshot
 Overlap = Literal["overlap", "separated", "unknown"]
 ClassStatus = Literal["ok", "missing", "not_applicable", "not_finite"]
 SliceStatus = Literal[
-    "ok", "missing_baseline", "missing_candidate", "missing_metric", "spec_mismatch", "not_finite"
+    "ok",
+    "missing_baseline",
+    "missing_candidate",
+    "missing_metric",
+    "spec_mismatch",
+    "size_mismatch",
+    "not_finite",
 ]
 PRIMARY_SLICE_METRICS = ("mAP50_95", "mAP", "top1")
 """Slice metric that is compared and gated, first present wins."""
@@ -41,6 +47,8 @@ class SnapshotRef:
     n_images: int
     task: str
     ci_status: str
+    slice_hash: str | None = None
+    provenance_commit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +125,8 @@ def _ref(snapshot: EvalSnapshot) -> SnapshotRef:
         snapshot.n_images,
         snapshot.task,
         snapshot.ci_status,
+        snapshot.slice_hash,
+        None if snapshot.provenance is None else snapshot.provenance.git_commit,
     )
 
 
@@ -170,6 +180,23 @@ def check_comparable(candidate: EvalSnapshot, baseline: EvalSnapshot) -> None:
             candidate,
             baseline,
         )
+    if candidate.slice_hash != baseline.slice_hash:
+        raise _refuse(
+            "slice_hash",
+            "the images are sliced differently in the two snapshots (or only one records "
+            "its slice membership); evaluate both with the same --slices",
+            candidate,
+            baseline,
+        )
+    for label, row in candidate.slices.items():
+        other = baseline.slices.get(label)
+        if other is not None and row.get("n_images") != other.get("n_images"):
+            raise _refuse(
+                "slice_n_images",
+                "a slice holds a different number of images in the two snapshots",
+                candidate,
+                baseline,
+            )
 
 
 def _overlap(a: tuple[float, float] | None, b: tuple[float, float] | None) -> Overlap:
@@ -255,6 +282,7 @@ def _primary(*rows: Mapping[str, float]) -> str:
 
 _SLICE_ORDER = {
     "spec_mismatch": 0,
+    "size_mismatch": 0,
     "missing_metric": 0,
     "not_finite": 0,
     "missing_candidate": 0,
@@ -280,6 +308,8 @@ def _slices(candidate: EvalSnapshot, baseline: EvalSnapshot) -> tuple[SliceDelta
             status = "missing_candidate"
         elif baseline.slice_spec.get(key) != candidate.slice_spec.get(key):
             status = "spec_mismatch"
+        elif nb != nc:
+            status = "size_mismatch"
         elif b is None or c is None:
             status = "missing_metric"
         elif not _finite(b, c):

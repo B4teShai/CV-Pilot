@@ -7,8 +7,37 @@ inputs:
     description: Run id (ULID) of the candidate run.
     required: true
   baseline:
-    description: "tag:NAME of a pinned baseline, or a baseline run id."
+    description: >-
+      tag:NAME of a pinned baseline. A baseline run id is refused unless allow-run-baseline is
+      "true" (a run is not an anchor: a pull request can create one).
     required: true
+  allow-run-baseline:
+    description: 'Set to "true" to accept a baseline run id instead of a tag.'
+    required: false
+    default: "false"
+  expect-baseline-chain:
+    description: >-
+      Chain digest of the baseline table (cvpilot baseline show), from a protected variable;
+      the gate fails if the store's baseline history no longer matches it.
+    required: false
+  require-commit:
+    description: >-
+      Commit the candidate must have been evaluated from (pass the commit under test); the
+      candidate must have been evaluated with --git-commit.
+    required: false
+  recompute:
+    description: >-
+      Set to "true" to re-evaluate the candidate's and the baseline's stored predictions on
+      the trusted ground truth in gt and fail unless every stored metric matches. Use it in
+      CI: without it the gate trusts the metrics in the store.
+    required: false
+    default: "false"
+  gt:
+    description: Trusted ground-truth Parquet for recompute (from the base branch, not the PR).
+    required: false
+  classes:
+    description: Class names file for recompute.
+    required: false
   project:
     description: Project name; defaults to CVPILOT_PROJECT of the job.
     required: false
@@ -35,6 +64,10 @@ inputs:
     description: 'Set to "true" to list slices below min-images as skipped instead of failing.'
     required: false
     default: "false"
+  max-skipped:
+    description: Most slices skip-small-slices may skip before the gate fails.
+    required: false
+    default: "0"
   report:
     description: Path of the static HTML report to write.
     required: false
@@ -61,6 +94,13 @@ runs:
         GATE_SLICE_MAX_DROP: ${{ inputs.slice-max-drop }}
         GATE_MIN_IMAGES: ${{ inputs.min-images }}
         GATE_SKIP_SMALL_SLICES: ${{ inputs.skip-small-slices }}
+        GATE_MAX_SKIPPED: ${{ inputs.max-skipped }}
+        GATE_ALLOW_RUN_BASELINE: ${{ inputs.allow-run-baseline }}
+        GATE_EXPECT_CHAIN: ${{ inputs.expect-baseline-chain }}
+        GATE_REQUIRE_COMMIT: ${{ inputs.require-commit }}
+        GATE_RECOMPUTE: ${{ inputs.recompute }}
+        GATE_GT: ${{ inputs.gt }}
+        GATE_CLASSES: ${{ inputs.classes }}
         GATE_REPORT: ${{ inputs.report }}
         GATE_REPORT_JSON: ${{ inputs.report-json }}
       run: |
@@ -73,10 +113,19 @@ runs:
           echo "exit_code=2" >> "$out"
           exit 2
         fi
-        case "$GATE_SKIP_SMALL_SLICES" in
-          true|false) ;;
-          *) echo "skip-small-slices must be true or false" >&2; echo "exit_code=2" >> "$out"; exit 2 ;;
+        fail() { echo "$1" >&2; echo "exit_code=2" >> "$out"; exit 2; }
+        case "$GATE_SKIP_SMALL_SLICES" in true|false) ;; *) fail "skip-small-slices must be true or false" ;; esac
+        case "$GATE_ALLOW_RUN_BASELINE" in true|false) ;; *) fail "allow-run-baseline must be true or false" ;; esac
+        case "$GATE_RECOMPUTE" in true|false) ;; *) fail "recompute must be true or false" ;; esac
+        case "$GATE_BASELINE" in
+          tag:*) ;;
+          *) if [ "$GATE_ALLOW_RUN_BASELINE" != "true" ]; then fail "baseline must be tag:NAME (set allow-run-baseline to accept a run id)"; fi ;;
         esac
+        if [ "$GATE_RECOMPUTE" = "true" ]; then
+          if [ -z "$GATE_GT" ] || [ -z "$GATE_CLASSES" ]; then fail "recompute needs gt and classes"; fi
+        elif [ -n "$GATE_GT" ] || [ -n "$GATE_CLASSES" ]; then
+          fail "gt and classes are only used with recompute: true"
+        fi
         args=(gate "--baseline=$GATE_BASELINE")
         if [ -n "$GATE_PROJECT" ]; then args+=("--project=$GATE_PROJECT"); fi
         if [ -n "$GATE_EVAL_SET" ]; then args+=("--eval-set=$GATE_EVAL_SET"); fi
@@ -89,12 +138,21 @@ runs:
         add_lines --max-drop "$GATE_MAX_DROP"
         add_lines --per-class-max-drop "$GATE_PER_CLASS_MAX_DROP"
         add_lines --slice-max-drop "$GATE_SLICE_MAX_DROP"
-        args+=("--min-images=$GATE_MIN_IMAGES")
+        if [ -n "$GATE_REQUIRE_COMMIT" ]; then args+=("--require-commit=$GATE_REQUIRE_COMMIT"); fi
+        if [ -n "$GATE_EXPECT_CHAIN" ]; then args+=("--expect-baseline-chain=$GATE_EXPECT_CHAIN"); fi
+        if [ "$GATE_RECOMPUTE" = "true" ]; then args+=(--recompute "--gt=$GATE_GT" "--classes=$GATE_CLASSES"); fi
+        args+=("--min-images=$GATE_MIN_IMAGES" "--max-skipped=$GATE_MAX_SKIPPED")
         if [ "$GATE_SKIP_SMALL_SLICES" = "true" ]; then args+=(--skip-small-slices); fi
         if [ -n "$GATE_REPORT" ]; then args+=("--report=$GATE_REPORT"); fi
         if [ -n "$GATE_REPORT_JSON" ]; then args+=("--report-json=$GATE_REPORT_JSON"); fi
         if [ -n "$GATE_STORE_DIR" ]; then export CVPILOT_STORE_DIR="$GATE_STORE_DIR"; fi
-        cvpilot "${args[@]}" -- "$GATE_RUN_ID"
-        code=$?
+        verdict="$(mktemp)"
+        cvpilot "${args[@]}" -- "$GATE_RUN_ID" | tee "$verdict"
+        code="${PIPESTATUS[0]}"
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          # the verdict lines are escaped by cvpilot; backticks are removed so the fence holds
+          { echo "### cvpilot gate"; echo '```text'; head -c 60000 "$verdict" | tr '`' "'"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        rm -f "$verdict"
         echo "exit_code=$code" >> "$out"
         exit "$code"

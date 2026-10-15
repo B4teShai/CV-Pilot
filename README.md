@@ -129,7 +129,7 @@ closed (exit 1) on an absent or non-finite metric, an absent or too small slice,
 `--min-images` images (default 30), a threshold that gated nothing, a snapshot or baseline that
 fails its integrity check, an unknown tag, and a different `eval_set_hash`, task, class names or
 evaluation parameters; with no threshold at all it is a usage error (exit 2).
-`--skip-small-slices` is the one explicit opt-in. `--report` writes static HTML (no script, strict
+`--skip-small-slices` is the one explicit opt-in, capped by `--max-skipped` (default 0). In CI add `--recompute --gt GT --classes FILE`, `--require-commit SHA` and `--expect-baseline-chain SHA256` (the digest printed by `baseline show`); without them the gate trusts the store and protects against accidents only (see the trust model under "GitHub Action"). `--report` writes static HTML (no script, strict
 CSP, every name escaped), `--report-json` the canonical JSON. Semantics: ADR-0007.
 `python benchmarks/compare_throughput.py` times it on 5 000 images.
 
@@ -157,27 +157,58 @@ not run in this environment.
 
 ## GitHub Action
 
-`action.yml` is a composite action around `cvpilot gate`. It expects `cvpilot` to be installed in
-the job's Python and the project store to be on the runner (a checked-out or mounted copy).
-Inputs reach the script only through `env:` and are used only inside double quotes, so a branch
-name or a pull request title can not become shell code; the action uses no third-party action.
-Give the job read-only permissions:
+`action.yml` is a composite action around `cvpilot gate`. **A gate is only a trust boundary if the
+pull request it judges cannot change the code that runs, the baseline it compares with or the
+settings it uses.** Run on its own it protects against accidents, not against a contributor who
+controls the store, the workflow or the action. The full model is "Trust model for CI gates" in
+[docs/architecture/06-cross-cutting.md](docs/architecture/06-cross-cutting.md); in short:
+
+- install cvpilot from a pinned release with hashes, never from the pull request;
+- take the baseline store and the ground truth from the base branch or a protected artifact, and
+  let a trusted script (from the base branch) evaluate the pull request's predictions into a copy
+  of it with `cvpilot eval --git-commit`;
+- gate with `recompute: "true"` (re-evaluates the stored predictions on the trusted ground truth),
+  `require-commit` (the commit under test) and `expect-baseline-chain` (the digest printed by
+  `cvpilot baseline show`, kept in a protected variable);
+- accept only `tag:` baselines; protect `.github/` and `action.yml` with CODEOWNERS or required
+  workflow rulesets; trigger on `pull_request` with read-only permissions, never
+  `pull_request_target`.
 
 ```yaml
-on: pull_request
+name: gate
+on: pull_request # never pull_request_target
 permissions:
   contents: read
 jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
+      # The base commit is trusted code: its action.yml, its CI scripts, its ground truth.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      # A pinned release with hashes (pip-compile --generate-hashes), never the pull request.
+      - run: python -m pip install --require-hashes --no-deps -r ci/cvpilot-requirements.txt
+      # ci/make_candidate.py (from the base branch) copies the protected baseline store and runs
+      # cvpilot eval on the pull request's predictions with the trusted ground truth and
+      # --git-commit; it writes run-id=<ULID> to $GITHUB_OUTPUT.
+      - id: candidate
+        run: python ci/make_candidate.py
       - uses: ./
         with:
-          run-id: 01ARZ3NDEKTSV4RRFFQ69G5FAV
+          run-id: ${{ steps.candidate.outputs.run-id }}
           baseline: tag:prod
           project: demo
           store-dir: ci-store
+          recompute: "true"
+          gt: ci/ground-truth.parquet
+          classes: ci/classes.txt
+          require-commit: ${{ github.event.pull_request.head.sha }}
+          expect-baseline-chain: ${{ vars.CVPILOT_BASELINE_CHAIN }}
           max-drop: |
             mAP50_95=0.5
           slice-max-drop: |
@@ -185,9 +216,16 @@ jobs:
           min-images: "30"
 ```
 
-`tests/unit/test_action.py` parses `action.yml`, every workflow and the example above and
-rejects any `${{ ... }}` expression inside a `run:` script, an unpinned third-party action,
-write permissions, unquoted variables, and runs the real script with hostile input values.
+The Action has no third-party steps; inputs reach its script only through `env:` and are used
+inside double quotes as single arguments (`--name=value`, the run id after `--`). The exit code
+is available as the output `exit-code`; compare it as a string, for example
+`if: steps.gate.outputs.exit-code == '0'`, because step outputs are strings. The step summary
+holds the verdict (skipped slices included) in a fenced block. `tests/unit/test_action.py`
+parses `action.yml`, every workflow and the example above and rejects any `${{ ... }}` expression
+inside a `run:` script, an unpinned action, write permissions, unquoted variables, a checkout of
+the pull request's head, an unhashed install, a gate without `recompute`, `expect-baseline-chain`
+or `require-commit`, and `pull_request_target`; it also runs the real script against hostile input
+values.
 
 ## More usage
 

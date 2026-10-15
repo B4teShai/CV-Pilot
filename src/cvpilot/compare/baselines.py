@@ -33,6 +33,8 @@ class BaselineView:
     baseline: Baseline
     snapshot: EvalSnapshot
     history: int
+    head_seq: int
+    head_chain_sha256: str
 
 
 def _resolve_eval_set(
@@ -152,6 +154,9 @@ def show_baseline(project: str, tag: str, *, store_dir: Path | None = None) -> B
         baseline = store.get_baseline(tag)
         snapshot = store.get_snapshot(baseline.run_id, baseline.eval_set_hash, baseline.step)
         count = sum(1 for b in store.list_baselines(history=True) if b.tag == tag)
+        head = store.baseline_head()
     finally:
         store.close()
-    return BaselineView(baseline, snapshot, count)
+    if head is None:  # a verified tag implies at least one row
+        raise BaselineNotFoundError(f"no baseline is pinned under tag {tag!r}")
+    return BaselineView(baseline, snapshot, count, head[0], head[1])

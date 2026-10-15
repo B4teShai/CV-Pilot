@@ -14,7 +14,7 @@ import pytest
 import yaml
 from conftest import CliResult
 from support import make_run, open_project, write_eval_files
-from workflow_lint import lint, steps_of, unquoted_env_refs
+from workflow_lint import lint, lint_trusted_gate, steps_of, unquoted_env_refs
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTION = ROOT / "action.yml"
@@ -119,12 +119,79 @@ def test_no_run_block_anywhere_contains_an_expression() -> None:
             assert "${{" not in str(step.get("run", "")), step
 
 
-def test_the_readme_example_workflow_passes_the_workflow_rules() -> None:
+def readme_workflows() -> list[dict[str, Any]]:
     readme = (ROOT / "README.md").read_text()
     blocks = re.findall(r"```yaml\n(.*?)```", readme, re.S)
-    assert blocks, "the README documents the Action with a workflow example"
-    for block in blocks:
-        assert lint(yaml.safe_load(block)) == []
+    return [yaml.safe_load(b) for b in blocks]
+
+
+def test_the_readme_example_workflow_follows_the_trust_model() -> None:
+    docs = readme_workflows()
+    assert docs, "the README documents the Action with a workflow example"
+    for doc in docs:
+        assert lint_trusted_gate(doc) == []
+
+
+def good_example() -> dict[str, Any]:
+    return yaml.safe_load(
+        """
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - run: python -m pip install --require-hashes -r ci/requirements.txt
+      - uses: ./
+        with:
+          run-id: abc
+          baseline: tag:prod
+          recompute: "true"
+          gt: ci/gt.parquet
+          classes: ci/classes.txt
+          expect-baseline-chain: ${{ vars.CHAIN }}
+          require-commit: ${{ github.sha }}
+"""
+    )
+
+
+def test_the_trusted_gate_lint_accepts_a_good_workflow_and_rejects_each_unsafe_pattern() -> None:
+    assert lint_trusted_gate(good_example()) == []
+
+    def broken(edit: Any) -> list[str]:
+        doc = good_example()
+        edit(doc)
+        return lint_trusted_gate(doc)
+
+    steps = lambda d: d["jobs"]["gate"]["steps"]  # noqa: E731
+    cases: dict[str, Any] = {
+        "pull_request_target": lambda d: d.update({"on": "pull_request_target"}),
+        "head checkout": lambda d: steps(d)[0]["with"].update(
+            {"ref": "${{ github.event.pull_request.head.sha }}"}
+        ),
+        "default checkout ref": lambda d: steps(d)[0]["with"].pop("ref"),
+        "credentials kept": lambda d: steps(d)[0]["with"].pop("persist-credentials"),
+        "unhashed install": lambda d: steps(d)[1].update({"run": "pip install cvpilot"}),
+        "write permission": lambda d: d.update({"permissions": {"contents": "write"}}),
+        "extra permission": lambda d: d.update(
+            {"permissions": {"contents": "read", "id-token": "read"}}
+        ),
+        "no recompute": lambda d: steps(d)[2]["with"].pop("recompute"),
+        "no anchor": lambda d: steps(d)[2]["with"].pop("expect-baseline-chain"),
+        "no commit": lambda d: steps(d)[2]["with"].pop("require-commit"),
+        "run baseline": lambda d: steps(d)[2]["with"].update(
+            {"baseline": "01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+        ),
+        "unpinned action": lambda d: steps(d).append({"uses": "actions/setup-python@v5"}),
+        "expression in run": lambda d: steps(d).append({"run": "echo ${{ github.head_ref }}"}),
+    }
+    for name, edit in cases.items():
+        assert broken(edit), name
 
 
 def test_inputs_reach_the_script_only_through_env() -> None:
@@ -162,6 +229,7 @@ def fake_cli(tmp_path: Path) -> Path:
     exe.write_text(
         "#!/bin/bash\n"
         'for a in "$@"; do printf "%s\\n" "$a" >> "$FAKE_ARGV"; done\n'
+        '[ -n "${FAKE_STDOUT:-}" ] && printf "%s\\n" "$FAKE_STDOUT"\n'
         'exit "${FAKE_EXIT:-0}"\n'
     )
     exe.chmod(0o755)
@@ -178,6 +246,13 @@ BASE_ENV = {
     "GATE_SLICE_MAX_DROP": "",
     "GATE_MIN_IMAGES": "30",
     "GATE_SKIP_SMALL_SLICES": "false",
+    "GATE_MAX_SKIPPED": "0",
+    "GATE_ALLOW_RUN_BASELINE": "false",
+    "GATE_EXPECT_CHAIN": "",
+    "GATE_REQUIRE_COMMIT": "",
+    "GATE_RECOMPUTE": "false",
+    "GATE_GT": "",
+    "GATE_CLASSES": "",
     "GATE_EVAL_SET": "",
     "GATE_REPORT": "",
     "GATE_REPORT_JSON": "",
@@ -228,7 +303,8 @@ def test_script_builds_the_command_from_the_inputs(tmp_path: Path, fake_cli: Pat
     assert argv == [
         "gate", "--baseline=tag:prod", "--project=demo", "--eval-set=abcdef12",
         "--max-drop=mAP50_95=0.5", "--max-drop=mAP50=1.0", "--per-class-max-drop=AP50_95=2.0",
-        "--slice-max-drop=camera=*:1.5", "--min-images=50", "--skip-small-slices",
+        "--slice-max-drop=camera=*:1.5", "--min-images=50", "--max-skipped=0",
+        "--skip-small-slices",
         "--report=out/cmp.html", "--", "01ARZ3NDEKTSV4RRFFQ69G5FAV",
     ]  # fmt: skip
 
@@ -265,6 +341,8 @@ HOSTILE = [
 def test_hostile_input_values_never_execute_and_arrive_as_single_arguments(
     tmp_path: Path, fake_cli: Path, variable: str, value: str
 ) -> None:
+    if variable == "GATE_BASELINE":
+        value = "tag:" + value
     done, argv, _ = run_script(tmp_path, [fake_cli], {variable: value})
     assert not (tmp_path / "pwned").exists(), done.stderr
     assert done.returncode == 0
@@ -274,7 +352,7 @@ def test_hostile_input_values_never_execute_and_arrive_as_single_arguments(
     leading = [a for a in argv[:-2] if a.startswith("-")]  # after "--" nothing is an option
     for a in leading:  # every option-looking argument is one the script itself added
         assert re.match(
-            r"--(baseline|project|eval-set|max-drop|per-class-max-drop|slice-max-drop|min-images|skip-small-slices|report|report-json)(=|$)",
+            r"--(baseline|project|eval-set|max-drop|per-class-max-drop|slice-max-drop|min-images|max-skipped|skip-small-slices|require-commit|expect-baseline-chain|gt|classes|recompute|report|report-json)(=|$)",
             a,
         ), a
 
@@ -370,3 +448,90 @@ def test_the_script_gates_a_real_store(
     assert os.environ.get("CVPILOT_STORE_DIR") == str(
         store_root
     )  # the test's own setting, untouched
+
+
+# -- trust options -----------------------------------------------------------------------------
+
+
+def test_a_baseline_run_id_is_refused_unless_explicitly_allowed(
+    tmp_path: Path, fake_cli: Path
+) -> None:
+    run_baseline = {"GATE_BASELINE": "01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+    done, argv, out = run_script(tmp_path, [fake_cli], run_baseline)
+    assert done.returncode == 2 and argv == [] and out == "exit_code=2\n"
+    assert "tag:NAME" in done.stderr
+    done, argv, _ = run_script(
+        tmp_path, [fake_cli], {**run_baseline, "GATE_ALLOW_RUN_BASELINE": "true"}
+    )
+    assert done.returncode == 0 and argv[1] == "--baseline=01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+
+def test_trust_inputs_are_passed_as_single_options(tmp_path: Path, fake_cli: Path) -> None:
+    chain = "c" * 64
+    done, argv, _ = run_script(
+        tmp_path,
+        [fake_cli],
+        {
+            "GATE_REQUIRE_COMMIT": "d" * 40,
+            "GATE_EXPECT_CHAIN": chain,
+            "GATE_RECOMPUTE": "true",
+            "GATE_GT": "trusted/gt.parquet",
+            "GATE_CLASSES": "trusted/c.txt",
+            "GATE_MAX_SKIPPED": "2",
+        },
+    )
+    assert done.returncode == 0
+    for expected in (
+        "--require-commit=" + "d" * 40,
+        "--expect-baseline-chain=" + chain,
+        "--recompute",
+        "--gt=trusted/gt.parquet",
+        "--classes=trusted/c.txt",
+        "--max-skipped=2",
+    ):
+        assert expected in argv
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"GATE_RECOMPUTE": "true"},
+        {"GATE_RECOMPUTE": "true", "GATE_GT": "g.parquet"},
+        {"GATE_GT": "g.parquet", "GATE_CLASSES": "c.txt"},
+        {"GATE_RECOMPUTE": "yes"},
+        {"GATE_ALLOW_RUN_BASELINE": "1"},
+    ],
+)
+def test_inconsistent_trust_inputs_fail_closed(
+    tmp_path: Path, fake_cli: Path, overrides: dict[str, str]
+) -> None:
+    done, argv, out = run_script(tmp_path, [fake_cli], overrides)
+    assert done.returncode == 2 and argv == [] and out == "exit_code=2\n"
+
+
+def test_the_step_summary_holds_the_verdict_in_a_fence_without_backticks(
+    tmp_path: Path, fake_cli: Path
+) -> None:
+    summary = tmp_path / "summary.md"
+    hostile = "gate: FAIL (1 violations)\n  skipped slice: `evil` ```\n# injected heading"
+    env = {
+        "PATH": f"{fake_cli}:/usr/bin:/bin",
+        "FAKE_ARGV": str(tmp_path / "argv.txt"),
+        "FAKE_STDOUT": hostile,
+        "FAKE_EXIT": "1",
+        "GITHUB_OUTPUT": str(tmp_path / "out.txt"),
+        "GITHUB_STEP_SUMMARY": str(summary),
+        **BASE_ENV,
+    }
+    done = subprocess.run(  # noqa: S603
+        ["/bin/bash", "-c", gate_script()],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    text = summary.read_text()
+    assert done.returncode == 1 and done.stdout.startswith("gate: FAIL")
+    assert text.startswith("### cvpilot gate\n```text\n") and text.endswith("```\n")
+    assert text.count("```") == 2 and "skipped slice: 'evil'" in text

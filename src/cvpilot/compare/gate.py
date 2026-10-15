@@ -13,8 +13,10 @@ computed with another column, an evaluation set (or a slice) with fewer than ``m
 images, a per-class threshold that gated no class, a slice threshold that matched no slice.
 Classes without ground truth in both snapshots are not applicable (they have no value to
 regress) and are counted, not failed. ``skip_small_slices`` is the one explicit opt-in:
-slices below ``min_images`` are then listed in ``GateResult.skipped`` instead of failing, but a
-threshold whose slices were all skipped still fails. At least one threshold is required.
+slices below ``min_images`` are then listed in ``GateResult.skipped`` instead of failing, but only
+up to ``max_skipped`` of them (default 0, so the flag alone hides nothing), and a threshold whose
+slices were all skipped still fails. Slice thresholds also need ``slice_hash`` on both snapshots:
+without it slice membership is unverified. At least one threshold is required.
 """
 
 from __future__ import annotations
@@ -107,6 +109,9 @@ class Thresholds:
     slice_max_drop: Mapping[str, float] = field(default_factory=dict)
     min_images: int = DEFAULT_MIN_IMAGES
     skip_small_slices: bool = False
+    max_skipped: int = 0
+    """Most slices ``skip_small_slices`` may skip before the gate fails (default 0: any skip
+    fails, so the flag alone cannot hide a regressed small slice)."""
 
     def __post_init__(self) -> None:
         if not (self.max_drop or self.per_class_max_drop or self.slice_max_drop):
@@ -128,6 +133,12 @@ class Thresholds:
             or self.min_images < 1
         ):
             raise ThresholdError("min_images must be an integer of at least 1")
+        if (
+            isinstance(self.max_skipped, bool)
+            or not isinstance(self.max_skipped, int)
+            or self.max_skipped < 0
+        ):
+            raise ThresholdError("max_skipped must be a non-negative integer")
 
 
 @dataclass(frozen=True)
@@ -247,6 +258,17 @@ class _Checker:
         ]
 
     def slices(self) -> None:
+        if self.th.slice_max_drop and (
+            self.cmp.candidate.slice_hash is None or self.cmp.baseline.slice_hash is None
+        ):
+            self.n_checks += 1
+            self.fail(
+                "slice_hash_missing",
+                "slices",
+                "a snapshot does not record its slice membership, so slice results cannot be "
+                "trusted; evaluate again with --slices",
+            )
+            return
         for selector, limit in self.th.slice_max_drop.items():
             rows = self._slice_rows(selector)
             if not rows:
@@ -260,7 +282,14 @@ class _Checker:
                 continue
             gated = 0
             for row in rows:
-                if row.status == "spec_mismatch":
+                if row.status == "size_mismatch":
+                    self.n_checks += 1
+                    self.fail(
+                        "slice_size_mismatch",
+                        row.label,
+                        "the slice holds different images per side",
+                    )
+                elif row.status == "spec_mismatch":
                     self.n_checks += 1
                     self.fail(
                         "slice_spec_mismatch", row.label, "the slice was built from another column"
@@ -303,5 +332,13 @@ def gate(cmp: Comparison, thresholds: Thresholds) -> GateResult:
     checker.headline()
     checker.per_class()
     checker.slices()
+    if len(set(checker.skipped)) > thresholds.max_skipped:
+        checker.n_checks += 1
+        checker.fail(
+            "too_many_skipped_slices",
+            "slices",
+            f"{len(set(checker.skipped))} slices were skipped as too small, more than "
+            f"--max-skipped {thresholds.max_skipped}",
+        )
     ordered = tuple(sorted(checker.violations, key=lambda v: (-v.severity, v.subject, v.kind)))
     return GateResult(not ordered, ordered, tuple(sorted(set(checker.skipped))), checker.n_checks)

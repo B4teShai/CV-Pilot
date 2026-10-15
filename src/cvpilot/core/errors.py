@@ -187,3 +187,16 @@ class HookNotFoundError(CvpilotError, LookupError):
     """No hook matches the object passed to ``autolog``."""
 
     event = "hook_missing"
+
+
+class RecomputeMismatchError(CvpilotError, ValueError):
+    """Stored results differ from a recomputation on trusted ground truth (or cannot be checked)."""
+
+    event = "gate_recompute_failed"
+
+    def __init__(self, message: str, *, run_id: str | None = None, what: str | None = None) -> None:
+        super().__init__(message)
+        self._fields = {"run_id": run_id, "what": what}
+
+    def log_fields(self) -> dict[str, Any]:
+        return {k: v for k, v in self._fields.items() if v is not None}

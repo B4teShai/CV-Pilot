@@ -123,6 +123,7 @@ def baseline_show(
                     "metrics": view.snapshot.metrics,
                     "n_images": view.snapshot.n_images,
                     "history": view.history,
+                    "head": {"seq": view.head_seq, "chain_sha256": view.head_chain_sha256},
                 }
             )
         )
@@ -137,6 +138,8 @@ def baseline_show(
         ("pinned_at", b.pinned_at.isoformat()),
         ("n_images", str(view.snapshot.n_images)),
         ("history", str(view.history)),
+        ("head_seq", str(view.head_seq)),
+        ("head_chain_sha256", view.head_chain_sha256),
     ):
         typer.echo(f"{key}: {value}")
     for name, score in view.snapshot.metrics.items():

@@ -831,6 +831,10 @@ class LocalRunStore:
         """Verified pins: newest per tag, or with ``history`` every row in pin order."""
         return _baselines.list_baselines(self, history=history)
 
+    def baseline_head(self) -> tuple[int, str] | None:
+        """``(seq, chain digest)`` of the newest baseline row (verified), None when empty."""
+        return _baselines.baseline_head(self)
+
 
 def open_store(project: str, root: Path | None = None, *, create: bool = True) -> LocalRunStore:
     """Factory registered as ``cvpilot.stores:local``."""

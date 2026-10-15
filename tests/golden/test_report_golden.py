@@ -36,6 +36,7 @@ def fixture() -> tuple[str, str]:
             "camera=c2": {"mAP50_95": 0.58, "n_images": 40.0},
         },
         slice_spec=spec,
+        slice_hash="c" * 64,
         ci={"mAP50_95": (0.55, 0.65), "mAP50": (0.75, 0.85)},
         params=PARAMS,
     )
@@ -54,6 +55,7 @@ def fixture() -> tuple[str, str]:
             "camera=c2": {"mAP50_95": 0.57, "n_images": 40.0},
         },
         slice_spec=spec,
+        slice_hash="c" * 64,
         ci={"mAP50_95": (0.54, 0.63), "mAP50": (0.76, 0.86)},
         params=PARAMS,
     )

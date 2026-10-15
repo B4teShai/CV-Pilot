@@ -13,9 +13,12 @@ recorded when it was pinned. Callers that use the snapshot then read it through
 ``get_snapshot``, which verifies the file and the run's snapshot chain.
 
 What it does not defend against: someone who can write the database and the snapshot files can
-recompute every digest (nothing is signed); deleting the newest row or dropping the table is
-invisible without an external anchor. Both make an affected tag unknown, and an unknown tag
-fails every gate.
+recompute every digest (nothing is signed). Deleting the newest row is not detectable from the
+store alone, and it is not harmless: undoing a ``--replace`` makes the previous (older, possibly
+better) pin current again, and dropping the table makes every tag unknown (which fails a gate).
+The control is an external anchor: ``baseline_head`` returns the sequence number and chain digest
+of the newest row; ``gate --expect-baseline-chain`` compares it with a value kept outside the
+store (a protected CI variable), so any removed, added or re-ordered row changes it.
 """
 
 from __future__ import annotations
@@ -194,3 +197,12 @@ def list_baselines(store: LocalRunStore, *, history: bool = False) -> list[Basel
             newest[row[1]] = row
         rows = [newest[tag] for tag in sorted(newest)]
     return [_row_baseline(store, row) for row in rows]
+
+
+def baseline_head(store: LocalRunStore) -> tuple[int, str] | None:
+    """``(seq, chain_sha256)`` of the newest row after verifying the whole chain, or None.
+
+    This digest commits to every pin ever made; keep it outside the store to detect rollback.
+    """
+    rows = _all_rows(store)
+    return (int(rows[-1][0]), str(rows[-1][9])) if rows else None

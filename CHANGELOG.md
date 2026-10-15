@@ -7,6 +7,14 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Trusted CI gates: `gate --recompute --gt GT --classes FILE` re-evaluates the stored predictions on
+  trusted ground truth and fails unless every stored metric matches; `slice_hash` (slice membership)
+  is stored in snapshots and must be equal, with equal per-slice image counts; `--require-commit`
+  binds the candidate to the commit under test; a baseline run must be finished and is never the
+  candidate; `--max-skipped` caps `--skip-small-slices` (default 0); `baseline show` prints the chain
+  head and `--expect-baseline-chain` anchors it outside the store. The Action gains the matching
+  inputs, accepts only `tag:` baselines unless `allow-run-baseline` is set and writes the verdict to
+  the step summary. README and docs/architecture/06-cross-cutting.md state the trust model.
 - `benchmarks/compare_throughput.py`: `cvpilot gate` with both reports on a 5 000-image snapshot
   takes 0.27 s end to end in a child process (81 MB peak), against a budget of 3 s and 300 MB.
 - GitHub Action: `action.yml`, a composite action around `cvpilot gate`. Inputs reach the script only
@@ -85,6 +93,9 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Security
 
+- The gate is documented as a trust boundary only under the conditions of the new trust model;
+  without `--recompute`, `--require-commit` and `--expect-baseline-chain` it protects against
+  accidents, not against a contributor who controls the store or the workflow.
 - Snapshot integrity: per-snapshot SHA-256 and a per-run hash chain verified on every read,
   exclusive 0444 snapshot files written in the insert transaction, artifacts re-hashed before
   deduplication and read-only, triggers on `artifact` and `eval_snapshot`, `recursive_triggers`.

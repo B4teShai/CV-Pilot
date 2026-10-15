@@ -6,9 +6,9 @@ import hashlib
 import json
 import os
 import stat
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cvpilot.core.ulid import generate_ulid
 
@@ -152,5 +152,51 @@ def eval_set_hash(
         digest.update(
             (b"," if i else b"") + dump([image_ids[i], int(widths[i]), int(heights[i]), rows])
         )
+    digest.update(b"]}")
+    return digest.hexdigest()
+
+
+MAX_SLICE_HASH_IMAGES = 1_000_000
+"""Most images ``slice_hash`` covers (the evaluation limit); bounds the hashing loop."""
+
+
+def slice_hash(
+    spec: Mapping[str, str], image_ids: Sequence[str], meta: Mapping[str, Any]
+) -> str | None:
+    """Digest of the slice membership of an evaluation set, or None without slices.
+
+    ``eval_set_hash`` covers annotations and classes, not image metadata, so two evaluations of
+    the same ground truth can slice the images differently. This digest covers, for every slice
+    key in sorted order, the key, the metadata column and each image's value in canonical image
+    order: ``{"slices":[{"key":..,"column":..,"values":[[image_id,value],...]},...]}`` (compact
+    JSON, UTF-8, streamed per image). Equal digests mean equal membership of every slice.
+
+    ``image_ids`` is in canonical order and ``meta`` maps a column (with or without the
+    ``meta.`` prefix) to its per-image values in the same order.
+
+    Raises:
+        ValueError: more than ``MAX_SLICE_HASH_IMAGES`` images, or a column is missing or has
+            another length.
+    """
+    if not spec:
+        return None
+    if len(image_ids) > MAX_SLICE_HASH_IMAGES:
+        raise ValueError("too many images to hash slice membership")
+
+    def dump(value: object) -> bytes:
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    digest = hashlib.sha256()
+    digest.update(b'{"slices":[')
+    for n, key in enumerate(sorted(spec)):
+        column = spec[key][5:] if spec[key].startswith("meta.") else spec[key]
+        values = meta[column]
+        if len(values) != len(image_ids):
+            raise ValueError(f"column {column!r} does not cover every image")
+        digest.update((b"," if n else b"") + b'{"key":' + dump(key) + b',"column":' + dump(column))
+        digest.update(b',"values":[')
+        for i, image_id in enumerate(image_ids):
+            digest.update((b"," if i else b"") + dump([image_id, str(values[i])]))
+        digest.update(b"]}")
     digest.update(b"]}")
     return digest.hexdigest()

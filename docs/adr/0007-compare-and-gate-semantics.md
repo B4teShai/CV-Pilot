@@ -89,11 +89,22 @@ Option B.
    private-use characters escaped, length bounded) and every output line starts with `gate:`
    or two spaces, so a class named `::error::...` cannot become a CI workflow command.
 
+9. **A trust boundary only under conditions.** Trust (points 5 above) means "verified against what
+   the store says", and the store can be written by anyone who can open a pull request. The gate
+   is therefore a trust boundary only when it runs from trusted code on a trusted baseline with
+   `--recompute` on ground truth from a trusted place, `--require-commit` and
+   `--expect-baseline-chain` (docs/architecture/06-cross-cutting.md, "Trust model for CI gates").
+   Without them it protects against accidents. Related rules: `slice_hash` makes slice
+   membership part of comparability (`eval_set_hash` is unchanged because stored data exists);
+   a candidate is never its own baseline and a baseline run must be finished; `--skip-small-slices`
+   is capped by `--max-skipped` (default 0).
+
 ## Consequences
 
 - A team adopting the gate sees failures where data is thin. The message names the check and
   the fix (`--min-images`, `--skip-small-slices`, a threshold for a slice that exists).
-- The gate is read-only: it opens the store, verifies and compares; it writes nothing.
+- The gate never writes to the store: it opens it, verifies and compares. It writes only the
+  files named by `--report` and `--report-json`.
 - A stronger significance test (Option C) remains possible later without changing the
   threshold semantics: it would add a column to the report, not a way to pass.
 - Anyone who can write both the database and the snapshot files can recompute every digest;

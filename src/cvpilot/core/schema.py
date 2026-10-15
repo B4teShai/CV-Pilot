@@ -377,8 +377,18 @@ class EvalSnapshot(_Model):
     params: EvalParams | None = None
     provenance: Provenance | None = None
     slice_spec: dict[str, str] = Field(default_factory=dict)
+    slice_hash: str | None = None
+    """Digest of every slice column's per-image values (``core.hashing.slice_hash``); None for
+    snapshots without slices and for snapshots written before it existed."""
     confusion_sha256: str
     predictions_sha256: str
+
+    @field_validator("slice_hash")
+    @classmethod
+    def _slice_hash(cls, value: str | None) -> str | None:
+        if value is not None and not _SHA256.fullmatch(value):
+            raise ValueError("must be 64 lower-case hex characters")
+        return value
 
     @field_validator("run_id")
     @classmethod
@@ -595,6 +605,7 @@ class RunStore(Protocol):
     def put_baseline(self, baseline: Baseline, *, replace: bool = False) -> None: ...
     def get_baseline(self, tag: str) -> Baseline: ...
     def list_baselines(self, *, history: bool = False) -> list[Baseline]: ...
+    def baseline_head(self) -> tuple[int, str] | None: ...
     def artifact_path(self, sha256: str) -> Path: ...
     def open_artifact(self, sha256: str) -> BinaryIO: ...
     def close(self) -> None: ...
