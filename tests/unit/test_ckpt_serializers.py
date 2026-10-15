@@ -198,23 +198,34 @@ def test_unknown_format_is_refused() -> None:
     assert info.value.reason == "unsupported_format"
 
 
+def zip_with_pickle(obj: Any) -> bytes:
+    import pickle
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("archive/data.pkl", pickle.dumps(obj, protocol=2))
+    return buffer.getvalue()
+
+
 def fake_framework(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    seen: dict[str, Any] = {}
+    seen: dict[str, Any] = {"result": {"epoch": 3}}
     module = types.ModuleType(FRAMEWORK)
 
     def save(obj: Any, handle: io.BytesIO) -> None:
-        handle.write(b"PK\x03\x04" + json.dumps(obj, default=str).encode())
+        handle.write(zip_with_pickle(obj))
 
     def load(handle: io.BytesIO, *, map_location: str, weights_only: bool) -> Any:
         seen["weights_only"] = weights_only
         seen["map_location"] = map_location
         if not weights_only:
             raise AssertionError("pickle loading must never be enabled")
-        return json.loads(handle.read()[4:])
+        return seen["result"]
 
     module.save = save  # type: ignore[attr-defined]
     module.load = load  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, FRAMEWORK, module)
+    monkeypatch.setattr(serializers, "framework_version", lambda: (2, 6))
     return seen
 
 
@@ -223,7 +234,7 @@ def test_pt_format_always_loads_with_weights_only(monkeypatch: pytest.MonkeyPatc
     codec = serializers.get_serializer("pt")
     data = codec.dumps({"epoch": 3})
     assert codec.loads(data, map_location="cpu") == {"epoch": 3}
-    assert seen == {"weights_only": True, "map_location": "cpu"}
+    assert seen["weights_only"] is True and seen["map_location"] == "cpu"
     assert codec.suffix == "pt"
     codec.check(lambda n: data[:n], len(data))
 
@@ -241,10 +252,11 @@ def test_pt_format_refuses_files_that_are_not_zip_archives(
 
 
 def test_pt_format_refuses_a_non_mapping_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_framework(monkeypatch)
+    seen = fake_framework(monkeypatch)
+    seen["result"] = [1, 2]
     codec = serializers.get_serializer("pt")
     with pytest.raises(CheckpointCorruptError):
-        codec.loads(b"PK\x03\x04" + b"[1, 2]")
+        codec.loads(zip_with_pickle({"a": 1}))
 
 
 def test_pt_format_without_the_framework_names_the_extra(

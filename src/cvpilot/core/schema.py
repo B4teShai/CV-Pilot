@@ -514,6 +514,8 @@ class Baseline(_Model):
 
 CheckpointKind = Literal["last", "best"]
 CheckpointFormat = Literal["safetensors", "pt"]
+TrustLevel = Literal["authenticated", "anchored", "local_chain_only"]
+RequireTrust = Literal["authenticated", "anchored", "any"]
 CHECKPOINT_SUFFIX: dict[str, str] = {"safetensors": "safetensors", "pt": "pt"}
 MAX_MANIFEST_BYTES = 64 * 1024
 """Largest manifest or pointer file read back; a real one is under 2 KB."""
@@ -549,6 +551,15 @@ class CheckpointManifest(_Model):
     prev_manifest_sha256: str
     prev_chain_sha256: str
     chain_sha256: str
+    auth_tag: str | None = None
+    """HMAC-SHA256 over the other fields, run id bound in (``ckpt/auth.py``); None without a key."""
+
+    @field_validator("auth_tag")
+    @classmethod
+    def _auth_tag(cls, value: str | None) -> str | None:
+        if value is not None and not _SHA256.fullmatch(value):
+            raise ValueError("must be 64 lower-case hex characters")
+        return value
 
     @field_validator("run_id")
     @classmethod
@@ -650,6 +661,14 @@ class CheckpointPointer(_Model):
     manifest_sha256: str
     chain_sha256: str
     pointer_sha256: str
+    auth_tag: str | None = None
+
+    @field_validator("auth_tag")
+    @classmethod
+    def _auth_tag(cls, value: str | None) -> str | None:
+        if value is not None and not _SHA256.fullmatch(value):
+            raise ValueError("must be 64 lower-case hex characters")
+        return value
 
     @field_validator("run_id")
     @classmethod

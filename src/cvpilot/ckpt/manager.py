@@ -32,17 +32,32 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal
 
-from cvpilot.ckpt import preempt
+from cvpilot.ckpt import auth, preempt
 from cvpilot.ckpt.directory import (
     DEFAULT_MAX_BYTES,
+    POLICIES,
+    TRUST_REASONS,
     Entry,
     RunCheckpoints,
     Skipped,
 )
 from cvpilot.ckpt.rng import capture_rng
 from cvpilot.ckpt.serializers import get_serializer
-from cvpilot.core.errors import CheckpointCorruptError, CheckpointError, RunClosedError
-from cvpilot.core.schema import CheckpointFormat, CheckpointKind, CheckpointManifest
+from cvpilot.core.errors import (
+    CheckpointCorruptError,
+    CheckpointError,
+    CheckpointFormatError,
+    CheckpointUntrustedError,
+    RunClosedError,
+)
+from cvpilot.core.schema import (
+    CheckpointFormat,
+    CheckpointKind,
+    CheckpointManifest,
+    RequireTrust,
+    TrustLevel,
+)
+from cvpilot.settings import load_settings
 
 DEFAULT_INTERVAL_MINUTES = 10.0
 MAX_GRACE_S = 3600.0
@@ -59,6 +74,9 @@ class Restored:
     manifest: CheckpointManifest
     run_id: str
     skipped: list[Skipped] = field(default_factory=list)
+    trust: TrustLevel = "local_chain_only"
+    """``authenticated`` (tag verified), ``anchored`` (run-store digest matched) or
+    ``local_chain_only`` (only the directory's own chain vouches)."""
 
 
 def _state_of(name: str, value: Any) -> Any:
@@ -101,7 +119,21 @@ class CheckpointManager:
         notice_interval: float = 5.0,
         clock: Callable[[], float] = time.monotonic,
         lock_timeout: float = 30.0,
+        require_trust: RequireTrust | None = None,
+        allow_pt_format: bool | None = None,
     ) -> None:
+        settings = load_settings()
+        if require_trust is None:
+            require_trust = settings.ckpt_require_trust
+        if require_trust not in POLICIES:
+            raise ValueError(f"require_trust must be one of {', '.join(POLICIES)}")
+        if allow_pt_format is None:
+            allow_pt_format = settings.ckpt_allow_pt
+        if format == "pt" and not allow_pt_format:
+            raise ValueError(
+                "the pt format needs allow_pt_format=True (or CVPILOT_CKPT_ALLOW_PT=1); "
+                "prefer the default safetensors format"
+            )
         if isinstance(keep_last, bool) or not isinstance(keep_last, int) or keep_last < 1:
             raise ValueError("keep_last must be an integer of at least 1")
         if isinstance(keep_best, bool) or not isinstance(keep_best, int) or keep_best < 1:
@@ -147,6 +179,9 @@ class CheckpointManager:
         self._max_bytes = max_checkpoint_bytes
         self._verify = verify_after_save
         self._lock_timeout = lock_timeout
+        self._key = auth.load_key()  # environment only; never stored, logged or passed on
+        self.require_trust: RequireTrust = require_trust
+        self.allow_pt = allow_pt_format
         self._clock = clock
         self._dirs: dict[str, RunCheckpoints] = {}
         self._own = self._dir_for(self._handle.run_id)
@@ -186,6 +221,9 @@ class CheckpointManager:
                 emit=self._emit,
                 anchor=self._handle.checkpoint_digest,
                 lock_timeout=self._lock_timeout,
+                key=self._key,
+                require_trust=self.require_trust,
+                allow_pt=self.allow_pt,
             )
             self._dirs[run_id] = found
         return found
@@ -451,6 +489,10 @@ class CheckpointManager:
         """The newest checkpoint of ``kind`` that verifies and loads, searching this run first
         and then the runs it resumed (nearest first). Corrupt, truncated, forged, replaced or
         symlinked files are skipped and counted, never loaded; ``None`` when nothing verifies.
+
+        Under the trust policy ``anchored`` or ``authenticated`` a candidate that lacks its own
+        proof is never substituted at a lower level: if candidates exist but none qualifies,
+        ``CheckpointUntrustedError`` is raised (event ``checkpoint_untrusted``).
         """
         order = (
             list(run_ids)
@@ -466,13 +508,16 @@ class CheckpointManager:
                     state = get_serializer(verified.manifest.format).loads(
                         verified.data, map_location=map_location
                     )
-                except CheckpointCorruptError as exc:
+                except (CheckpointCorruptError, CheckpointFormatError) as exc:
+                    reason = (
+                        exc.reason if isinstance(exc, CheckpointCorruptError) else "unsafe_loader"
+                    )
                     skipped.append(
-                        Skipped(verified.manifest.step, kind, verified.manifest.path, exc.reason)
+                        Skipped(verified.manifest.step, kind, verified.manifest.path, reason)
                     )
                     self._emit(
                         "warning", "checkpoint_skipped_corrupt", run_id=run_id,
-                        step=verified.manifest.step, kind=kind, reason=exc.reason,
+                        step=verified.manifest.step, kind=kind, reason=reason,
                     )  # fmt: skip
                     continue
                 skipped.extend(found.skipped)
@@ -480,13 +525,23 @@ class CheckpointManager:
                 self._emit(
                     "info", "checkpoint_restored", run_id=run_id, step=manifest.step, kind=kind,
                     size_bytes=manifest.size_bytes, sha256_prefix=manifest.sha256[:12],
-                    skipped=len(skipped),
+                    skipped=len(skipped), trust_level=verified.trust,
                 )  # fmt: skip
-                self.last_restore = Restored(state, manifest, run_id, skipped)
+                self.last_restore = Restored(state, manifest, run_id, skipped, verified.trust)
                 return self.last_restore
             skipped.extend(found.skipped)
-        self._emit("info", "checkpoint_restore_empty", dir=str(self._root), skipped=len(skipped))
         self.last_restore = None
+        untrusted = [s for s in skipped if s.reason in TRUST_REASONS]
+        if untrusted and self.require_trust != "any":
+            self._emit(
+                "error", "checkpoint_untrusted", required=self.require_trust,
+                rejected=len(untrusted), reasons=sorted({s.reason for s in untrusted}),
+            )  # fmt: skip
+            raise CheckpointUntrustedError(
+                f"{len(untrusted)} checkpoint(s) exist but none reaches the required trust level "
+                f"{self.require_trust!r}; nothing was restored (see CVPILOT_CKPT_REQUIRE_TRUST)"
+            )
+        self._emit("info", "checkpoint_restore_empty", dir=str(self._root), skipped=len(skipped))
         return None
 
     def restore_latest_valid(self, *, map_location: str = "cpu") -> dict[str, Any] | None:

@@ -95,7 +95,8 @@ browser ↔ server; server ↔ notification channels; CV-Pilot ↔ third-party p
 | Unauthenticated access to run data (Aim's 2026 reports) | server | every route except `/healthz` and valid share links requires a project token; tokens are random 32 bytes, stored as SHA-256; auth-on-every-route test and schemathesis fuzzing | planned |
 | Token leakage through logs or captured command lines | client, CI | key-based redaction in `logging.py` (`*token*`, `authorization`, ...); `Repro.command_line` redacted per argument (`redact_argv`) and `Repro.config` by key before storage; `CVPILOT_STORE_COMMAND_LINE=false` stores no arguments | built |
 | Transport interception | client ↔ server | TLS terminated by a reverse proxy; the server refuses to start with `CVPILOT_SERVER_URL` scheme `http` unless `CVPILOT_ENV=dev` | planned |
-| Arbitrary code execution from a checkpoint | `ckpt/`, hooks | `torch.load(weights_only=True)` always; `safetensors` for `best`; a file without a manifest is never loaded; checksum before load | planned |
+| Arbitrary code execution from a checkpoint | `ckpt/`, hooks | safetensors is the default and has no executing load path; `.pt` is opt-in (`allow_pt_format` or `CVPILOT_CKPT_ALLOW_PT=1`), needs the framework at 2.6 or newer (read from package metadata before anything is imported), is zip-pre-scanned (member count, names, sizes, compression ratio, one `data.pkl` whose opcodes may name only tensor storage, dtype and ordered-dict globals) and is loaded only with `weights_only=True` from the verified bytes; a file without a manifest is never loaded; residual risk: a flaw in the framework's own restricted unpickler | built |
+| Forged, replaced or rolled-back checkpoint in a directory other people can write | `ckpt/` | see "Who can write the checkpoint directory" below: HMAC tags with `CVPILOT_CKPT_KEY`, the run-store digest, the trust policy `CVPILOT_CKPT_REQUIRE_TRUST`, a trust level on every restore; fails closed with `checkpoint_untrusted` | built |
 | Pickle or code execution from dataset or prediction files | `eval/`, `store/` | only Parquet and JSON files are read; no `pickle`, no `eval`, no `yaml.load` without `SafeLoader`; Parquet metadata (file size, rows, row groups, decoded bytes, string widths) is checked before data is read; eval limits are named constants with boundary tests | built (eval, Parquet tables), planned (images) |
 | Server-side request forgery through webhook URLs | `notify/`, server | webhook and Slack URLs come from the environment only, never from API requests; outbound requests resolve the host and reject private and link-local ranges unless `CVPILOT_ENV=dev` | planned |
 | Denial of service on ingest or websocket | server | per-token rate limit (600 requests/min), batch size cap (1 000 points, 1 MB), websocket backpressure with 100-message queue per client | planned |
@@ -120,6 +121,34 @@ browser ↔ server; server ↔ notification channels; CV-Pilot ↔ third-party p
 | Credential exposure in `doctor` | CLI | `doctor` reports whether `CVPILOT_TOKEN` is set, never its value | planned |
 | Copyleft contamination of the distribution through the Ultralytics extra | `hooks/` | the framework is declared only in the `[ultralytics]` extra and never imported by this package (the hook gets the model through `add_callback`); a layering test parses every module and fails on an import anywhere but `hooks/ultralytics.py`, and on a top-level one there; no code is vendored or derived; the AGPL-3.0 notice is in the adapter, in the `hook_attached` event and in the runtime docs | built |
 | A hook callback raising into, or stalling, the host training loop | `hooks/` | every callback body runs under a guard that catches `Exception` (never `KeyboardInterrupt`), counts, logs once and disables the hook after 10 consecutive failures; no network in callbacks; values converted defensively and capped; a hung forwarder cannot delay a callback | built |
+
+### Who can write the checkpoint directory
+
+Digests, the manifest chain and the `LATEST` pointer detect damage (kill during a write, a
+truncated upload, a flipped bit). They do not detect an adversary who can write the directory:
+that adversary can write a new manifest, a data file with the matching SHA-256, a new pointer
+and a consistent chain. Three levels of trust, reported on every restore (`trust_level` in
+`checkpoint_restored`, `Restored.trust`) and selectable with `CVPILOT_CKPT_REQUIRE_TRUST`
+(`any`, `anchored`, `authenticated`; CLI `--require-trust`):
+
+| Level | Proof | Works without a run store | Holds against a writer of the directory |
+|---|---|---|---|
+| `authenticated` | HMAC-SHA256 tag (key `CVPILOT_CKPT_KEY`, 32 to 1024 bytes, environment only) over a domain label, the run id and the canonical bytes of the manifest (and of the pointer) | yes (the spot-instance resume case) | yes, unless the key leaks |
+| `anchored` | the digest of the manifest file is in the run store (`checkpoint_manifest`, append-only) | no | yes, unless the store is writable too |
+| `local_chain_only` | the directory's own chain and pointer | yes | no |
+
+Rules: under `authenticated` and `anchored` every candidate needs its own proof; nothing is
+vouched for by a neighbour's chain, so a forged newer manifest cannot launder an older one. If
+candidates exist but none reaches the required level, restore raises `checkpoint_untrusted`
+and loads nothing; it never falls back to a lower level. A store lookup that fails is reported
+as `anchor_error` and fails closed under `anchored`; it is not treated as "no store". A tag that
+is present but wrong rejects the candidate under every policy. With a key set, a pointer
+without a valid tag is ignored. The default policy is `any`, because a laptop or a private
+node resuming its own directory has no adversary: for any directory that is shared, restored
+from a bucket or writable by others, set a key and `CVPILOT_CKPT_REQUIRE_TRUST=authenticated`
+(the GitHub Action and the tutorial do). Key rotation: tags made under the old key fail under
+the new one (`auth_invalid`); unsigned files from before the key are accepted only under `any`.
+The key is never logged, stored, written to a manifest or included in an error message.
 
 Redaction of `Repro.command_line` and `Repro.config` is best effort, not a guarantee. Keys
 are matched after camelCase and hyphen normalisation by suffix (`accessToken`, `GITHUBTOKEN`,

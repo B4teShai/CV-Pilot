@@ -88,6 +88,27 @@ Option C, implemented by `ckpt/` with the following rules.
 8. **Save overhead budget.** Hashing and manifest writing add at most 5 % to the wall time of
    `torch.save` for the same state on local SSD; measured by `benchmarks/ckpt_save.py`.
 
+## Amendment (2026-10-15): trust and formats as built
+
+- **Trust.** The directory's digests and chain detect damage, not an adversary who can write
+  the directory. Restore therefore reports a trust level (`authenticated`: HMAC tag verified
+  with `CVPILOT_CKPT_KEY`; `anchored`: manifest digest matches the run store; `local_chain_only`)
+  and enforces a policy (`CVPILOT_CKPT_REQUIRE_TRUST`, default `any`). Under `anchored` and
+  `authenticated` each candidate needs its own proof, nothing is vouched for by a neighbour, and
+  a failure to reach the level raises `checkpoint_untrusted` instead of loading a weaker file.
+  See "Who can write the checkpoint directory" in
+  [../architecture/06-cross-cutting.md](../architecture/06-cross-cutting.md).
+- **Formats.** safetensors is the default for both kinds (rule 3's `.pt` for `last` is replaced:
+  non-tensor state is bounded JSON inside the safetensors file). The pickle-based format is
+  named `pt` in the manifest, is opt-in (`allow_pt_format` / `CVPILOT_CKPT_ALLOW_PT=1`), needs
+  the framework at 2.6 or newer because `weights_only=True` was bypassed before that, is
+  pre-scanned without being executed and is loaded only with `weights_only=True` from the
+  verified bytes.
+- **Names.** The pointers are `LATEST` and `LATEST_BEST` (`BEST` would collide with the `best/`
+  directory on case-insensitive filesystems). Manifests also carry `prev_manifest_sha256`,
+  `prev_chain_sha256`, `chain_sha256`, `metric_mode` and `auth_tag`; `uri` is the intended
+  remote location, and a `step_N.remote.json` marker records a verified upload.
+
 ## Consequences
 
 - Easier: any kill, at any point of save or upload, leaves a loadable checkpoint; resume is

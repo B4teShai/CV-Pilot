@@ -39,6 +39,8 @@ _FIELDS: dict[str, tuple[str, Callable[[str], str]]] = {
     "store_dir": ("STORE_DIR", str),
     "forward_to": ("FORWARD_TO", str),
     "forward_hosts": ("FORWARD_HOSTS", str),
+    "ckpt_require_trust": ("CKPT_REQUIRE_TRUST", str.lower),
+    "ckpt_allow_pt": ("CKPT_ALLOW_PT", _bool_text),
 }
 
 
@@ -124,6 +126,8 @@ class Settings(BaseModel, frozen=True):
     store_dir: Path | None = None
     forward_to: tuple[str, ...] = ()
     forward_hosts: tuple[str, ...] = ()
+    ckpt_require_trust: Literal["authenticated", "anchored", "any"] = "any"
+    ckpt_allow_pt: bool = False
 
     @field_validator("forward_hosts", mode="before")
     @classmethod

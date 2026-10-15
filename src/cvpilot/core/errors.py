@@ -235,3 +235,13 @@ class CheckpointBusyError(CheckpointError):
 
 class CheckpointStepError(CheckpointError, ValueError):
     """A save would not advance the step of its kind (steps only increase per ``(run, kind)``)."""
+
+
+class CheckpointUntrustedError(CheckpointError):
+    """Checkpoints exist but none reaches the trust level the policy requires (fail closed)."""
+
+    event = "checkpoint_untrusted"
+
+
+class CheckpointFormatError(CheckpointError):
+    """A checkpoint format may not be used here (not opted in, or the loader is too old)."""

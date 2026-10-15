@@ -41,7 +41,7 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from cvpilot.ckpt import fsops
+from cvpilot.ckpt import auth, fsops
 from cvpilot.ckpt.serializers import get_serializer
 from cvpilot.core.errors import (
     CheckpointCorruptError,
@@ -60,6 +60,8 @@ from cvpilot.core.schema import (
     CheckpointKind,
     CheckpointManifest,
     CheckpointPointer,
+    RequireTrust,
+    TrustLevel,
 )
 from cvpilot.core.ulid import is_valid_ulid
 from cvpilot.logging import get_logger
@@ -74,6 +76,11 @@ _DATA = re.compile(r"step_([0-9]{9,19})\.(safetensors|pt)")
 _MANIFEST = re.compile(r"step_([0-9]{9,19})\.manifest\.json")
 _MARKER = re.compile(r"step_([0-9]{9,19})\.remote\.json")
 _SHA = re.compile(r"[0-9a-f]{64}")
+TRUST_REASONS = frozenset(
+    {"auth_invalid", "auth_missing", "not_anchored", "anchor_error", "store_mismatch"}
+)
+"""Reasons that mean "not trusted at the required level" (event ``checkpoint_untrusted``)."""
+POLICIES = ("authenticated", "anchored", "any")
 
 Emit = Callable[..., None]
 Anchor = Callable[[str, str, int], "str | None"]
@@ -109,6 +116,7 @@ class Verified:
     manifest: CheckpointManifest
     manifest_sha256: str
     data: bytes | None = None
+    trust: TrustLevel = "local_chain_only"
 
 
 @dataclass(frozen=True)
@@ -121,6 +129,7 @@ class Entry:
     status: Literal["valid", "corrupt"]
     reason: str | None = None
     manifest: CheckpointManifest | None = None
+    trust: TrustLevel | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +147,8 @@ class _Cand:
     manifest: CheckpointManifest | None = None
     digest: str | None = None
     reason: str | None = None
+    tag_state: str = "nokey"  # nokey | absent | valid | invalid
+    trust: TrustLevel = "local_chain_only"
 
 
 def _check_step(step: object) -> int:
@@ -177,7 +188,16 @@ class RunCheckpoints:
         emit: Emit | None = None,
         anchor: Anchor | None = None,
         lock_timeout: float = 30.0,
+        key: bytes | None = None,
+        require_trust: RequireTrust = "any",
+        allow_pt: bool = False,
     ) -> None:
+        if require_trust not in POLICIES:
+            raise CheckpointError(f"require_trust must be one of {', '.join(POLICIES)}")
+        if require_trust == "authenticated" and key is None:
+            raise CheckpointError(
+                f"require_trust=authenticated needs the key in {auth.KEY_ENV} (never stored)"
+            )
         if not is_valid_ulid(run_id):
             raise CheckpointPathError(f"{run_id[:40]!r} is not a valid run id (26-character ULID)")
         if max_bytes < 1 or max_entries < 1:
@@ -190,6 +210,9 @@ class RunCheckpoints:
         self._emit_fn = emit
         self._anchor = anchor
         self._lock_timeout = lock_timeout
+        self._key = key
+        self.require_trust: RequireTrust = require_trust
+        self.allow_pt = allow_pt
         self.skipped: list[Skipped] = []
         try:
             self.path = Path(root).expanduser().resolve() / run_id
@@ -246,7 +269,8 @@ class RunCheckpoints:
 
     def _skip(self, step: int | None, kind: str, name: str, reason: str) -> None:
         self.skipped.append(Skipped(step, kind, name, reason))
-        self._emit("warning", "checkpoint_skipped_corrupt", step=step, kind=kind, reason=reason)
+        event = "checkpoint_untrusted" if reason in TRUST_REASONS else "checkpoint_skipped_corrupt"
+        self._emit("warning", event, step=step, kind=kind, reason=reason)
 
     # -- manifests and pointers ---------------------------------------------------------------
 
@@ -289,7 +313,25 @@ class RunCheckpoints:
             return cand
         cand.manifest = manifest
         cand.digest = hashlib.sha256(raw).hexdigest()
+        if self._key is not None:
+            if manifest.auth_tag is None:
+                cand.tag_state = "absent"
+            else:
+                signed = self._manifest_bytes(manifest)
+                valid = auth.verify(
+                    self._key, auth.MANIFEST_LABEL, self.run_id, signed, manifest.auth_tag
+                )
+                cand.tag_state = "valid" if valid else "invalid"
         return cand
+
+    @staticmethod
+    def _manifest_bytes(manifest: CheckpointManifest) -> bytes:
+        """The canonical bytes a manifest tag covers: the record without its own tag."""
+        return manifest.model_copy(update={"auth_tag": None}).model_dump_json().encode()
+
+    @staticmethod
+    def _pointer_bytes(pointer: CheckpointPointer) -> bytes:
+        return pointer.model_copy(update={"auth_tag": None}).model_dump_json().encode()
 
     def _candidates(self, kind_fd: int, kind: str) -> list[_Cand]:
         cands: list[_Cand] = []
@@ -328,6 +370,14 @@ class RunCheckpoints:
             or pointer.manifest != f"{kind}/{manifest_name(pointer.step)}"
         ):
             return None
+        if self._key is not None and not auth.verify(
+            self._key,
+            auth.POINTER_LABEL,
+            self.run_id,
+            self._pointer_bytes(pointer),
+            pointer.auth_tag,
+        ):
+            return None  # with a key, an untagged or wrongly tagged pointer is not believed
         return pointer
 
     def _write_pointer(self, run_fd: int, manifest: CheckpointManifest, digest: str) -> None:
@@ -343,6 +393,14 @@ class RunCheckpoints:
                 self.run_id, manifest.kind, manifest.step, name, digest, manifest.chain_sha256
             ),
         )
+        if self._key is not None:
+            pointer = pointer.model_copy(
+                update={
+                    "auth_tag": auth.tag(
+                        self._key, auth.POINTER_LABEL, self.run_id, self._pointer_bytes(pointer)
+                    )
+                }
+            )
         target = _POINTER_NAME[manifest.kind]
         temp = fsops.temp_name(target)
         try:
@@ -353,19 +411,53 @@ class RunCheckpoints:
             raise
         fsops.fsync_dir(run_fd)
 
-    def _stored_digest(self, kind: str, step: int) -> str | None:
+    def _stored_digest(self, kind: str, step: int) -> tuple[str | None, bool]:
+        """``(digest, errored)``: the digest recorded in the run store, if any, and whether the
+        lookup failed (a failing store is not the same as a store with no row)."""
         if self._anchor is None:
-            return None
+            return None, False
         try:
             digest = self._anchor(self.run_id, kind, step)
-        except Exception as exc:  # noqa: BLE001  # a broken anchor weakens trust, never aborts
+        except Exception as exc:  # noqa: BLE001  # a broken anchor is reported, never ignored
             self._emit("warning", "checkpoint_anchor_failed", error_type=type(exc).__name__)
-            return None
-        return digest if isinstance(digest, str) and _SHA.fullmatch(digest) else None
+            return None, True
+        return (digest if isinstance(digest, str) and _SHA.fullmatch(digest) else None), False
 
     def _judge(self, run_fd: int, kind_fd: int, kind: str) -> list[_Cand]:
-        """Apply the trust rules of the module docstring to every manifest, newest first."""
+        """Decide which manifests are trusted at the required level, newest first."""
         cands = self._candidates(kind_fd, kind)
+        if self.require_trust == "any":
+            return self._judge_chain(run_fd, cands, kind)
+        return self._judge_strict(cands, kind)
+
+    def _judge_strict(self, cands: list[_Cand], kind: str) -> list[_Cand]:
+        """Policies ``authenticated`` and ``anchored``: every candidate needs its own proof (a
+        valid tag, or the digest in the run store). Nothing is vouched for by a neighbour, so a
+        forged newer manifest cannot launder an older one."""
+        for cand in cands:
+            manifest = cand.manifest
+            if manifest is None or cand.step is None or cand.digest is None:
+                continue
+            if cand.tag_state == "invalid":
+                cand.reason = "auth_invalid"
+                continue
+            stored, errored = self._stored_digest(kind, cand.step)
+            if stored is not None and stored != cand.digest:
+                cand.reason = "store_mismatch"
+                continue
+            authenticated = cand.tag_state == "valid"
+            if self.require_trust == "authenticated" and not authenticated:
+                cand.reason = "auth_missing"
+            elif not authenticated and stored is None:
+                cand.reason = "anchor_error" if errored else "not_anchored"
+            else:
+                cand.trust = "authenticated" if authenticated else "anchored"
+        return cands
+
+    def _judge_chain(self, run_fd: int, cands: list[_Cand], kind: str) -> list[_Cand]:
+        """Policy ``any``: the chain rules of the module docstring. A wrong tag always rejects;
+        the level reached is reported (``local_chain_only`` when neither a tag nor the store
+        vouches)."""
         pointer = self._pointer(run_fd, kind)
         chained: set[int] = set()
         if pointer is not None:
@@ -383,7 +475,13 @@ class RunCheckpoints:
                 expected = None
                 continue
             reason: str | None = None
-            if expected is not None and (expected == GENESIS_DIGEST or cand.digest != expected):
+            if cand.tag_state == "invalid":
+                reason = "auth_invalid"
+            if (
+                reason is None
+                and expected is not None
+                and (expected == GENESIS_DIGEST or cand.digest != expected)
+            ):
                 reason = "link_mismatch"
             if (
                 reason is None
@@ -395,18 +493,30 @@ class RunCheckpoints:
                 )
             ):
                 reason = "pointer_mismatch"
-            stored = self._stored_digest(kind, cand.step) if reason is None else None
+            stored: str | None = None
+            if reason is None:
+                stored, _ = self._stored_digest(kind, cand.step)
             if stored is not None and stored != cand.digest:
                 reason = "store_mismatch"
+            authenticated = cand.tag_state == "valid"
             if (
                 reason is None
                 and pointer is not None
                 and cand.step > pointer.step
                 and cand.step not in chained
                 and stored is None
+                and not authenticated
             ):
                 reason = "unanchored"
             cand.reason = reason
+            if reason is None:
+                cand.trust = (
+                    "authenticated"
+                    if authenticated
+                    else "anchored"
+                    if stored is not None
+                    else "local_chain_only"
+                )
             expected = None if reason else manifest.prev_manifest_sha256
         return cands
 
@@ -473,12 +583,15 @@ class RunCheckpoints:
                     if cand.reason is not None or manifest is None or cand.digest is None:
                         self._skip(cand.step, kind, cand.name, cand.reason or "manifest_invalid")
                         continue
+                    if manifest.format == "pt" and not self.allow_pt:
+                        self._skip(manifest.step, kind, cand.name, "pt_not_allowed")
+                        continue
                     try:
                         data = self._check_data(kind_fd, manifest, load=load)
                     except CheckpointCorruptError as exc:
                         self._skip(manifest.step, kind, cand.name, exc.reason)
                         continue
-                    yield Verified(manifest, cand.digest, data)
+                    yield Verified(manifest, cand.digest, data, cand.trust)
             finally:
                 os.close(kind_fd)
 
@@ -518,6 +631,7 @@ class RunCheckpoints:
                             "corrupt" if reason else "valid",
                             reason,
                             manifest if reason is None else None,
+                            cand.trust if reason is None else None,
                         )
                     )
                 for name in names:
@@ -683,6 +797,17 @@ class RunCheckpoints:
                 prev_chain_sha256=prev_chain,
                 chain_sha256=checkpoint_chain(prev_chain, self.run_id, kind, step, sha256, size),
             )
+            if self._key is not None:
+                manifest = manifest.model_copy(
+                    update={
+                        "auth_tag": auth.tag(
+                            self._key,
+                            auth.MANIFEST_LABEL,
+                            self.run_id,
+                            self._manifest_bytes(manifest),
+                        )
+                    }
+                )
             raw = (manifest.model_dump_json() + "\n").encode()
             fsops.write_exclusive(kind_fd, temp_manifest, raw)
             fsops.fsync_dir(kind_fd)
