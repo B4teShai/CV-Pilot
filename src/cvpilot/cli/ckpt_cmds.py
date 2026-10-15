@@ -142,6 +142,14 @@ def _row(run_id: str, entry: Any) -> dict[str, Any]:
     }
 
 
+def _failed_row(run_id: str, kind: str, reason: str, policy: str) -> dict[str, Any]:
+    return {
+        "run_id": run_id, "kind": kind, "step": None, "name": run_id, "status": "corrupt",
+        "reason": reason, "trust": None, "size_bytes": None, "sha256": None, "format": None,
+        "created_at": None, "policy": policy,
+    }  # fmt: skip
+
+
 def _line(row: dict[str, Any]) -> str:
     step = "-" if row["step"] is None else f"{row['step']:09d}"
     detail = row["trust"] or row["reason"] or ""
@@ -162,13 +170,24 @@ def _collect(
     session = _Session(ctx, root, project, trust)
     try:
         rows: list[dict[str, Any]] = []
-        for run_id in _run_ids(root, run):
+        try:
+            run_ids = _run_ids(root, run)
+        except (
+            CheckpointError
+        ) as exc:  # the root of the file system, a directory that cannot be read
+            raise _usage(str(exc)) from None
+        for run_id in run_ids:
             found = session.open(run_id)
             for one in _kinds(kind):
-                rows += [
-                    {**_row(run_id, e), "policy": session.policy}
-                    for e in found.inspect(one, check_data=check_data)
-                ]
+                try:
+                    entries = found.inspect(one, check_data=check_data)
+                except CheckpointError as exc:
+                    # a hostile or unreadable entry (a symlink or a file named like a run, a
+                    # directory nobody may read) is a corrupt row; the rest is still examined
+                    reason = getattr(exc, "reason", None) or "unreadable"
+                    rows.append(_failed_row(run_id, one, reason, session.policy))
+                    continue
+                rows += [{**_row(run_id, e), "policy": session.policy} for e in entries]
         return rows
     finally:
         session.close()

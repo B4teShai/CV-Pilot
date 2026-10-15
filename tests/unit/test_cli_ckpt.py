@@ -188,3 +188,56 @@ def test_help_documents_the_exit_codes(invoke: Invoke) -> None:
     for sub in ("list", "verify", "prune"):
         res = invoke("ckpt", sub, "--help")
         assert res.code == 0 and "Exit" in res.out
+
+
+def test_a_symlink_named_like_a_run_is_a_corrupt_row_and_the_rest_is_still_listed(
+    invoke: Invoke, seeded: str, tmp_path: Path
+) -> None:
+    import os
+
+    from cvpilot.core.hashing import new_run_id
+
+    hostile = new_run_id()
+    os.symlink("/etc", tmp_path / "ckpt" / hostile)
+    for command in ("list", "verify"):
+        res = invoke("ckpt", command, str(tmp_path / "ckpt"), "--json")
+        rows = json.loads(res.out)
+        bad = [r for r in rows if r["run_id"] == hostile]
+        assert bad and bad[0]["status"] == "corrupt" and bad[0]["reason"] == "not_a_directory"
+        good = [r for r in rows if r["run_id"] == seeded]
+        assert len(good) == 3 and all(r["status"] == "valid" for r in good)
+        assert res.code == (1 if command == "verify" else 0)
+
+
+def test_a_file_named_like_a_run_is_reported_the_same_way(
+    invoke: Invoke, seeded: str, tmp_path: Path
+) -> None:
+    from cvpilot.core.hashing import new_run_id
+
+    odd = new_run_id()
+    (tmp_path / "ckpt" / odd).write_text("not a directory")
+    rows = json.loads(invoke("ckpt", "verify", str(tmp_path / "ckpt"), "--json").out)
+    assert {r["reason"] for r in rows if r["run_id"] == odd} == {"not_a_directory"}  # last and best
+
+
+def test_the_root_of_the_file_system_is_a_usage_error(invoke: Invoke) -> None:
+    for command in ("list", "verify"):
+        res = invoke("ckpt", command, "/")
+        assert res.code == 2 and "error:" in res.err
+    assert invoke("ckpt", "prune", "/", "--run", "01ARZ3NDEKTSV4RRFFQ69G5FAV").code == 2
+
+
+def test_an_unreadable_run_directory_is_a_row_not_a_traceback(
+    invoke: Invoke, seeded: str, tmp_path: Path
+) -> None:
+    import os
+
+    path = tmp_path / "ckpt" / seeded
+    path.chmod(0)
+    try:
+        if os.access(path, os.R_OK):  # running as root: permissions do not apply
+            pytest.skip("permissions are not enforced for this user")
+        res = invoke("ckpt", "verify", str(tmp_path / "ckpt"), "--json")
+        assert res.code == 1 and "Traceback" not in res.err
+    finally:
+        path.chmod(0o755)
