@@ -551,6 +551,9 @@ class CheckpointManifest(_Model):
     prev_manifest_sha256: str
     prev_chain_sha256: str
     chain_sha256: str
+    prev_step: StrictInt | None = Field(default=None, ge=0, le=MAX_STEP)
+    """Step of the manifest ``prev_manifest_sha256`` names: lets a reader tell a predecessor that
+    was replaced (same step, other digest) from one that retention removed (a gap)."""
     auth_tag: str | None = None
     """HMAC-SHA256 over the other fields, run id bound in (``ckpt/auth.py``); None without a key."""
 

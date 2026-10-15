@@ -732,20 +732,30 @@ class RunCheckpoints:
                     chained.add(cand.step)
                     current = cand.digest
         expected: str | None = None
+        expected_step: int | None = None
         for cand in cands:
             manifest = cand.manifest
             if manifest is None or cand.step is None or cand.digest is None:
-                expected = None
+                expected = expected_step = None
                 continue
             reason: str | None = None
             if cand.tag_state == "invalid":
                 reason = "auth_invalid"
-            if (
-                reason is None
-                and expected is not None
-                and (expected == GENESIS_DIGEST or cand.digest != expected)
-            ):
-                reason = "link_mismatch"
+            stored: str | None = None
+            if reason is None:
+                stored, _ = self._stored_digest(kind, cand.step)
+            # A checkpoint with its own proof (a valid tag, or the digest in the run store) does
+            # not need its successor's vouching, so retention may leave gaps between the ones it
+            # keeps (the best by metric plus the newest) without making the older ones "corrupt".
+            own_proof = cand.tag_state == "valid" or (stored is not None and stored == cand.digest)
+            if reason is None and not own_proof and expected is not None:
+                gap = (
+                    expected != GENESIS_DIGEST
+                    and expected_step is not None
+                    and cand.step < expected_step  # the vouched predecessor is gone: a gap
+                )
+                if expected == GENESIS_DIGEST or (cand.digest != expected and not gap):
+                    reason = "link_mismatch"
             if (
                 reason is None
                 and pointer is not None
@@ -756,10 +766,7 @@ class RunCheckpoints:
                 )
             ):
                 reason = "pointer_mismatch"
-            stored: str | None = None
-            if reason is None:
-                stored, _ = self._stored_digest(kind, cand.step)
-            if stored is not None and stored != cand.digest:
+            if reason is None and stored is not None and stored != cand.digest:
                 reason = "store_mismatch"
             authenticated = cand.tag_state == "valid"
             if (
@@ -781,6 +788,7 @@ class RunCheckpoints:
                     else "local_chain_only"
                 )
             expected = None if reason else manifest.prev_manifest_sha256
+            expected_step = None if reason else manifest.prev_step
         return cands
 
     # -- verifying data ------------------------------------------------------------------------
@@ -1076,6 +1084,7 @@ class RunCheckpoints:
                 created_at=created_at or datetime.now(timezone.utc),
                 prev_manifest_sha256=prev_digest,
                 prev_chain_sha256=prev_chain,
+                prev_step=previous.step if previous and previous.digest else None,
                 chain_sha256=checkpoint_chain(prev_chain, self.run_id, kind, step, sha256, size),
             )
             if self._key is not None:
@@ -1341,7 +1350,7 @@ class RunCheckpoints:
         kind: CheckpointKind,
         *,
         keep: int,
-        mode: Literal["max", "min"] = "max",
+        mode: Literal["max", "min"] | None = None,
         is_confirmed: Callable[[CheckpointManifest], bool] | None = None,
         dry_run: bool = False,
     ) -> PruneResult:
@@ -1353,8 +1362,12 @@ class RunCheckpoints:
         ``is_confirmed`` is given nothing is deleted until the newest valid checkpoint is
         confirmed (uploaded and verified remotely).
 
+        ``mode`` says whether a higher or a lower metric is better for ``best``. Leave it ``None``
+        to use the mode the checkpoints were saved with (``metric_mode`` in their manifests); a
+        value that contradicts it is refused rather than silently ranking the wrong end.
+
         Raises:
-            CheckpointError: ``keep`` is below 1.
+            CheckpointError: ``keep`` is below 1, or ``mode`` contradicts the saved checkpoints.
         """
         _check_kind(kind)
         if isinstance(keep, bool) or not isinstance(keep, int) or keep < 1:
@@ -1379,7 +1392,16 @@ class RunCheckpoints:
                 if kind == "last":
                     kept = valid[:keep]
                 else:
-                    sign = 1.0 if mode == "max" else -1.0
+                    saved_modes = {m.metric_mode for m in valid if m.metric_mode is not None}
+                    if len(saved_modes) > 1 or (
+                        mode is not None and saved_modes and saved_modes != {mode}
+                    ):
+                        raise CheckpointError(
+                            "the --mode given contradicts the mode the checkpoints were saved "
+                            f"with ({', '.join(sorted(saved_modes))}); nothing was deleted"
+                        )
+                    ranking = mode or (next(iter(saved_modes)) if saved_modes else "max")
+                    sign = 1.0 if ranking == "max" else -1.0
                     ranked = sorted(
                         valid, key=lambda m: (sign * (m.metric_value or 0.0), m.step), reverse=True
                     )

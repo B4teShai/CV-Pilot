@@ -14,6 +14,18 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   executed by the test suite; `recover_run`, `list_runs` and `get_run_view` now honour
   `CVPILOT_STORE_DIR` like `init` does. Remote listings are bounded.
 
+### Fixed
+
+- Saving and restoring share one set of bounds: an integer of 20 digits below 2**64, a state of
+  more than 100 000 nodes, an oversized key or a nesting the restore refuses is now refused at save
+  with a clear error instead of being saved and then failing to load. A randomised save-then-load
+  test covers it.
+- `cvpilot ckpt prune` ranked `best` checkpoints with `--mode max` by default and deleted the
+  lowest loss of a `min` run. It now uses the mode the checkpoints were saved with; a contradicting
+  `--mode` is a usage error that deletes nothing. Retention that keeps non-adjacent best
+  checkpoints no longer turns the older ones into `link_mismatch` corruption: manifests record the
+  step of their predecessor (`prev_step`), so a gap is told apart from a replaced predecessor.
+
 ### Security
 
 - No valid checkpoint with a known floor is never a fresh start: restore, `resume_path` and

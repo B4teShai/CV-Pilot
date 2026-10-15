@@ -295,7 +295,7 @@ kind is never deleted and at least one is always kept (``--keep-*`` of 0 is refu
 | `--run` | str |  | Run to prune (required). Required. |
 | `--keep-last` | int range | `3` |  |
 | `--keep-best` | int range | `2` |  |
-| `--mode` | one of `max`, `min` | `max` | Best means max or min metric. |
+| `--mode` | one of `max`, `min` |  | Best means max or min metric; default: the mode the checkpoints were saved with. |
 | `--dry-run` | flag |  | Only say what would go. |
 | `--project` | str |  | Project whose run store anchors the digests. |
 | `--require-trust` | one of `any`, `anchored`, `authenticated` |  | any, anchored or authenticated (see the help above). |

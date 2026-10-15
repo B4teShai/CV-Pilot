@@ -323,6 +323,33 @@ def test_a_forged_older_manifest_breaks_the_link_its_successor_vouches_for(tmp_p
     assert reasons(rc) == {2: "link_mismatch"}
 
 
+def test_a_gap_left_by_retention_is_not_corruption(tmp_path: Path) -> None:
+    """Retention of the best checkpoints keeps non-adjacent steps: the older one must stay
+    usable although the manifest above it vouches for a predecessor that was deleted."""
+    rc = make(tmp_path)
+    for step in (1, 2, 3, 4):
+        save(rc, step)
+    for step in (2, 3):
+        for name in (f"step_{step:09d}.safetensors", f"step_{step:09d}.manifest.json"):
+            (kind_dir(rc) / name).unlink()
+    assert valid_steps(rc) == [4, 1]
+    assert reasons(rc) == {}
+
+
+def test_a_replacement_for_the_vouched_predecessor_is_still_refused(tmp_path: Path) -> None:
+    rc = make(tmp_path)
+    for step in (1, 2, 3):
+        save(rc, step)
+    evil = blob(666)
+    make_writable(data_file(rc, 2))
+    data_file(rc, 2).write_bytes(evil)
+    forge_manifest(rc, 2, sha256=hashlib.sha256(evil).hexdigest(), size_bytes=len(evil))
+    for name in ("step_000000001.safetensors", "step_000000001.manifest.json"):
+        (kind_dir(rc) / name).unlink()  # the forgery is now the only candidate below step 3
+    assert valid_steps(rc) == [3]
+    assert reasons(rc) == {2: "link_mismatch"}
+
+
 def test_a_planted_older_manifest_below_the_start_of_the_chain_is_refused(tmp_path: Path) -> None:
     rc = make(tmp_path)
     for step in (5, 6):

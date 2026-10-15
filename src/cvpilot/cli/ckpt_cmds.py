@@ -252,8 +252,12 @@ def ckpt_prune(
     keep_last: Annotated[int, typer.Option("--keep-last", min=1)] = 3,
     keep_best: Annotated[int, typer.Option("--keep-best", min=1)] = 2,
     mode: Annotated[
-        ModeOption, typer.Option("--mode", help="Best means max or min metric.")
-    ] = ModeOption.max,
+        ModeOption | None,
+        typer.Option(
+            "--mode",
+            help="Best means max or min metric; default: the mode the checkpoints were saved with.",
+        ),
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Only say what would go.")] = False,
     project: ProjectOpt = None,
     require_trust: TrustOpt = None,
@@ -270,7 +274,12 @@ def ckpt_prune(
         found = session.open(run)
         verb = "would delete" if dry_run else "deleted"
         for one, keep in (("last", keep_last), ("best", keep_best)):
-            result = found.prune(one, keep=keep, mode=mode.value, dry_run=dry_run)
+            try:
+                result = found.prune(
+                    one, keep=keep, mode=mode.value if mode else None, dry_run=dry_run
+                )
+            except CheckpointError as exc:
+                raise _usage(str(exc)) from None
             for manifest in result.deleted:
                 typer.echo(f"{verb} {one} {manifest.step:09d}")
     finally:

@@ -38,6 +38,50 @@ _MARKERS = {TENSOR, FLOAT, BYTES, INTDICT, SCALAR}
 _FLOATS = {"inf": math.inf, "-inf": -math.inf, "nan": math.nan}
 
 
+def no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError("duplicate key")
+        out[key] = value
+    return out
+
+
+def reject_constant(name: str) -> Any:
+    raise ValueError("non-finite number")
+
+
+def _bounded_signed_int(text: str) -> int:
+    value = int(text)  # at most 4300 digits are converted; longer text raises ValueError
+    if abs(value) >= MAX_INT:
+        raise ValueError("integer out of range")
+    return value
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("non-finite number")
+    return value
+
+
+def parse_skeleton(text: str) -> Any:
+    """Parse skeleton JSON as restore does: no duplicate keys, no NaN or Infinity constants,
+    integers below ``MAX_INT`` in magnitude, finite floats. Save runs the same parser over what it
+    wrote, so nothing is saved that a restore would refuse.
+
+    Raises:
+        ValueError: any of the above is violated (``RecursionError`` for absurd nesting).
+    """
+    return json.loads(
+        text,
+        object_pairs_hook=no_duplicate_keys,
+        parse_constant=reject_constant,
+        parse_int=_bounded_signed_int,
+        parse_float=_finite_float,
+    )
+
+
 def _escape(part: str) -> str:
     return part.replace("~", "~0").replace("/", "~1")
 
@@ -125,6 +169,12 @@ def split_state(state: Mapping[str, Any]) -> tuple[dict[str, np.ndarray[Any, Any
             f"the non-tensor state is larger than {MAX_STATE_JSON_BYTES} bytes of JSON; "
             "store large buffers as arrays"
         )
+    try:  # the exact checks a restore applies: a save never writes what a restore would refuse
+        validate_plain(merge_state(tensors, parse_skeleton(text)))
+    except (ValueError, RecursionError) as exc:
+        raise CheckpointError(
+            f"this state could not be restored, so it is not saved: {exc}"
+        ) from None
     return tensors, skeleton
 
 

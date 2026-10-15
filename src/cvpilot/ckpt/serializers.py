@@ -77,7 +77,7 @@ MAX_RANK = 32
 MAX_ELEMENTS = 1 << 40
 MAX_NAME_CHARS = 1024
 MAX_METADATA_VALUE = state_mod.MAX_STATE_JSON_BYTES
-MAX_INT_DIGITS = 19
+MAX_INT_DIGITS = 19  # header integers (sizes, offsets); the state's own bound is state.MAX_INT
 
 
 @dataclass(frozen=True)
@@ -89,36 +89,10 @@ class StrictHeader:
     body_bytes: int
 
 
-def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in out:
-            raise ValueError("duplicate key")
-        out[key] = value
-    return out
-
-
-def _reject_constant(name: str) -> Any:
-    raise ValueError("non-finite number")
-
-
 def _bounded_int(text: str) -> int:
     if len(text) > MAX_INT_DIGITS or text.startswith("-"):
         raise ValueError("integer out of range")
     return int(text)
-
-
-def _bounded_signed_int(text: str) -> int:
-    if len(text.lstrip("-")) > MAX_INT_DIGITS:
-        raise ValueError("integer out of range")
-    return int(text)
-
-
-def _finite_float(text: str) -> float:
-    value = float(text)
-    if not math.isfinite(value):
-        raise ValueError("non-finite number")
-    return value
 
 
 def _reject_float(text: str) -> Any:
@@ -149,8 +123,8 @@ def parse_safetensors_header(read_prefix: PrefixReader, size: int) -> StrictHead
     try:
         header = json.loads(
             raw.decode("utf-8"),
-            object_pairs_hook=_no_duplicates,
-            parse_constant=_reject_constant,
+            object_pairs_hook=state_mod.no_duplicate_keys,
+            parse_constant=state_mod.reject_constant,
             parse_int=_bounded_int,
             parse_float=_reject_float,
         )
@@ -273,13 +247,7 @@ class SafetensorsSerializer:
         module = self._numpy_module()
         header = parse_safetensors_header(lambda n: data[:n], len(data))
         try:
-            skeleton = json.loads(
-                header.metadata[STATE_KEY],
-                object_pairs_hook=_no_duplicates,
-                parse_constant=_reject_constant,
-                parse_int=_bounded_signed_int,
-                parse_float=_finite_float,
-            )
+            skeleton = state_mod.parse_skeleton(header.metadata[STATE_KEY])
             tensors = module.load(data)
         except (KeyError, ValueError, RecursionError, TypeError):
             raise _unloadable("the checkpoint state cannot be rebuilt from the file") from None
