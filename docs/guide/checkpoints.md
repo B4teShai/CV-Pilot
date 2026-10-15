@@ -16,8 +16,8 @@ from cvpilot.ckpt import CheckpointManager
 run = cvpilot.init("fridge-sku", task="detection")
 ckpt = CheckpointManager(
     run,
-    dir="/checkpoint",               # or CVPILOT_CHECKPOINT_DIR
-    remote="s3://ml-ckpt/fridge/",   # optional, or CVPILOT_CHECKPOINT_REMOTE
+    dir="/checkpoint",  # or CVPILOT_CHECKPOINT_DIR
+    remote="s3://ml-ckpt/fridge/",  # optional, or CVPILOT_CHECKPOINT_REMOTE
     keep_last=3,
     keep_best=2,
     monitor="val/mAP50_95",
@@ -27,9 +27,16 @@ ckpt = CheckpointManager(
 state = ckpt.restore_latest_valid()  # None on a fresh start
 for step in range(start, total_steps):
     ...
-    ckpt.maybe_save(step, model=model, optimizer=opt, scheduler=sched, scaler=scaler,
-                    rng=True, dataloader_state=sampler.state_dict(),
-                    metrics={"val/mAP50_95": m})
+    ckpt.maybe_save(
+        step,
+        model=model,
+        optimizer=opt,
+        scheduler=sched,
+        scaler=scaler,
+        rng=True,
+        dataloader_state=sampler.state_dict(),
+        metrics={"val/mAP50_95": m},
+    )
     if ckpt.preempted():
         break  # the run is already marked preempted
 ```

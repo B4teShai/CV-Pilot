@@ -10,12 +10,13 @@ a release unnoticed. Everything else is internal and may change in any release.
 ```python notest
 import cvpilot
 
-run = cvpilot.init("proj", task="detection", config={"lr": 0.01}, seed=0,
-                   resume_from=None, forward_to=None)   # a Run; also a context manager
-cvpilot.log({"train/loss": 0.4}, step=10)                # steps strictly increase per key
+run = cvpilot.init(
+    "proj", task="detection", config={"lr": 0.01}, seed=0, resume_from=None, forward_to=None
+)  # a Run; also a context manager
+cvpilot.log({"train/loss": 0.4}, step=10)  # steps strictly increase per key
 snapshot = cvpilot.log_eval(preds, gts, step=10, slices={"camera": "camera"})
 cvpilot.log_artifact("report.html", kind="report")
-cvpilot.finish()                                         # "finished", "failed" or "preempted"
+cvpilot.finish()  # "finished", "failed" or "preempted"
 run = cvpilot.autolog(trainer_or_model, project="proj", task="detection")
 ```
 
@@ -28,15 +29,18 @@ come from `cvpilot.eval`.
 ```python notest
 from cvpilot.ckpt import CheckpointManager, find_resume_point
 
-path = cvpilot.resume_path("proj")          # newest verified file to resume from, or None
-point = find_resume_point("proj")           # the same, with the run it came from
+path = cvpilot.resume_path("proj")  # newest verified file to resume from, or None
+point = find_resume_point("proj")  # the same, with the run it came from
 ckpt = CheckpointManager(run, dir="/checkpoint")
 ckpt.maybe_save(step, model=model, optimizer=opt, metrics={"mAP50": 0.7})
-ckpt.save_now(step, model=model)            # immediately, any step that advances
-restored = ckpt.restore()                   # Restored(state, manifest, run_id, skipped, trust)
-state = ckpt.restore_latest_valid()         # the state only, or None
-ckpt.adopt("last.pt", step)                 # bring a framework-written file under verification
-ckpt.verify(manifest); ckpt.list(); ckpt.preempted(); ckpt.close()
+ckpt.save_now(step, model=model)  # immediately, any step that advances
+restored = ckpt.restore()  # Restored(state, manifest, run_id, skipped, trust)
+state = ckpt.restore_latest_valid()  # the state only, or None
+ckpt.adopt("last.pt", step)  # bring a framework-written file under verification
+ckpt.verify(manifest)
+ckpt.list()
+ckpt.preempted()
+ckpt.close()
 ```
 
 Errors are `CheckpointError` and its subclasses (`CheckpointCorruptError`,
