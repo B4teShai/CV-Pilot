@@ -315,3 +315,52 @@ def test_json_output_carries_the_verdict_and_the_units(
     )
     assert "0..100" in doc["gate"]["thresholds"]["unit"]
     assert doc["gate"]["thresholds"]["max_drop"] == {"mAP50_95": 0.5}
+
+
+def test_reports_are_written_for_a_failing_gate_and_are_valid(
+    invoke: Invoke, store_root: Path, tmp_path: Path, baseline_run: str
+) -> None:
+    bad = evaluate_into(invoke, store_root, tmp_path / "bad", broken=10)
+    html_path, json_path = tmp_path / "r.html", tmp_path / "r.json"
+    res = gate(
+        invoke, bad, "--max-drop", "mAP50_95=0.5", "--report", str(html_path),
+        "--report-json", str(json_path),
+    )  # fmt: skip
+    assert res.code == 1
+    page = html_path.read_text()
+    assert "Gate FAIL" in page and "Content-Security-Policy" in page and "background" in page
+    doc = json.loads(json_path.read_text())
+    assert doc["gate"]["passed"] is False and doc["confusion"]["n_changed_cells"] > 0
+
+
+def test_a_refused_comparison_writes_no_report(
+    invoke: Invoke, store_root: Path, tmp_path: Path, baseline_run: str
+) -> None:
+    other = evaluate_into(invoke, store_root, tmp_path / "other", shift_gt=True)
+    target = tmp_path / "r.html"
+    res = gate(invoke, other, "--max-drop", "mAP50_95=50", "--report", str(target))
+    assert res.code == 1 and not target.exists()
+
+
+def test_a_report_that_cannot_be_written_fails_even_when_the_gate_passes(
+    invoke: Invoke, store_root: Path, tmp_path: Path, baseline_run: str
+) -> None:
+    same = evaluate_into(invoke, store_root, tmp_path / "same")
+    link = tmp_path / "link.html"
+    link.symlink_to(tmp_path / "elsewhere.html")
+    res = gate(invoke, same, "--max-drop", "mAP50_95=50", "--report", str(link))
+    assert res.code == 1 and "symbolic link" in res.human
+    assert not (tmp_path / "elsewhere.html").exists()
+
+
+def test_compare_writes_both_reports(
+    invoke: Invoke, store_root: Path, tmp_path: Path, baseline_run: str
+) -> None:
+    bad = evaluate_into(invoke, store_root, tmp_path / "bad", broken=10)
+    res = invoke(
+        "compare", bad, "--project", "proj", "--baseline", "tag:prod", "--report",
+        str(tmp_path / "c.html"), "--report-json", str(tmp_path / "c.json"),
+    )  # fmt: skip
+    assert res.code == 0
+    assert "<h2>Headline</h2>" in (tmp_path / "c.html").read_text()
+    assert json.loads((tmp_path / "c.json").read_text())["schema"] == "cvpilot.compare/1"

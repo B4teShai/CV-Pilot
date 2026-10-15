@@ -35,7 +35,7 @@ not raised; the sync thread owns all network I/O.
 | Run store (built) | `$HOME/.cvpilot/<project>/` | `CVPILOT_STORE_DIR` or `init(store_dir=...)` | layout in [03-data-model.md](03-data-model.md); one directory per project |
 | Checkpoints | `CheckpointManager(dir=...)`, no default | `CVPILOT_CHECKPOINT_DIR` | a mounted bucket path on SkyPilot |
 | Checkpoint mirror | none | `CheckpointManager(remote=...)` or `CVPILOT_CHECKPOINT_REMOTE` | fsspec URL |
-| Compare reports | `<store>/reports/` and the `--report` path | `--report` | HTML with inline images, ≤ 200 gallery images by default |
+| Compare reports | the `--report` and `--report-json` paths only; nothing is written to the store | `--report`, `--report-json` | static HTML (no script, strict CSP), at most 8 MiB; the prediction-diff gallery is planned |
 | Server database | `/data/cvpilot.sqlite` inside the container | `CVPILOT_SERVER_DATABASE_URL` | `sqlite:///...` or `postgresql://...` |
 | Logs | `stderr` | none | collected by the process supervisor or container runtime |
 

@@ -265,9 +265,7 @@ $CVPILOT_STORE_DIR/<project>/              default $HOME/.cvpilot/<project>/
   artifacts/<sha256[:2]>/<sha256>           content-addressed files: predictions.parquet,
                                             confusion.parquet, cmp.html, config.json, env.json,
                                             git.diff, gallery images
-  reports/<candidate_run_id>_vs_<baseline_run_id>.html
-                                            last rendered compare report (also registered as an
-                                            artifact of the candidate run)
+  (reports are written to the path given to --report and are not stored here)
 
 <checkpoint_dir>/<run_id>/                  CheckpointManager(dir=...)
   last/step_<step:09d>.pt                   full training state; torch.load(weights_only=True)

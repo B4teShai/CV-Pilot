@@ -7,6 +7,9 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Reports: `--report PATH` (static HTML: every name escaped, no script or link, CSP limited to its
+  hashed inline style, severity-first with row caps) and `--report-json PATH` (canonical JSON, no
+  timestamps) on `compare` and `gate`; atomic writes that refuse symbolic links; golden tests.
 - `cvpilot compare RUN --baseline tag:NAME|RUN_ID` and `cvpilot gate RUN --baseline ... --max-drop
   NAME=POINTS --per-class-max-drop NAME=POINTS --slice-max-drop "KEY=*:POINTS" --min-images N`.
   Deltas and limits are points on the 0..100 scale (a drop is `(baseline - candidate) * 100`;

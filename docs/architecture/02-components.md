@@ -247,12 +247,26 @@ report: snapshots come from `get_snapshot` (file digest and run chain verified),
 (`compare/render_text.py`) passes every name through `safe_text` and starts each line with
 `gate:` or two spaces so a class name cannot become a CI workflow command.
 
-Deviations from the first sketch: `compare()` has no `seed` (no resampling, see above);
-`render_report` and the gallery are described under Reports below; `baseline rm` does not
-exist (pins are append-only); the report is written only to the path given and is not
-registered as an artifact, so `gate` never writes to the store. Depends on: `core/`, the
-`stores` and `tables` registries. Status: built (baselines, compare, gate, JSON output);
-reports: see Reports.
+Reports (`compare/html_report.py`, `compare/report.py`): `--report PATH` writes a static HTML
+page and `--report-json PATH` the canonical JSON (`compare` and `gate` both take them; `--json`
+prints the JSON). The page is built from element constructors that escape every string child
+(names also pass `safe_text`), has no script, no external resource, no link and no data-carrying
+attribute, and declares `default-src 'none'; style-src 'sha256-<its one inline style>';
+base-uri 'none'; form-action 'none'` plus `no-referrer`. Content is severity first: violations
+(at most 100, worst first), headline, per-class tables (50 rows each, worst first), slices (100)
+and changed confusion cells (30); each table says how many rows it left out and the JSON has
+them all. Neither format carries a timestamp, so equal inputs give equal bytes
+(`tests/golden/test_report_golden.py`). Files are written atomically (temp file, fsync, rename,
+mode 0644), refuse a symbolic link or a non-regular target and are limited to 8 MiB; a report
+that cannot be written fails the command, also when the gate passed, and a refused comparison
+writes none.
+
+Deviations from the first sketch: `compare()` has no `seed` (no resampling, see above); there
+is no prediction-diff gallery (out of scope for this phase, `max_gallery_images` does not
+exist); `baseline rm` does not exist (pins are append-only); the report is written only to the
+path given and is not registered as an artifact, so `gate` never writes to the store. Depends
+on: `core/`, the `stores` and `tables` registries. Status: built (baselines, compare, gate,
+JSON and HTML reports); planned: the prediction-diff gallery.
 
 ### `ckpt/`
 

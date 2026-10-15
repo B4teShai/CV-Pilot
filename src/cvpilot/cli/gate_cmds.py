@@ -19,6 +19,7 @@ the gate accepts.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -37,6 +38,18 @@ EvalSetOpt = Annotated[
 StepOpt = Annotated[
     int | None,
     typer.Option("--step", min=0, max=MAX_STEP, help="Candidate snapshot step (default: latest)."),
+]
+
+
+ReportOpt = Annotated[
+    Path | None,
+    typer.Option(
+        "--report", dir_okay=False, help="Write a static HTML report (no script, strict CSP)."
+    ),
+]
+ReportJsonOpt = Annotated[
+    Path | None,
+    typer.Option("--report-json", dir_okay=False, help="Write the canonical JSON report."),
 ]
 
 
@@ -72,10 +85,13 @@ def compare_command(
     project: ProjectOpt = None,
     eval_set: EvalSetOpt = None,
     step: StepOpt = None,
+    report: ReportOpt = None,
+    report_json_path: ReportJsonOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Compare a run with a baseline (deltas, intervals, worst classes, slices, confusion)."""
     from cvpilot.compare import service
+    from cvpilot.compare.html_report import render_html, write_report
     from cvpilot.compare.report import report_json
 
     _baseline_ref(baseline)
@@ -83,6 +99,10 @@ def compare_command(
         _project(ctx, project), run_id, baseline, eval_set=eval_set, step=step,
         store_dir=ctx.obj.store_dir,
     )  # fmt: skip
+    if report is not None:
+        write_report(report, render_html(cmp))
+    if report_json_path is not None:
+        write_report(report_json_path, report_json(cmp))
     if as_json:
         typer.echo(report_json(cmp))
         return
@@ -124,11 +144,14 @@ def gate_command(
             help="List slices below --min-images as skipped instead of failing them.",
         ),
     ] = False,
+    report: ReportOpt = None,
+    report_json_path: ReportJsonOpt = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Gate a run against a baseline; exit 1 on a regression or any unverifiable check."""
     from cvpilot.compare import service
     from cvpilot.compare.gate import ThresholdError, Thresholds, parse_drop, parse_slice_drop
+    from cvpilot.compare.html_report import render_html, write_report
     from cvpilot.compare.render_text import gate_lines
     from cvpilot.compare.report import report_json
 
@@ -145,8 +168,13 @@ def gate_command(
         raise typer.BadParameter(str(exc)) from None
     outcome = service.run_gate(
         _project(ctx, project), run_id, baseline, thresholds, eval_set=eval_set, step=step,
+        with_confusion=report is not None or report_json_path is not None,
         store_dir=ctx.obj.store_dir,
     )  # fmt: skip
+    if report is not None:  # a report that cannot be written fails the command, pass or not
+        write_report(report, render_html(outcome.comparison, outcome.result, thresholds))
+    if report_json_path is not None:
+        write_report(report_json_path, report_json(outcome.comparison, outcome.result, thresholds))
     if as_json:
         typer.echo(report_json(outcome.comparison, outcome.result, thresholds))
     else:
