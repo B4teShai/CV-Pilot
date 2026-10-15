@@ -79,6 +79,11 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Security
 
+- A save took "the newest checkpoint" and "the previous one" from every manifest in the directory,
+  admitted or not. A planted manifest at a huge step therefore made every later save fail, and a
+  forged one could become the predecessor a genuine checkpoint chained to. Both now come only from
+  manifests the gate admits.
+
 - No valid checkpoint with a known floor is never a fresh start: restore, `resume_path` and
   `find_resume_point` raise `rolled_back` or `checkpoint_missing` (with the step) under the strict
   policies and log `checkpoint_progress_lost` under `any`; `accept_rollback_to=0` starts over on

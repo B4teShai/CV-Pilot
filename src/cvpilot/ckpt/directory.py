@@ -1062,7 +1062,14 @@ class RunCheckpoints:
         before_publish: Callable[[CheckpointManifest, str], None] | None,
     ) -> CheckpointManifest:
         self._cleanup(kind_fd, run_fd, kind)
-        cands = self._candidates(kind_fd, kind)
+        # only manifests the gate admits count as "the newest" and as "the previous": a planted
+        # manifest at a huge step must not block every later save, and a forged one must not
+        # become the predecessor a genuine checkpoint chains to
+        cands = [
+            c
+            for c in self._judge(run_fd, kind_fd, kind)
+            if c.reason is None and c.manifest is not None
+        ]
         newest = max((c.step for c in cands if c.step is not None), default=None)
         if newest is not None and step <= newest:
             same = next((c for c in cands if c.step == step and c.manifest is not None), None)
