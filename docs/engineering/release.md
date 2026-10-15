@@ -11,8 +11,9 @@ maintainer pushes a version tag *and* approves the protected `pypi` environment.
 `cvpilot` and `cv-pilot` were free on PyPI when they were checked read-only on 2026-10-15 (and
 again on 2026-10-16: HTTP 404 for `https://pypi.org/pypi/cvpilot/json` and `/cv-pilot/`, and for
 the same name on TestPyPI). **Re-check before every first publication**: a name can be taken at
-any moment, and PyPI normalises `cv-pilot`, `cv_pilot` and `cvpilot` differently from one another
-(they are different projects). Nothing is registered until the first upload.
+any moment. PyPI normalises a name by lower-casing it and collapsing runs of `-`, `_` and `.` into
+one `-`, so `cv-pilot`, `cv_pilot` and `CV.Pilot` are the same project, while `cvpilot` (no
+separator) is a different one: check both spellings. Nothing is registered until the first upload.
 
 ## One-time setup (the maintainer)
 
@@ -37,10 +38,12 @@ uv lock --check
 python3 scripts/check_readme.py                          # the README is the package index page
 python3 /path/to/tools/qa_check.py .
 NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict
-uv build --out-dir dist
-uv run twine check --strict dist/*
-python scripts/verify_wheel.py dist/cvpilot-*.whl --python 3.10 --python 3.13
-sha256sum dist/*
+out="$(mktemp -d)"                                     # a fresh directory: no stale artifact can match
+version="$(python3 scripts/print_version.py)"
+uv build --out-dir "$out"
+uv run twine check --strict "$out/cvpilot-$version.tar.gz" "$out/cvpilot-$version-py3-none-any.whl"
+python scripts/verify_wheel.py "$out/cvpilot-$version-py3-none-any.whl" --python 3.10 --python 3.13
+(cd "$out" && sha256sum -- *)                          # on macOS: shasum -a 256 -- *
 ```
 
 0. The README is the long description on the package index: every link is an absolute `https://`
@@ -60,7 +63,8 @@ sha256sum dist/*
    fixtures, size within budget, only the documented core dependencies), runs `twine check
    --strict`, builds a wheel from the sdist and installs the wheel into clean environments for 3.10
    and 3.13.
-4. Record the digests (`sha256sum dist/*`) with the release notes.
+4. Record the digests (`sha256sum`, or `shasum -a 256` on macOS, run inside the fresh build
+   directory) with the release notes.
 
 ## TestPyPI
 

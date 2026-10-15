@@ -101,6 +101,13 @@ Option C, implemented by `ckpt/` with the following rules.
    does not.
 8. **Save overhead budget.** Hashing and manifest writing add at most 5 % to the wall time of
    `torch.save` for the same state on local SSD; measured by `benchmarks/ckpt_save.py`.
+   **Amendment (2026-10-16): the budget is not met.** SHA-256 over the file (about 1.3 ms per MB)
+   is paid once per save, so against a page-cache-speed write the overhead is several times the
+   write (0.19 s for a 128 MB state in steady state, `keep_last=3`, macOS arm64; the comparison
+   with `torch.save` itself was not measured because the framework was not installed). The
+   verification pass (`verify_after_save=True`, the default) is the cost of the integrity
+   guarantee and stays on; retention reuses what the save verified instead of hashing again. The
+   rule is kept as the target, and the measured numbers are in the overview.
 
 ## Amendment (2026-10-15): trust and formats as built
 

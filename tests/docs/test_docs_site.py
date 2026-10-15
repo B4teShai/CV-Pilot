@@ -154,3 +154,15 @@ def test_every_flow_heading_appears_once_and_flow_b_is_not_a_copy_of_flow_a() ->
         assert behaviour in flow_b
     assert "Flow B is planned" not in text
     assert "or on `cvpilot ckpt verify`" not in text  # verify reads and reports, it uploads nothing
+
+
+def test_the_docs_match_the_code_on_the_points_that_drifted() -> None:
+    model = (DOCS / "architecture" / "03-data-model.md").read_text(encoding="utf-8")
+    assert "Planned: `CheckpointManifest`" not in model and "prev_step" in model
+    components = (DOCS / "architecture" / "02-components.md").read_text(encoding="utf-8")
+    assert "put_manifest(self, manifest: CheckpointManifest, manifest_sha256: str)" in components
+    adr = (DOCS / "adr" / "0006-checkpoint-semantics.md").read_text(encoding="utf-8")
+    assert "the budget is not met" in adr and "Azure metadata" not in adr
+    release = (DOCS / "engineering" / "release.md").read_text(encoding="utf-8")
+    assert "shasum -a 256" in release and "dist/cvpilot-*.whl" not in release
+    assert "`cvpilot` (no\nseparator) is a different one" in release

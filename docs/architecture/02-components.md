@@ -453,7 +453,7 @@ class RunStore(Protocol):
     def append_points(self, points: Sequence[MetricPoint]) -> None
     def put_snapshot(self, snapshot: EvalSnapshot) -> None
     def put_artifact(self, run_id: str, path: Path, kind: ArtifactKind, meta: Mapping[str, Any]) -> Artifact
-    def put_manifest(self, manifest: CheckpointManifest) -> None
+    def put_manifest(self, manifest: CheckpointManifest, manifest_sha256: str) -> None
     def put_baseline(self, baseline: Baseline, *, replace: bool = False) -> None   # append-only, digested, chained
     def get_baseline(self, tag: str) -> Baseline                  # verified on every read
     def list_baselines(self, *, history: bool = False) -> list[Baseline]

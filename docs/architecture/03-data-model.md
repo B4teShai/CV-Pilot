@@ -4,8 +4,7 @@
 
 All entities are Pydantic models in `core/schema.py` and rows in the local run store of
 [ADR-0005](../adr/0005-run-store.md). Built: `RunMeta`, `Repro`, `MetricPoint`, `Artifact`
-(models, store tables and tests), `EvalSnapshot`, `Baseline`. Planned: `CheckpointManifest`
-(its section says so). Types are Python types; `json` means a JSON column validated against
+(models, store tables and tests), `EvalSnapshot`, `Baseline`, `CheckpointManifest`. Types are Python types; `json` means a JSON column validated against
 the model on read. Timestamps are timezone-aware, normalised to UTC and stored as ISO 8601.
 
 ## Entities
@@ -148,6 +147,7 @@ Sidecar record written next to every checkpoint file ([ADR-0006](../adr/0006-che
 | `prev_manifest_sha256` | `str` | no | SHA-256 of the previous manifest file of the same `(run, kind)` (64 zeros for the first) (added field) |
 | `prev_chain_sha256` | `str` | no | the previous manifest's `chain_sha256` (added field) |
 | `chain_sha256` | `str` | no | `sha256(prev_chain, run_id, kind, step, sha256, size_bytes)` (added field) |
+| `prev_step` | `int` | yes | step of the manifest `prev_manifest_sha256` names, so a predecessor removed by retention (a gap) is told from one that was replaced (added field; absent in manifests written before it existed) |
 | `auth_tag` | `str` | yes | HMAC-SHA256 over a domain label, the run id and the canonical record, present when `CVPILOT_CKPT_KEY` was set (added field) |
 
 Primary key: `(run_id, step, kind)`. Foreign key: `run_id → RunMeta.run_id`. The manifest file
