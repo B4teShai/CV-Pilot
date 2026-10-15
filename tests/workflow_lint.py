@@ -242,4 +242,52 @@ def lint_release(doc: dict[str, Any], text: str) -> list[str]:
     for line in text.splitlines():
         if "uses:" in line and not _VERSION_COMMENT.search(line.strip().lstrip("- ")):
             problems.append(f"pin with a full SHA and a version comment: {line.strip()}")
+    problems += _release_hardening(doc, build, publish, build_steps)
+    return problems
+
+
+def _release_hardening(
+    doc: dict[str, Any],
+    build: dict[str, Any],
+    publish: dict[str, Any],
+    build_steps: list[dict[str, Any]],
+) -> list[str]:
+    """What the workflow itself can enforce about *which* commit is published and how the build
+    runs (what it cannot enforce, repository settings, is evidence the runbook demands)."""
+    problems: list[str] = []
+    concurrency = doc.get("concurrency")
+    if not isinstance(concurrency, dict) or not concurrency.get("group"):
+        problems.append("concurrency: one release at a time (a group is required)")
+    elif concurrency.get("cancel-in-progress") is not False:
+        problems.append("concurrency: never cancel a release that is publishing")
+    for name, job in (("build", build), ("publish", publish)):
+        if not isinstance(job.get("timeout-minutes"), int):
+            problems.append(f"{name}: timeout-minutes is required")
+    checkouts = _uses(build_steps, "actions/checkout")
+    if not checkouts or (checkouts[0].get("with") or {}).get("fetch-depth") != 0:
+        problems.append("build: fetch the full history (fetch-depth: 0) to check ancestry")
+    ancestry = [
+        i
+        for i, s in enumerate(build_steps)
+        if "merge-base --is-ancestor" in str(s.get("run", ""))
+        and "origin/main" in str(s.get("run", ""))
+    ]
+    builds = [i for i, s in enumerate(build_steps) if "uv build" in str(s.get("run", ""))]
+    if not ancestry:
+        problems.append("build: the tagged commit must be an ancestor of origin/main")
+    elif builds and ancestry[0] > builds[0]:
+        problems.append("build: the ancestry check must run before the build")
+    for step in build_steps:
+        if "${{" in str(step.get("run", "")):
+            problems.append("build: no expression inside a script (pass the tag through env)")
+    setups = _uses(build_steps, "astral-sh/setup-uv")
+    for step in setups:
+        with_ = step.get("with") or {}
+        if with_.get("enable-cache") is not False:
+            problems.append("build: enable-cache must be false (a cache is poisonable)")
+        if not re.fullmatch(r"\d+\.\d+\.\d+", str(with_.get("version", ""))):
+            problems.append("build: pin the uv version exactly")
+    scripts = "\n".join(str(s.get("run", "")) for s in build_steps)
+    if "pip-audit" not in scripts:
+        problems.append("build: audit the locked dependencies before building")
     return problems

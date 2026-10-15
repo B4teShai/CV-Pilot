@@ -26,6 +26,28 @@ separator) is a different one: check both spellings. Nothing is registered until
 3. Make the jobs of `ci.yml` (`test`, `lock`, `docs`, `package`, `audit`) required status checks on
    `main`, and protect `.github/` with CODEOWNERS: the workflows are part of the trust boundary.
 
+4. Add a **tag ruleset** for `refs/tags/v*` (restrict creation to maintainers, block deletion and
+   updates), a **deployment tag policy** on the `pypi` environment (only `v*` tags), **branch
+   protection** on `main` and a `CODEOWNERS` entry for `.github/`.
+
+### Evidence (mandatory, once, before the first tag)
+
+The workflow cannot enforce repository settings, so the maintainer records proof that they are in
+place. All of these commands are read-only; keep the output with the release notes.
+
+```bash notest
+gh api repos/B4teShai/CV-Pilot/environments/pypi --jq '{reviewers: .protection_rules, branch_policy: .deployment_branch_policy}'
+gh api repos/B4teShai/CV-Pilot/rulesets --jq '.[] | {name, target, enforcement}'    # a tag ruleset on refs/tags/v*
+gh api repos/B4teShai/CV-Pilot/branches/main/protection --jq '{checks: .required_status_checks.contexts, reviews: .required_pull_request_reviews}'
+gh api repos/B4teShai/CV-Pilot/contents/.github/CODEOWNERS --jq .path
+```
+
+On PyPI, open the project's *Publishing* page and confirm the trusted publisher names this
+repository, `release.yml` and the environment `pypi`. As of 2026-10-16 GitHub reports no rulesets
+and no branch protection for this repository, so none of this evidence exists yet: do not push a
+version tag until it does. The build job also refuses a commit that is not an ancestor of
+`origin/main`, so a tag on a side branch cannot be published even if the tag ruleset is missing.
+
 ## Before tagging
 
 All of this runs locally and uploads nothing.

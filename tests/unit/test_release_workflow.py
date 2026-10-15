@@ -154,6 +154,64 @@ MUTATIONS: dict[str, tuple[Callable[[dict[str, Any]], None], str]] = {
         lambda d: trig(d).update(pull_request_target={}),
         "pull_request_target",
     ),
+    "no concurrency group": (lambda d: d.pop("concurrency"), "concurrency"),
+    "a cancelling concurrency group": (
+        lambda d: d["concurrency"].update({"cancel-in-progress": True}),
+        "cancel",
+    ),
+    "no timeout on build": (lambda d: d["jobs"]["build"].pop("timeout-minutes"), "timeout"),
+    "no timeout on publish": (lambda d: d["jobs"]["publish"].pop("timeout-minutes"), "timeout"),
+    "shallow checkout": (
+        lambda d: d["jobs"]["build"]["steps"][0]["with"].pop("fetch-depth"),
+        "history",
+    ),
+    "no ancestry check": (
+        lambda d: d["jobs"]["build"]["steps"].__setitem__(
+            slice(None),
+            [s for s in d["jobs"]["build"]["steps"] if "is-ancestor" not in str(s.get("run", ""))],
+        ),
+        "ancestor",
+    ),
+    "ancestry after the build": (
+        lambda d: (
+            d["jobs"]["build"]["steps"].append(
+                {"run": 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main'}
+            )
+            or [
+                d["jobs"]["build"]["steps"].remove(s)
+                for s in list(d["jobs"]["build"]["steps"])[:-1]
+                if "is-ancestor" in str(s.get("run", ""))
+            ]
+        ),
+        "before the build",
+    ),
+    "uv cache on": (
+        lambda d: [
+            s["with"].update({"enable-cache": True})
+            for s in d["jobs"]["build"]["steps"]
+            if str(s.get("uses", "")).startswith("astral-sh/setup-uv")
+        ],
+        "cache",
+    ),
+    "uv version floating": (
+        lambda d: [
+            s["with"].pop("version")
+            for s in d["jobs"]["build"]["steps"]
+            if str(s.get("uses", "")).startswith("astral-sh/setup-uv")
+        ],
+        "uv version",
+    ),
+    "no audit in the build": (
+        lambda d: d["jobs"]["build"]["steps"].__setitem__(
+            slice(None),
+            [s for s in d["jobs"]["build"]["steps"] if "pip-audit" not in str(s.get("run", ""))],
+        ),
+        "audit",
+    ),
+    "the tag inside a script": (
+        lambda d: d["jobs"]["build"]["steps"].append({"run": 'echo "${{ github.ref_name }}"'}),
+        "expression",
+    ),
 }
 
 
@@ -216,3 +274,17 @@ def test_the_publish_job_runs_no_repository_code_and_downloads_the_exact_artifac
 def test_the_version_check_reads_the_source_without_importing_it() -> None:
     script = (ROOT / "scripts" / "print_version.py").read_text()
     assert "import cvpilot" not in script and "re." in script
+
+
+def test_the_runbook_demands_the_evidence_for_the_settings_a_workflow_cannot_enforce() -> None:
+    text = (ROOT / "docs" / "engineering" / "release.md").read_text(encoding="utf-8")
+    for needle in (
+        "environments/pypi",
+        "/rulesets",
+        "branches/main/protection",
+        "CODEOWNERS",
+        "refs/tags/v*",
+        "trusted publisher",
+        "ancestor of",
+    ):
+        assert needle in text, needle

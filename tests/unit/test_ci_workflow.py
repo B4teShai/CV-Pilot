@@ -79,3 +79,25 @@ def test_every_job_pins_its_actions_and_does_not_persist_credentials() -> None:
             uses = str(step.get("uses", ""))
             if uses.startswith("actions/checkout"):
                 assert step["with"]["persist-credentials"] is False, name
+
+
+def test_every_job_has_a_timeout_and_the_workflow_does_not_pile_up_runs() -> None:
+    doc = yaml.safe_load(CI.read_text())
+    for name, job in doc["jobs"].items():
+        assert isinstance(job.get("timeout-minutes"), int), f"{name}: no timeout-minutes"
+    concurrency = doc["concurrency"]
+    assert "github.ref" in concurrency["group"] and concurrency["cancel-in-progress"] is True
+
+
+def test_the_audit_runs_for_every_supported_python_and_every_night() -> None:
+    doc = yaml.safe_load(CI.read_text())
+    audit = doc["jobs"]["audit"]
+    assert audit["strategy"]["matrix"]["python"] == ["3.10", "3.11", "3.12", "3.13"]
+    assert "--python" in scripts("audit")
+    triggers = doc.get("on", doc.get(True))
+    assert triggers["schedule"] and "cron" in triggers["schedule"][0]
+
+
+def test_the_release_build_audits_what_it_is_about_to_publish() -> None:
+    text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+    assert "pip-audit" in text and "--strict" in text

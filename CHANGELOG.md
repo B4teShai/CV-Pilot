@@ -79,6 +79,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Security
 
+- The release workflow refuses a commit that is not an ancestor of `origin/main` (full history
+  fetched), runs one release at a time with timeouts, builds with the uv cache off and an exactly
+  pinned uv, and audits the locked runtime dependencies before building; CI audits for every
+  supported Python and nightly, with timeouts and cancelling of superseded runs. The runbook gains a
+  mandatory evidence step (read-only `gh api` calls) for the repository settings a workflow cannot
+  enforce, and says that none exist yet.
+
 - A resume point is verified, then opened by your framework later: that gap is now documented and
   closable (`cvpilot.ckpt.private_copy(point)` copies the verified bytes into a private 0700
   directory, checking them as it copies). A `pt` file is read once on the way to a resume point

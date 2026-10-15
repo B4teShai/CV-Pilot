@@ -9,9 +9,13 @@ on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 permissions: {}
+concurrency:
+  group: release
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
@@ -20,9 +24,19 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: The tagged commit must be on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "error: $GITHUB_SHA is not an ancestor of origin/main; refusing to release it" >&2
+            exit 1
+          }
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: "0.11.7"
           python-version: "3.12"
+          enable-cache: false
       - name: The tag must equal the package version
         env:
           TAG: ${{ github.ref_name }}
@@ -34,7 +48,11 @@ jobs:
           fi
       - name: The README must be fit for the package index page
         run: python3 scripts/check_readme.py
-      - run: uv sync --locked
+      - run: uv sync --locked --group audit
+      - name: Audit the locked runtime dependencies
+        run: |
+          uv export --locked --no-dev --all-extras --no-emit-project --no-hashes --no-annotate -o requirements-audit.txt
+          uv run pip-audit -r requirements-audit.txt --no-deps --disable-pip --strict
       - run: uv run ruff check .
       - run: uv run mypy
       - run: uv run pytest -q --cov=cvpilot --cov-fail-under=85
@@ -59,6 +77,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: pypi
     permissions:
       id-token: write
