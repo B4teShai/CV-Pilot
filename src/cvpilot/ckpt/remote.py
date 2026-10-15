@@ -28,11 +28,13 @@ from cvpilot.ckpt.directory import (
 )
 from cvpilot.core.errors import CheckpointCorruptError, CheckpointError
 from cvpilot.core.schema import MAX_MANIFEST_BYTES, CheckpointKind, CheckpointManifest, RemoteStore
+from cvpilot.core.ulid import is_valid_ulid
 from cvpilot.core.uri import RemoteLocation
 
 T = TypeVar("T")
 CHUNK = 8 * 1024 * 1024
 MAX_BACKOFF_S = 8.0
+MAX_REMOTE_RUNS = 1000
 _STEP_NAME = re.compile(r"step_([0-9]{9,19})\.manifest\.json")
 
 
@@ -237,6 +239,12 @@ class Mirror:
         return sent
 
     # -- download ----------------------------------------------------------------------------
+
+    def list_runs(self, limit: int = MAX_REMOTE_RUNS) -> list[str]:
+        """Run ids that have a prefix on the remote (valid ULIDs only), newest first."""
+        started = self._clock()
+        names = self._call(lambda: self._store.list("", limit), started)
+        return sorted((n for n in names if is_valid_ulid(n)), reverse=True)
 
     def list_steps(self, run_id: str, kind: CheckpointKind) -> list[int]:
         """Steps that have a manifest on the remote, newest first."""

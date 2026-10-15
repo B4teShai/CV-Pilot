@@ -133,9 +133,12 @@ def find_resume_point(
     policy: RequireTrust = auth.resolve_policy(  # type: ignore[assignment]
         require_trust, settings.ckpt_require_trust, key
     )
-    mark = min_step if min_step is not None else settings.ckpt_min_step
-    ctx = AdmitContext(accept_rollback_to=accept_rollback_to, min_step=mark)
     log = get_logger("cvpilot.ckpt")
+    if require_trust is not None and auth.is_weaker(require_trust, policy):
+        log.warning("checkpoint_trust_downgrade_ignored", requested=require_trust, effective=policy)
+    marks = [m for m in (min_step, settings.ckpt_min_step) if m is not None]
+    mark = max(marks) if marks else None  # both bind: a call cannot lower the operator's floor
+    ctx = AdmitContext(accept_rollback_to=accept_rollback_to, min_step=mark)
     opened = runs.open_anchor(project, store_root)
     anchor = opened[0] if opened is not None else None
     rejected: list[Skipped] = []
@@ -176,7 +179,7 @@ def find_resume_point(
     finally:
         if opened is not None:
             opened[1]()
-    if mark is not None and accept_rollback_to != 0:
+    if mark is not None:
         rejected.append(Skipped(None, kind, kind, "rolled_back"))
     failure = gate_failure(rejected, policy)
     if failure is not None:

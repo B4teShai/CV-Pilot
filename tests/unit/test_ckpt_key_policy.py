@@ -66,7 +66,7 @@ def test_an_explicit_any_still_works_and_is_logged_as_accepted(
 ) -> None:
     _, run_id = untagged_run(tmp_path, monkeypatch)
     monkeypatch.setenv("CVPILOT_CKPT_KEY", KEY)
-    child, mgr = reader(tmp_path, run_id, require_trust="any")
+    child, mgr = reader(tmp_path, run_id, require_trust="any", allow_weaker_trust=True)
     restored = mgr.restore(run_ids=[run_id])
     assert restored is not None and restored.trust == "local_chain_only"
     accepted = [e for e in events() if e["message"] == "checkpoint_untrusted_accepted"]
@@ -82,6 +82,9 @@ def test_the_environment_can_say_any_explicitly(
     monkeypatch.setenv("CVPILOT_CKPT_KEY", KEY)
     monkeypatch.setenv("CVPILOT_CKPT_REQUIRE_TRUST", "any")
     child, mgr = reader(tmp_path, run_id)
+    assert mgr.require_trust == "authenticated"  # the key's default still binds
+    child.finish()
+    child, mgr = reader(tmp_path, run_id, allow_weaker_trust=True)
     assert mgr.require_trust == "any"
     child.finish()
 
@@ -112,9 +115,9 @@ def test_restore_latest_valid_takes_a_policy_and_can_return_the_level(
     monkeypatch.setenv("CVPILOT_CKPT_KEY", KEY)
     strict = CheckpointManager(
         child, dir=tmp_path / "ckpt", every_n_steps=1, install_signal_handlers=False,
-        require_trust="any",
+        require_trust="any", allow_weaker_trust=True,
     )  # fmt: skip
-    # a per-call policy overrides the manager's: untagged files fail authenticated
+    # a per-call policy can raise the level; lowering is only possible after the acknowledgement
     with pytest.raises(CheckpointUntrustedError):
         strict.restore_latest_valid(require_trust="authenticated")
     assert strict.restore_latest_valid(require_trust="any") is not None
@@ -135,6 +138,10 @@ def test_resume_path_takes_a_policy_and_can_return_the_level(
     monkeypatch.setenv("CVPILOT_CKPT_KEY", KEY)
     with pytest.raises(CheckpointUntrustedError):
         resume.resume_path("p", **kw)  # a key is set: authenticated by default
+    for weaker in ("anchored", "any"):  # a call can raise the level, never lower it
+        with pytest.raises(CheckpointUntrustedError):
+            resume.resume_path("p", require_trust=weaker, **kw)  # type: ignore[arg-type]
+    monkeypatch.delenv("CVPILOT_CKPT_KEY")
     assert resume.resume_path("p", require_trust="anchored", **kw) == path
     assert resume.resume_path("p", require_trust="any", **kw) == path
 
@@ -151,4 +158,5 @@ def test_the_public_function_exposes_the_same_options(
     monkeypatch.setenv("CVPILOT_CKPT_KEY", KEY)
     with pytest.raises(CheckpointUntrustedError):
         cvpilot.resume_path("p")
-    assert cvpilot.resume_path("p", require_trust="any") is not None
+    with pytest.raises(CheckpointUntrustedError):  # a call cannot weaken the key's default
+        cvpilot.resume_path("p", require_trust="any")

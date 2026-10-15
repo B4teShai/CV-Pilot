@@ -50,15 +50,38 @@ def load_key(environ: Mapping[str, str] | None = None) -> bytes | None:
     return key
 
 
-def resolve_policy(explicit: str | None, configured: str | None, key: bytes | None) -> str:
-    """The trust policy in force: an explicit argument, else ``CVPILOT_CKPT_REQUIRE_TRUST``, else
-    ``authenticated`` when a key is configured (a key alone used to enforce nothing), else
-    ``any``."""
-    if explicit is not None:
-        return explicit
-    if configured is not None:
-        return configured
-    return "authenticated" if key is not None else "any"
+STRICTNESS = ("any", "anchored", "authenticated")  # weakest first
+
+
+def is_weaker(level: str, than: str) -> bool:
+    """True when ``level`` demands less proof than ``than`` (unknown names raise ValueError)."""
+    for name in (level, than):
+        if name not in STRICTNESS:
+            raise ValueError(f"require_trust must be one of {', '.join(reversed(STRICTNESS))}")
+    return STRICTNESS.index(level) < STRICTNESS.index(than)
+
+
+def resolve_policy(
+    explicit: str | None, configured: str | None, key: bytes | None, *, allow_weaker: bool = False
+) -> str:
+    """The trust policy in force: the STRICTEST of the explicit argument,
+    ``CVPILOT_CKPT_REQUIRE_TRUST`` and the implicit default (``authenticated`` when a key is
+    configured, else ``any``). A caller can raise the level, never lower it.
+
+    ``allow_weaker`` (the constructor-level acknowledgement) restores plain precedence:
+    explicit, else configured, else the implicit default.
+    """
+    implicit = "authenticated" if key is not None else "any"
+    given = [level for level in (explicit, configured) if level is not None]
+    for level in given:
+        is_weaker(level, implicit)  # validates the name
+    if allow_weaker:
+        return given[0] if given else implicit
+    best = implicit
+    for level in given:
+        if is_weaker(best, level):
+            best = level
+    return best
 
 
 def tag(key: bytes, label: bytes, run_id: str, data: bytes) -> str:

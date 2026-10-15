@@ -98,6 +98,7 @@ EXEMPT = {
     "RunCheckpoints.last_activity": "liveness",
     "Mirror.begin_restore": "resets a budget",
     "Mirror.label": "scheme and bucket",
+    "Mirror.list_runs": "a bounded listing of run ids; candidates are fetched through the gate",
     "Mirror.list_steps": "a listing of step numbers; each is then fetched through the gate",
     "Mirror.upload": "writes to the remote from a verified local checkpoint",
 }
@@ -282,6 +283,8 @@ class Attack:
     lineage: bool = True
     accept: int | None = None
     reasons: frozenset[str] = frozenset({"rolled_back"})
+    weaken: bool = False  # the caller asks for ``any`` although the environment says otherwise
+    env: tuple[tuple[str, str], ...] = ()  # operator settings applied before the call
 
 
 ATTACKS = [
@@ -319,6 +322,33 @@ ATTACKS = [
         reasons=frozenset({"auth_missing", "untrusted", "rolled_back", "store_mismatch"}),
     ),
     Attack("accept override too high", attack_rolled_back, "authenticated", True, accept=2),
+    Attack(
+        "weakened per call: untagged after a key was configured",
+        lambda w: None,
+        "anchored",
+        False,
+        reasons=frozenset({"auth_missing", "untrusted", "rolled_back"}),
+        weaken=True,
+        env=(("CVPILOT_CKPT_KEY", KEY), ("CVPILOT_CKPT_REQUIRE_TRUST", "authenticated")),
+    ),
+    Attack(
+        "weakened per call: remote untagged after a key was configured",
+        lambda w: shutil.rmtree(w.ckpt / w.victim),
+        "anchored",
+        False,
+        remote=True,
+        reasons=frozenset({"auth_missing", "untrusted", "rolled_back"}),
+        weaken=True,
+        env=(("CVPILOT_CKPT_KEY", KEY), ("CVPILOT_CKPT_REQUIRE_TRUST", "authenticated")),
+    ),
+    Attack(
+        "operator floor lowered per call",
+        lambda w: remove_steps(w, (3, 2)),
+        "authenticated",
+        True,
+        accept=1,
+        env=(("CVPILOT_CKPT_MIN_STEP", "3"),),
+    ),
 ]
 
 
@@ -337,6 +367,10 @@ def judge(call: Callable[[], Any], reasons: frozenset[str]) -> Outcome:
     return "refused" if result is None else "served"
 
 
+def weak(attack: Attack) -> str | None:
+    return "any" if attack.weaken else None
+
+
 def entry_manager_restore(world: World, attack: Attack) -> Outcome:
     mgr = CheckpointManager(
         world.child, dir=world.ckpt, every_n_steps=1, install_signal_handlers=False,
@@ -344,7 +378,9 @@ def entry_manager_restore(world: World, attack: Attack) -> Outcome:
         remote_sleep=lambda s: None,
     )  # fmt: skip
     return judge(
-        lambda: mgr.restore(world.kind, accept_rollback_to=attack.accept),  # type: ignore[arg-type]
+        lambda: mgr.restore(  # type: ignore[arg-type]
+            world.kind, accept_rollback_to=attack.accept, require_trust=weak(attack)
+        ),
         attack.reasons,
     )
 
@@ -357,7 +393,10 @@ def entry_manager_restore_run_ids(world: World, attack: Attack) -> Outcome:
     )  # fmt: skip
     return judge(
         lambda: mgr.restore(  # type: ignore[arg-type]
-            world.kind, run_ids=[world.victim], accept_rollback_to=attack.accept
+            world.kind,
+            run_ids=[world.victim],
+            accept_rollback_to=attack.accept,
+            require_trust=weak(attack),
         ),
         attack.reasons,
     )
@@ -369,18 +408,25 @@ def entry_restore_latest_valid(world: World, attack: Attack) -> Outcome:
         remote=URI if attack.remote else None, remote_store=world.fake,
         remote_sleep=lambda s: None,
     )  # fmt: skip
-    return judge(mgr.restore_latest_valid, attack.reasons)
+    return judge(lambda: mgr.restore_latest_valid(require_trust=weak(attack)), attack.reasons)  # type: ignore[arg-type]
 
 
 def entry_api_resume_path(world: World, attack: Attack) -> Outcome:
-    return judge(lambda: cvpilot.resume_path("p", accept_rollback_to=attack.accept), attack.reasons)
+    return judge(
+        lambda: cvpilot.resume_path(
+            "p",
+            accept_rollback_to=attack.accept,
+            require_trust=weak(attack),  # type: ignore[arg-type]
+        ),
+        attack.reasons,
+    )
 
 
 def entry_ckpt_resume_path(world: World, attack: Attack) -> Outcome:
     return judge(
         lambda: resume.resume_path(
             "p", checkpoint_dir=world.ckpt, store_dir=world.store,
-            accept_rollback_to=attack.accept,
+            accept_rollback_to=attack.accept, require_trust=weak(attack),  # type: ignore[arg-type]
         ),
         attack.reasons,
     )  # fmt: skip
@@ -390,7 +436,7 @@ def entry_find_resume_point(world: World, attack: Attack) -> Outcome:
     return judge(
         lambda: resume.find_resume_point(
             "p", checkpoint_dir=world.ckpt, store_dir=world.store, kind=world.kind,  # type: ignore[arg-type]
-            accept_rollback_to=attack.accept, force=True,
+            accept_rollback_to=attack.accept, force=True, require_trust=weak(attack),  # type: ignore[arg-type]
         ),
         attack.reasons,
     )  # fmt: skip
@@ -452,7 +498,8 @@ def entry_fetch(world: World, attack: Attack) -> Outcome:
 
 def entry_cli_verify(world: World, attack: Attack, invoke: Invoke) -> Outcome:
     args = ["ckpt", "verify", str(world.ckpt), "--run", world.victim, "--kind", world.kind]
-    res = invoke(*args, "--project", "p", "--require-trust", attack.policy)
+    trust = "any" if attack.weaken else attack.policy
+    res = invoke(*args, "--project", "p", "--require-trust", trust)
     return "served" if res.code == 0 else "refused"
 
 
@@ -460,7 +507,8 @@ def entry_cli_prune(world: World, attack: Attack, invoke: Invoke) -> Outcome:
     before = sorted(p.name for p in world.folder().glob("*")) if world.folder().exists() else []
     invoke(
         "ckpt", "prune", str(world.ckpt), "--run", world.victim, "--keep-last", "1",
-        "--keep-best", "1", "--project", "p", "--require-trust", attack.policy,
+        "--keep-best", "1", "--project", "p",
+        "--require-trust", "any" if attack.weaken else attack.policy,
     )  # fmt: skip
     after = sorted(p.name for p in world.folder().glob("*")) if world.folder().exists() else []
     return "refused" if before == after else "served"
@@ -512,6 +560,25 @@ ENTRIES: dict[str, tuple[Callable[..., Outcome], set[str]]] = {
     ),
 }
 
+LOW_LEVEL = {
+    "RunCheckpoints.iter_valid",
+    "RunCheckpoints.inspect",
+    "RunCheckpoints.prune",
+    "Mirror.fetch",
+}
+WEAK_LOCAL = "weakened per call: untagged after a key was configured"
+WEAK_REMOTE = "weakened per call: remote untagged after a key was configured"
+FLOOR = "operator floor lowered per call"
+for _name, (_adapter, _skip) in list(ENTRIES.items()):
+    extra: set[str] = set()
+    if _name in LOW_LEVEL:  # constructed with an explicit policy: there is no environment to weaken
+        extra |= {WEAK_LOCAL, WEAK_REMOTE, FLOOR}
+    if _name.startswith("cli ckpt"):
+        extra |= {FLOOR}  # the command line has no rollback acceptance and no floor of its own
+    if _name != "CheckpointManager.restore" and not _name.startswith("CheckpointManager."):
+        extra |= {WEAK_REMOTE}
+    ENTRIES[_name] = (_adapter, _skip | extra)
+
 
 def test_every_gated_entry_point_has_an_adapter() -> None:
     names = {n.split("(")[0] for n in ENTRIES}
@@ -550,6 +617,8 @@ def test_the_same_attack_gets_the_same_answer_from_every_entry_point(
     attack.setup(world)
     if attack.name == "an ancestor's directory rolled back":
         pass  # the child's lineage reaches the victim as an ancestor
+    for name, value in attack.env:
+        monkeypatch.setenv(name, value)
     monkeypatch.setenv("CVPILOT_STORE_DIR", str(world.store))
     params = inspect.signature(adapter).parameters
     outcome = adapter(world, attack, invoke) if "invoke" in params else adapter(world, attack)

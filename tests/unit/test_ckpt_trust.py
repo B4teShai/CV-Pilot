@@ -275,6 +275,7 @@ def untrusted_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: s
         every_n_steps=1,
         install_signal_handlers=False,
         require_trust=policy,
+        allow_weaker_trust=policy == "any",  # a key is set: weaker than authenticated needs this
     )
     return run, reader
 

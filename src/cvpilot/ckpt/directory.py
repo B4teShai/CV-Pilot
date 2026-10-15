@@ -172,6 +172,7 @@ class AdmitContext:
     present: frozenset[int] = frozenset()
     accept_rollback_to: int | None = None
     min_step: int | None = None
+    waive_min_step: bool = False  # only a constructor-level acknowledgement sets this
     max_candidate_bytes: int | None = None
 
 
@@ -209,6 +210,9 @@ class Admission:
 
     def _rolled_back(self, step: int | None, floor: int | None = None) -> str | None:
         floor = self.floor if floor is None else floor
+        mark = self._ctx.min_step
+        if mark is not None and not self._ctx.waive_min_step and (step is None or step < mark):
+            return "rolled_back"  # the operator's floor: a call cannot accept its way below it
         accept = self._ctx.accept_rollback_to
         if accept is not None and (accept == 0 if step is None else step >= accept):
             if not self._accepted_logged:

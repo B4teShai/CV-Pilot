@@ -98,6 +98,10 @@ class Restored:
     trust: TrustLevel = "local_chain_only"
     """``authenticated`` (tag verified), ``anchored`` (run-store digest matched) or
     ``local_chain_only`` (only the directory's own chain vouches)."""
+    policy: str = "any"
+    """The trust policy that was in force for this restore (after the monotone rule)."""
+    weaker_allowed: bool = False
+    """True when the manager was built with ``allow_weaker_trust=True``."""
 
 
 def _state_of(name: str, value: Any) -> Any:
@@ -171,6 +175,7 @@ class CheckpointManager:
         require_trust: RequireTrust | None = None,
         allow_pt_format: bool | None = None,
         min_step: int | None = None,
+        allow_weaker_trust: bool = False,
     ) -> None:
         settings = load_settings()
         key = auth.load_key()  # environment only; never stored, logged or passed on
@@ -180,7 +185,11 @@ class CheckpointManager:
             raise ValueError("dir is required: pass dir= or set CVPILOT_CHECKPOINT_DIR")
         if remote is None:
             remote = settings.checkpoint_remote
-        require_trust = auth.resolve_policy(require_trust, settings.ckpt_require_trust, key)  # type: ignore[assignment]
+        if not isinstance(allow_weaker_trust, bool):
+            raise ValueError("allow_weaker_trust must be True or False")
+        require_trust = auth.resolve_policy(  # type: ignore[assignment]
+            require_trust, settings.ckpt_require_trust, key, allow_weaker=allow_weaker_trust
+        )
         if require_trust not in POLICIES:
             raise ValueError(f"require_trust must be one of {', '.join(POLICIES)}")
         if allow_pt_format is None:
@@ -241,13 +250,18 @@ class CheckpointManager:
         self._verify = verify_after_save
         self._lock_timeout = lock_timeout
         self._key = key
-        self.min_step = min_step if min_step is not None else settings.ckpt_min_step
-        if self.min_step is not None and (
-            isinstance(self.min_step, bool)
-            or not isinstance(self.min_step, int)
-            or self.min_step < 0
-        ):
-            raise ValueError("min_step must be a non-negative integer")
+        for value in (min_step, settings.ckpt_min_step):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+            ):
+                raise ValueError("min_step must be a non-negative integer")
+        # The operator's CVPILOT_CKPT_MIN_STEP and the constructor's argument both bind: the larger
+        # wins. Only the explicit acknowledgement lets the constructor argument replace the setting.
+        floors = [v for v in (min_step, settings.ckpt_min_step) if v is not None]
+        if allow_weaker_trust and min_step is not None:
+            floors = [min_step]
+        self.min_step: int | None = max(floors) if floors else None
+        self.allow_weaker_trust = allow_weaker_trust
         self._anchor = _HandleAnchor(self._handle)
         self.require_trust: RequireTrust = require_trust
         self.allow_pt = allow_pt_format
@@ -273,6 +287,11 @@ class CheckpointManager:
                 clock=remote_clock,
             )
         self._own = self._dir_for(self._handle.run_id)
+        if allow_weaker_trust:
+            self._emit(
+                "warning", "checkpoint_weaker_trust_allowed", policy=self.require_trust,
+                min_step=self.min_step,
+            )  # fmt: skip
         self._lease_fd: int | None = self._own.hold_lease()  # dies with the process
         self._last_step: int | None = None
         self._last_time = clock()
@@ -302,8 +321,27 @@ class CheckpointManager:
             fields["checkpoint_run_id"] = owner
         self._handle.emit(level, event, **fields)
 
+    def _clamp(self, policy: str | None) -> RequireTrust:
+        """The level a call may use: its own argument can only raise the manager's, unless the
+        constructor said ``allow_weaker_trust=True``."""
+        if policy is None:
+            return self.require_trust
+        if policy not in POLICIES:
+            raise ValueError(f"require_trust must be one of {', '.join(POLICIES)}")
+        if not self.allow_weaker_trust and auth.is_weaker(policy, self.require_trust):
+            return self.require_trust
+        return policy  # type: ignore[return-value]
+
+    def _effective_policy(self, policy: str | None) -> RequireTrust:
+        level = self._clamp(policy)
+        if policy is not None and level != policy:
+            self._emit(
+                "warning", "checkpoint_trust_downgrade_ignored", requested=policy, effective=level
+            )
+        return level
+
     def _dir_for(self, run_id: str, policy: str | None = None) -> RunCheckpoints:
-        level: Any = policy or self.require_trust
+        level: Any = self._clamp(policy)
         found = self._dirs.get((run_id, level))
         if found is None:
             found = RunCheckpoints(
@@ -699,19 +737,20 @@ class CheckpointManager:
         and then the runs it resumed (nearest first). Corrupt, truncated, forged, replaced or
         symlinked files are skipped and counted, never loaded; ``None`` when nothing verifies.
 
-        ``require_trust`` overrides the manager's policy for this call. Under ``anchored`` or
-        ``authenticated`` a candidate that lacks its own proof is never substituted at a lower
-        level: if candidates exist but none qualifies, ``CheckpointUntrustedError`` is raised
-        (event ``checkpoint_untrusted``). The strict policies also look for rollback: if the
+        ``require_trust`` can raise the manager's policy for this call but never lower it (a weaker
+        request is ignored and logged as ``checkpoint_trust_downgrade_ignored``; only the
+        constructor's ``allow_weaker_trust=True`` permits that, logged once at construction).
+        ``min_step`` (also ``CVPILOT_CKPT_MIN_STEP``) is a floor no call can lower. Under
+        ``anchored`` or ``authenticated`` a candidate that lacks its own proof is never substituted
+        at a lower level: if candidates exist but none qualifies, ``CheckpointUntrustedError`` is
+        raised (event ``checkpoint_untrusted``). The strict policies also look for rollback: if the
         newest checkpoint that qualifies is older than one the tag-checked pointer, the run store
         or ``min_step`` says existed, ``CheckpointUntrustedError`` with reason ``rolled_back`` is
         raised; ``accept_rollback_to=N`` accepts a restore at step N or later on purpose (logged;
         0 accepts starting from nothing). A newer checkpoint that is still present but damaged is
         corruption, not rollback.
         """
-        policy: RequireTrust = require_trust or self.require_trust
-        if policy not in POLICIES:
-            raise ValueError(f"require_trust must be one of {', '.join(POLICIES)}")
+        policy = self._effective_policy(require_trust)
         order = (
             list(run_ids)
             if run_ids is not None
@@ -722,6 +761,7 @@ class CheckpointManager:
         ctx = AdmitContext(
             accept_rollback_to=accept_rollback_to,
             min_step=self.min_step,
+            waive_min_step=self.allow_weaker_trust,
             max_candidate_bytes=self._remote_candidate_bytes,
         )
         skipped: list[Skipped] = []
@@ -731,11 +771,12 @@ class CheckpointManager:
                 found = self._restore_remote(run_id, kind, map_location, skipped, policy, ctx)
             if found is None:
                 continue
+            found.policy, found.weaker_allowed = policy, self.allow_weaker_trust
             self._announce(found, run_id, kind, len(skipped), policy)
             self.last_restore = found
             return found
         self.last_restore = None
-        if self.min_step is not None and accept_rollback_to != 0:
+        if self.min_step is not None and not self.allow_weaker_trust:
             skipped.append(Skipped(None, kind, kind, "rolled_back"))  # progress is known: min_step
         failure = gate_failure(skipped, policy)
         if failure is not None:

@@ -25,6 +25,18 @@ takes `--require-trust`) says how much proof a restore accepts. Under `anchored`
 an older one. If checkpoints exist but none reaches the level, restore raises
 `checkpoint_untrusted` and loads nothing; it never falls back to a weaker file.
 
+**Settings only tighten.** The level in force is the strictest of the manager's constructor
+argument, `CVPILOT_CKPT_REQUIRE_TRUST` and the implicit default (`authenticated` as soon as
+`CVPILOT_CKPT_KEY` is set). A per-call `require_trust=`, a `--require-trust` flag or an argument to
+`resume_path` can raise the level but never lower it; a weaker request is ignored and logged as
+`checkpoint_trust_downgrade_ignored`. The same holds for the rollback floor: `CVPILOT_CKPT_MIN_STEP`
+and the constructor's `min_step=` both bind (the larger wins) and `accept_rollback_to=` cannot
+accept a restore below them. The one way to weaken a manager is the constructor argument
+`allow_weaker_trust=True` (not a call, a flag or an environment variable); it is logged once as
+`checkpoint_weaker_trust_allowed`, and `Restored.policy` / `Restored.weaker_allowed` and the
+`policy` field of `ckpt verify --json` show what was in force. Nothing in the checkpoint directory
+(manifests, markers, extra files) is ever read as a setting.
+
 **Recommendation.** Keep the default `any` only for a directory that nobody else can write (a
 laptop, a private node). For a directory that is shared, restored from a bucket or writable by
 others, set both:

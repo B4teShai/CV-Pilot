@@ -120,6 +120,9 @@ def test_a_strict_policy_fails_closed_instead_of_returning_an_unproven_file(
     monkeypatch.setenv("CVPILOT_CKPT_KEY", "k" * 40)
     with pytest.raises(CheckpointUntrustedError):
         find(tmp_path, require_trust="authenticated")
+    with pytest.raises(CheckpointUntrustedError):
+        find(tmp_path, require_trust="anchored")  # a key is set: a call cannot go below it
+    monkeypatch.delenv("CVPILOT_CKPT_KEY")
     point = find(tmp_path, require_trust="anchored")
     assert point is not None and point.trust == "anchored"
 

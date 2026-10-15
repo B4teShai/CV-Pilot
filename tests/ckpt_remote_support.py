@@ -17,6 +17,8 @@ class FakeRemote:
         self.down = False
         self.writes: list[tuple[str, int, bool]] = []
         self.moves: list[tuple[str, str]] = []
+        self.list_calls: list[str] = []
+        self.reads: list[str] = []
 
     def _check(self) -> None:
         if self.down:
@@ -28,6 +30,7 @@ class FakeRemote:
 
     def read_range(self, key: str, start: int, length: int) -> bytes:
         self._check()
+        self.reads.append(key)
         if self.fail_reads > 0:
             self.fail_reads -= 1
             raise OSError("transient read failure")
@@ -62,7 +65,11 @@ class FakeRemote:
         self._check()
         self.objects.pop(key, None)
 
-    def list(self, prefix: str) -> list[str]:
+    def list(self, prefix: str, limit: int = 10_000) -> list[str]:
         self._check()
-        head = prefix.rstrip("/") + "/"
-        return sorted({k[len(head) :].split("/")[0] for k in self.objects if k.startswith(head)})
+        self.list_calls.append(prefix)
+        head = prefix.rstrip("/") + "/" if prefix else ""
+        names = sorted({k[len(head) :].split("/")[0] for k in self.objects if k.startswith(head)})
+        if len(names) > limit:
+            raise OSError("too many entries")
+        return names

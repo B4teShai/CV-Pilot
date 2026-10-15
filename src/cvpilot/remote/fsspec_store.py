@@ -21,6 +21,7 @@ from cvpilot.core.errors import MissingExtraError
 from cvpilot.core.uri import RemoteLocation
 
 MAX_TIMEOUT_S = 300.0
+MAX_LIST_ENTRIES = 10_000
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._=-]{0,127}"
 _KEY = re.compile(rf"{_SEGMENT}(?:/{_SEGMENT}){{0,7}}")
 _BACKEND = {"s3": "s3fs", "gs": "gcsfs", "az": "adlfs", "memory": "fsspec"}
@@ -111,14 +112,22 @@ class FsspecStore:
         except Exception as exc:  # noqa: BLE001
             raise self._fail(exc) from None
 
-    def list(self, prefix: str) -> list[str]:
-        path = self._path(prefix)
+    def list(self, prefix: str, limit: int = MAX_LIST_ENTRIES) -> list[str]:
+        """Immediate child names below ``prefix`` ("" is the remote's root).
+
+        At most ``limit`` entries are accepted: a larger listing fails instead of being held in
+        memory and decided on (backends page their listings internally, so this bounds what is
+        kept, not what the backend transfers).
+        """
+        path = self._root if prefix == "" else self._path(prefix)
         try:
             entries = self._fs.ls(path, detail=False)
         except FileNotFoundError:
             return []
         except Exception as exc:  # noqa: BLE001
             raise self._fail(exc) from None
+        if len(entries) > limit:
+            raise OSError("the remote listing is larger than the limit")
         return sorted({str(e).rstrip("/").rsplit("/", 1)[-1] for e in entries})
 
 

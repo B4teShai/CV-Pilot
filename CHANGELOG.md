@@ -5,6 +5,15 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Security
+
+- Trust and rollback settings are monotone: the effective policy is the strictest of the
+  constructor argument, `CVPILOT_CKPT_REQUIRE_TRUST` and the implicit `authenticated` default under
+  a key; per-call, `--require-trust` and `resume_path` arguments can only raise it
+  (`checkpoint_trust_downgrade_ignored`). `CVPILOT_CKPT_MIN_STEP` is a floor no call can lower and
+  `accept_rollback_to=0` no longer waives it. Weakening needs the constructor argument
+  `allow_weaker_trust=True` (logged as `checkpoint_weaker_trust_allowed`).
+
 ## [0.1.0] - release candidate (not published)
 
 Nothing has been uploaded to any package index; publishing needs the maintainer's explicit

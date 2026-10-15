@@ -94,9 +94,12 @@ class _Session:
             self.key = auth.load_key()
         except CheckpointError as exc:
             raise _usage(str(exc)) from None
-        self.policy: Any = auth.resolve_policy(
-            trust.value if trust else None, settings.ckpt_require_trust, self.key
-        )
+        asked = trust.value if trust else None
+        self.policy: Any = auth.resolve_policy(asked, settings.ckpt_require_trust, self.key)
+        if asked is not None and auth.is_weaker(asked, self.policy):
+            get_logger("cvpilot.cli").warning(
+                "checkpoint_trust_downgrade_ignored", requested=asked, effective=self.policy
+            )
         name = project or settings.project
         self._opened = runs.open_anchor(name, settings.store_dir) if name else None
         self.anchor = self._opened[0] if self._opened else None
@@ -162,7 +165,10 @@ def _collect(
         for run_id in _run_ids(root, run):
             found = session.open(run_id)
             for one in _kinds(kind):
-                rows += [_row(run_id, e) for e in found.inspect(one, check_data=check_data)]
+                rows += [
+                    {**_row(run_id, e), "policy": session.policy}
+                    for e in found.inspect(one, check_data=check_data)
+                ]
         return rows
     finally:
         session.close()
