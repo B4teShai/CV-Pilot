@@ -1,0 +1,90 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cvpilot"
+dynamic = ["version"]
+description = "CV-native run companion: regression gates, remote monitoring and resume-safe checkpoints."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+  "click>=8.1",
+  "numpy>=1.26",  # tested: 1.26.4 (tests, mypy), 2.2.6 (Python 3.10), 2.5.4 (Python 3.13)
+  "pyarrow>=18",
+  "pydantic>=2.7",
+  "structlog>=24.1",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+server = []
+ultralytics = []
+lightning = []
+hf = []
+mmdet = []
+mlflow = []
+wandb = []
+trackio = []
+alerts = []
+
+[project.scripts]
+cvpilot = "cvpilot.cli.app:main"
+
+[project.entry-points."cvpilot.stores"]
+local = "cvpilot.store.local:open_store"
+
+[project.entry-points."cvpilot.tables"]
+parquet = "cvpilot.store.tables:open_tables"
+
+[project.entry-points."cvpilot.capturers"]
+git = "cvpilot.capture.env:capture_git"
+packages = "cvpilot.capture.env:capture_packages"
+python = "cvpilot.capture.env:capture_python"
+host = "cvpilot.capture.env:capture_host"
+gpu = "cvpilot.capture.env:capture_gpu"
+command = "cvpilot.capture.env:capture_command"
+
+[tool.hatch.version]
+path = "src/cvpilot/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cvpilot"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pycocotools==2.0.11",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+python_version = "3.10"
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*", "pynvml"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "chaos: kills a subprocess mid-write and checks recovery",
+  "parity: compares metrics with the pycocotools reference",
+]

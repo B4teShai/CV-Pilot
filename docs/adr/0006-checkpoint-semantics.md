@@ -1,0 +1,108 @@
+# ADR-0006: Checkpoint semantics
+
+**Status:** accepted
+**Date:** 2026-10-14
+
+## Context
+
+Training jobs on spot instances and shared clusters are killed without warning or with a
+short grace window (SIGTERM, cloud preemption notices). A checkpoint written at that moment
+can be truncated on local disk, half-uploaded to object storage, or complete on disk but
+missing from the bucket. Frameworks resolve "last" by file name (Lightning `ckpt_path="last"`,
+Ultralytics `resume=True` on `last.pt`) and do not verify what they load; a truncated file
+turns into a crash at startup or, worse, a silent restart from scratch. SkyPilot managed jobs
+relaunch on another node and lose local disk unless `/checkpoint` is a mounted bucket, and
+recommend loading a checkpoint on every start.
+
+A resumable checkpoint needs more than weights: optimizer, scheduler, AMP scaler, RNG state
+and dataloader/sampler state. A deployable checkpoint needs weights and EMA only. Keeping
+every full-state checkpoint is too expensive; keeping only one is unsafe.
+
+Checkpoints must be loadable without arbitrary code execution
+([../engineering/standards.md](../engineering/standards.md): `weights_only=True`,
+`safetensors` preferred).
+
+## Options considered
+
+### Option A: framework-native "last" checkpoint
+
+Rely on `ModelCheckpoint(save_last=True)` and `last.pt`.
+
+Trade-offs: zero code; but no checksum, no atomic rename on some paths, no manifest of
+what the file contains, no distinction between "exists" and "valid", and no handling of a
+kill during the write or the upload.
+
+### Option B: cloud-native checkpointing (bucket-only, framework-agnostic streaming)
+
+Write directly to object storage with multipart upload and treat the bucket as the only
+location.
+
+Trade-offs: survives node loss by construction; but every save pays network latency, a
+preemption mid-upload leaves an invisible partial object or a visible stale one, and
+on-prem clusters without a bucket get nothing.
+
+### Option C: atomic local write, sidecar manifest, LATEST pointer, verified restore
+
+Write to a temporary file, `fsync`, hash, write a manifest, rename, then update a `LATEST`
+pointer; upload to the bucket after the local file is verified; on restart walk back from
+`LATEST` to the newest checkpoint that verifies and loads.
+
+Trade-offs: more code and a chaos test tier; in return every state is recoverable and the
+semantics are the same on a laptop, a SLURM node and a spot instance.
+
+## Decision
+
+Option C, implemented by `ckpt/` with the following rules.
+
+1. **Atomic write.** Save to `<dir>/<run_id>/<kind>/step_<step:09d>.<ext>.tmp`, call
+   `fsync` on the file and its directory, compute SHA-256 over the file, write
+   `step_<step:09d>.manifest.json` (a `CheckpointManifest`), then `os.replace` the `.tmp`
+   to its final name. Only after the manifest exists and the rename succeeded is `LATEST`
+   (or `BEST`) rewritten atomically with the manifest's relative path.
+2. **Integrity on restore.** `restore_latest_valid()` reads `LATEST`, verifies the file size
+   and SHA-256 against the manifest, loads it (`safetensors`, or `torch.load(...,
+   weights_only=True)`), and returns the state. If any step fails it logs
+   `checkpoint_skipped_corrupt` and tries the previous manifest in step order. It returns
+   `None` when no valid checkpoint exists. Files without a manifest are never loaded.
+3. **Last versus best.** `kind="last"` holds the full training state (model, optimizer,
+   scheduler, scaler, RNG, dataloader state) in a `.pt` file loaded with `weights_only=True`.
+   `kind="best"` holds model weights and EMA as `safetensors`. Retention is per kind:
+   `keep_last` and `keep_best`, defaults 3 and 2.
+4. **Never delete before verify.** A checkpoint is eligible for deletion only when a newer
+   checkpoint of the same kind has been written, verified and (if a remote is configured)
+   uploaded with a matching remote checksum. The newest valid checkpoint of each kind is
+   never deleted.
+5. **Remote mirror.** When `remote=` is set, the `.pt`/`.safetensors` file and its manifest
+   are uploaded through `fsspec` after local verification; the remote manifest is written
+   last. On restore, if local `LATEST` is missing (new node), the manager lists remote
+   manifests and applies rule 2 to them, downloading to `<dir>` first.
+6. **Preemption.** A handler for SIGTERM and SIGUSR1 (configurable) and a poller for cloud
+   preemption notices (AWS, GCP, Azure metadata endpoints) set a flag; `maybe_save` saves
+   at the next call inside the grace window regardless of `every_n_minutes`. The run is
+   marked `preempted`. A run that calls `restore_latest_valid()` and finds a state starts
+   as a new run with `parent_run_id` set to the preempted run and continues its step
+   timeline.
+7. **Framework adapters** resolve resume paths through the manager: `resume_path()` returns
+   the latest *verified* `last` file or `None`, which Lightning receives as `ckpt_path` and
+   Ultralytics as the `resume=` target. Adapters never pass the string `"last"`.
+8. **Save overhead budget.** Hashing and manifest writing add at most 5 % to the wall time of
+   `torch.save` for the same state on local SSD; measured by `benchmarks/ckpt_save.py`.
+
+## Consequences
+
+- Easier: any kill, at any point of save or upload, leaves a loadable checkpoint; resume is
+  one call; the same recipe works for SkyPilot (`/checkpoint` mounted in MOUNT mode), SLURM
+  and local runs.
+- Harder: a chaos test tier (`tests/chaos/`) that kills the process mid-write and truncates
+  uploads is mandatory before `ckpt/` is marked built; retention needs care when the
+  remote is slower than the local save interval.
+- Forbidden: loading a checkpoint without a manifest; `torch.load` without
+  `weights_only=True`; deleting the only valid checkpoint of a kind.
+- Follow-up: `cvpilot ckpt ls|verify|restore` commands, SkyPilot and SLURM recipes in the
+  documentation, `preempted`/`resumed` alert rules.
+
+## Links
+
+- [../architecture/04-flows.md](../architecture/04-flows.md) (flow B)
+- [../architecture/03-data-model.md](../architecture/03-data-model.md) (`CheckpointManifest`)
+- [0005-run-store.md](0005-run-store.md)
