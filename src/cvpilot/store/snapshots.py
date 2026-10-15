@@ -198,7 +198,9 @@ def _read_snapshot(store: LocalRunStore, run_id: str, row: tuple[Any, ...]) -> E
     try:
         size = path.stat().st_size
     except FileNotFoundError:
-        raise StoreError(f"snapshot file {name} of run {run_id} is missing") from None
+        raise SnapshotIntegrityError(
+            f"snapshot file {name} of run {run_id} is missing although the index lists it"
+        ) from None
     except OSError as exc:
         raise StoreError(f"cannot read snapshot {name}: {exc}") from exc
     if size > MAX_SNAPSHOT_BYTES:

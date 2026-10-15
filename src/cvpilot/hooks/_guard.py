@@ -29,8 +29,11 @@ class Guard:
         self.skipped = 0
         self.disabled = False
 
-    def run(self, callback: str, fn: Callable[..., Any], *args: Any) -> None:
-        if self.disabled:
+    def run(self, callback: str, fn: Callable[..., Any], *args: Any, always: bool = False) -> None:
+        """Run ``fn`` isolated from the host. ``always`` marks a lifecycle callback (finish,
+        mark failed): it still runs after the metric callbacks disabled the hook, because a run
+        that is never finished stays ``running`` forever."""
+        if self.disabled and not always:
             return
         try:
             fn(*args)
@@ -41,7 +44,7 @@ class Guard:
                 get_logger("cvpilot.hooks").warning(
                     "hook_failed", hook=self.hook, callback=callback, error_type=type(exc).__name__
                 )
-            if self.consecutive >= self.max_consecutive:
+            if self.consecutive >= self.max_consecutive and not self.disabled:
                 self.disabled = True
                 get_logger("cvpilot.hooks").warning(
                     "hook_disabled", hook=self.hook, failures=self.failures

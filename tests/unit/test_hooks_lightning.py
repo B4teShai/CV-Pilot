@@ -106,16 +106,18 @@ def test_only_rank_zero_logs() -> None:
     assert sink.logged == [] and sink.finished == []
 
 
-def test_fit_end_finishes_and_an_exception_marks_the_run_failed() -> None:
+def test_the_last_stage_finishes_and_an_exception_marks_the_run_failed() -> None:
     sink = RecordingSink()
     trainer, callback, _, _ = attached(sink)
     callback.on_fit_end(trainer, None)
+    assert sink.finished == []  # fit alone does not end the script: test may follow
+    callback.on_teardown(trainer, None, "test")
     assert sink.finished == ["finished"]
     sink2 = RecordingSink()
     trainer, callback, _, _ = attached(sink2)
     callback.on_exception(trainer, None, ValueError("boom"))
     assert sink2.finished == ["failed"]
-    callback.on_fit_end(trainer, None)  # already closed: ignored, no second finish
+    callback.on_teardown(trainer, None, "test")  # already closed: ignored, no second finish
     assert sink2.finished == ["failed"]
 
 
@@ -253,6 +255,8 @@ def test_autolog_end_to_end_logs_scalars_finishes_and_announces_the_hook(
     for step in range(5):
         logger.log_metrics({"train/loss": 1.0 / (step + 1)}, step)
     callback.on_fit_end(trainer, None)
+    callback.on_teardown(trainer, None, "fit")
+    callback._core.finish_at_exit()  # a fit-only script is finished when the process exits
     view = runs.get_run_view("proj", run.run_id, store_dir=tmp_path / "store")
     assert view.meta.status == "finished" and view.stats.n_points == 5
     assert view.meta.framework.startswith("lightning==2.6.6")
@@ -302,4 +306,4 @@ def test_a_hung_tracker_never_delays_the_callbacks(monkeypatch: pytest.MonkeyPat
         worst = max(worst, time.perf_counter() - start)
     assert worst < 0.5
     Recording.instances[0].release.set()
-    trainer.callbacks[0].on_fit_end(trainer, None)
+    trainer.callbacks[0].on_teardown(trainer, None, "test")

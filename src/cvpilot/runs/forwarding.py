@@ -59,13 +59,22 @@ class ForwarderStats:
     failed_calls: int = 0
     dropped_batches: int = 0
     dropped_points: int = 0
+    failed_points: int = 0
+    """Points in batches whose ``log_points`` call failed."""
+    adapter_dropped_points: int = 0
+    """Points an adapter itself could not send (for example W&B steps that went backwards)."""
     disabled_reason: str | None = None
     abandoned: bool = False
 
     @property
     def clean(self) -> bool:
         return not (
-            self.failed_calls or self.dropped_batches or self.disabled_reason or self.abandoned
+            self.failed_calls
+            or self.dropped_batches
+            or self.failed_points
+            or self.adapter_dropped_points
+            or self.disabled_reason
+            or self.abandoned
         )
 
 
@@ -117,6 +126,7 @@ class _Worker:
         self.status: RunStatus = "finished"
         self.opened = False
         self._adapter_closed = False
+        self._seen_dropped = 0
         self._lock = threading.Lock()
         self._logged = False
         self.thread = threading.Thread(
@@ -197,17 +207,30 @@ class _Worker:
         except Exception as exc:  # noqa: BLE001  # adapter boundary: count, log once, go on
             with self._lock:
                 self.stats.failed_calls += 1
+                self.stats.failed_points += n_points
             self._note(reason, exc=exc, n_points=n_points)
             return False
         except BaseException as exc:  # an SDK calling sys.exit, an interrupt delivered here
             with self._lock:
                 self.stats.failed_calls += 1
+                self.stats.failed_points += n_points
             self._note("base_exception", exc=exc, n_points=n_points)
             self._disable("base_exception")
             self._close_adapter("failed")
             return False
         finally:
             self.busy_since = None
+
+    def _sync_adapter_drops(self) -> None:
+        """Count points the adapter dropped itself (an optional ``dropped_points`` attribute) and
+        log the first time, with the adapter's ``drop_reason``."""
+        dropped = getattr(self.adapter, "dropped_points", 0)
+        if not isinstance(dropped, int) or dropped <= self._seen_dropped:
+            return
+        delta, self._seen_dropped = dropped - self._seen_dropped, dropped
+        with self._lock:
+            self.stats.adapter_dropped_points += delta
+        self._note(str(getattr(self.adapter, "drop_reason", "adapter_dropped")), n_points=delta)
 
     def _close_adapter(self, status: RunStatus) -> None:
         """Call ``adapter.close`` at most once, whatever it raises."""
@@ -237,6 +260,7 @@ class _Worker:
                 self._drop(batch)
             else:
                 self._call(partial(self.adapter.log_points, batch), n_points=len(batch))
+                self._sync_adapter_drops()
             with self._lock:
                 self.pending_points -= len(batch)
         if self.opened and not self._adapter_closed:
@@ -332,6 +356,8 @@ class Fanout:
                         failed_calls=s.failed_calls,
                         dropped_batches=s.dropped_batches,
                         dropped_points=s.dropped_points,
+                        failed_points=s.failed_points,
+                        adapter_dropped_points=s.adapter_dropped_points,
                         disabled_reason=s.disabled_reason,
                         abandoned=s.abandoned,
                     )

@@ -17,8 +17,6 @@ from cvpilot.compare.engine import Comparison
 from cvpilot.compare.gate import GateResult, Thresholds
 
 SCHEMA = "cvpilot.compare/1"
-MAX_JSON_VIOLATIONS = 1000
-"""Violations written to a JSON report, worst first; ``n_violations`` always has the full count."""
 
 
 def _clean(value: Any) -> Any:
@@ -38,7 +36,7 @@ def gate_dict(result: GateResult, thresholds: Thresholds | None = None) -> dict[
         "passed": result.passed,
         "n_violations": len(result.violations),
         "n_checks": result.n_checks,
-        "violations": _clean(list(result.violations[:MAX_JSON_VIOLATIONS])),
+        "violations": _clean(list(result.violations)),
         "skipped_slices": list(result.skipped),
     }
     if thresholds is not None:

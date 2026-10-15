@@ -672,7 +672,7 @@ class LocalRunStore:
         try:
             fd = os.open(path, flags)
         except FileNotFoundError:
-            raise StoreError(f"artifact {sha256[:12]} is missing") from None
+            raise SnapshotIntegrityError(f"artifact {sha256[:12]} is missing") from None
         except OSError as exc:
             raise StoreError(f"cannot read artifact {sha256[:12]}: {exc.strerror}") from exc
         try:

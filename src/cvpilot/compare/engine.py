@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from cvpilot.core.errors import CompareRefusedError, EvalSetMismatchError
-from cvpilot.core.schema import EvalSnapshot
+from cvpilot.core.schema import EvalParams, EvalSnapshot
 
 Overlap = Literal["overlap", "separated", "unknown"]
 ClassStatus = Literal["ok", "missing", "not_applicable", "not_finite"]
@@ -144,6 +144,25 @@ def _refuse(
     )
 
 
+GRID_REL_TOL = 1e-9
+"""Relative tolerance when comparing IoU grids and confusion settings: a one-ULP difference between
+platforms is the same evaluation; a real difference (1e-6 and up) is not."""
+
+
+def _same_params(a: EvalParams, b: EvalParams) -> bool:
+    def close(x: float, y: float) -> bool:
+        return math.isclose(x, y, rel_tol=GRID_REL_TOL, abs_tol=1e-12)
+
+    grids = zip(a.iou_thresholds, b.iou_thresholds, strict=False)
+    return (
+        len(a.iou_thresholds) == len(b.iou_thresholds)
+        and all(close(x, y) for x, y in grids)
+        and close(a.confusion_iou, b.confusion_iou)
+        and close(a.confusion_score, b.confusion_score)
+        and a.max_dets == b.max_dets
+    )
+
+
 def check_comparable(candidate: EvalSnapshot, baseline: EvalSnapshot) -> None:
     """Raise ``CompareRefusedError`` unless the two snapshots measure the same thing."""
     if candidate.eval_set_hash != baseline.eval_set_hash:
@@ -173,7 +192,7 @@ def check_comparable(candidate: EvalSnapshot, baseline: EvalSnapshot) -> None:
             candidate,
             baseline,
         )
-    if candidate.params != baseline.params:
+    if not _same_params(candidate.params, baseline.params):
         raise _refuse(
             "params",
             "evaluation parameters (IoU grid, confusion, max_dets) differ",
@@ -227,10 +246,18 @@ def _finite(*values: float | None) -> bool:
 def _headline(candidate: EvalSnapshot, baseline: EvalSnapshot) -> tuple[MetricDelta, ...]:
     names = [*baseline.metrics, *(n for n in candidate.metrics if n not in baseline.metrics)]
     rows = []
+    # intervals of different coverage or resample counts are not comparable: no overlap verdict
+    comparable_intervals = (
+        candidate.bootstrap is not None
+        and baseline.bootstrap is not None
+        and candidate.bootstrap.level == baseline.bootstrap.level
+        and candidate.bootstrap.n_resamples == baseline.bootstrap.n_resamples
+    )
     for name in names:
         b, c = baseline.metrics.get(name), candidate.metrics.get(name)
         bi, ci = baseline.ci.get(name), candidate.ci.get(name)
-        rows.append(MetricDelta(name, b, c, _delta(b, c), bi, ci, _overlap(bi, ci)))
+        overlap = _overlap(bi, ci) if comparable_intervals else "unknown"
+        rows.append(MetricDelta(name, b, c, _delta(b, c), bi, ci, overlap))
     return tuple(rows)
 
 

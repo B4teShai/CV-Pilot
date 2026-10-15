@@ -494,6 +494,8 @@ accepts the object (from the `hooks` registry, which imports no framework), chec
 starts a run (`init`) and attaches; `HookNotFoundError` when nothing matches, no run is started.
 `hook_attached` carries the hook, the framework version and the license notice.
 
+Lifecycle callbacks (finish, mark failed) are exempt from the disabled state of the metric guard (`always=True`), so ten failed logs cannot leave a run `running`. The Lightning hook finishes the run after the last stage (`test` or `predict`), not after `fit`, so `trainer.test()` metrics reach the store; a script that stops after `fit` or `validate` is finished by an `atexit` handler when training completed without an exception; every stage (`setup`) is rank-gated; the hook and `Run` refuse to be pickled with a clear message (`ddp_spawn` is not supported). The YOLO hook logs the epoch metrics and per-class AP only for epochs in which a validation ran (`on_val_end`), always logs the losses, and reports `hook_no_epochs` when `train` returns without any epoch callback (distributed training runs in child processes that carry no callbacks and is not supported).
+
 Rules every hook follows (`hooks/__init__.py`, tests `test_hooks_*.py`; the YOLO hook also wraps the model's `train`, because the framework has no failure event: an exception or interrupt marks the run failed and propagates unchanged): callbacks never raise
 into the host (a `Guard` catches `Exception`, counts it, logs the first as `hook_failed` with the
 error type only, and disables the hook after 10 failures in a row with `hook_disabled`;
@@ -545,7 +547,7 @@ destination and refuses to run when an allow-list is set (ADR-0008). Adapters se
 dataset path or artifacts. Keys: MLflow replaces characters it does not accept with `_` (steps
 and float64 values are unchanged); W&B requires non-decreasing steps, so points are sent grouped
 by ascending step and points older than the last forwarded step are counted in
-`dropped_points`. Artifact forwarding is not built (predictions can reveal the dataset; it will
+`dropped_points`, reported to the fan-out (`adapter_dropped_points`, a one-time `forward_failed` with reason `step_regressed`, and the `forward_summary`), together with the points of any failed `log_points` call (`failed_points`). Artifact forwarding is not built (predictions can reveal the dataset; it will
 be opt-in).
 
 The fan-out lives in `runs/forwarding.py` (ADR-0008): a bounded queue (256 batches and 200 000 points), a daemon worker thread and

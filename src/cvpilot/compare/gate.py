@@ -286,6 +286,7 @@ class _Checker:
                 )
                 continue
             gated = 0
+            skipped_here = 0
             for row in rows:
                 if row.status == "size_mismatch":
                     self.n_checks += 1
@@ -311,6 +312,7 @@ class _Checker:
                     if any(n is None or n < self.th.min_images for n in sizes):
                         if self.th.skip_small_slices:
                             self.skipped.append(safe_text(row.label))
+                            skipped_here += 1
                         else:
                             self.n_checks += 1
                             self.fail(
@@ -323,7 +325,7 @@ class _Checker:
                     self._judge(
                         "slice", row.label, f"{row.metric} of slice", row.delta_points, limit
                     )
-            if self.th.skip_small_slices and gated == 0 and self.skipped:
+            if self.th.skip_small_slices and gated == 0 and skipped_here:
                 self.n_checks += 1
                 self.fail(
                     "slice_none_gated", selector, "every matching slice was skipped as too small"

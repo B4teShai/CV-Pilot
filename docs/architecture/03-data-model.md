@@ -87,7 +87,7 @@ One evaluation of one run on one evaluation set at one step.
 | `ci` | `json: dict[str, [lo, hi]]` | no | added field; bootstrap intervals of `mAP50_95`, `mAP50`, `AR100` or `top1`; empty when off |
 | `bootstrap` | `json?` | yes | added field; `{n_resamples, seed, level, numpy_version}`, set exactly when `ci` is non-empty (the resampling stream is reproducible within one numpy version) |
 | `ci_status` | `"off" \| "computed" \| "not_computed_too_few_images"` | no | added field; `computed` exactly when `ci` is non-empty; fewer than 2 images is recorded, not silently omitted |
-| `params` | `json?` | yes | added field; `{iou_thresholds, confusion_iou, confusion_score, max_dets}` so later comparisons can refuse snapshots made with other parameters |
+| `params` | `json?` | yes | added field; `{iou_thresholds, confusion_iou, confusion_score, max_dets}` so later comparisons can refuse snapshots made with other parameters. `max_dets` is only a field with default 100 of `EvalParams`: the evaluator always uses 100 and `--recompute` refuses a snapshot that records another value. IoU grids and confusion settings are compared with a relative tolerance of 1e-9, so a one-ULP platform difference does not refuse a comparison |
 | `provenance` | `json?` | yes | added field; optional `{checkpoint_sha256, git_commit}` supplied by the caller |
 | `slice_spec` | `json` | no | added field; slice key to image metadata column, so slice rows are comparable |
 | `slice_hash` | `str?` | yes | added field; SHA-256 over every slice column's per-image values in canonical image order (`core/hashing.slice_hash`); null without slices and for snapshots written before it existed. `compare` refuses when it differs, so the same ground truth cannot be sliced differently |

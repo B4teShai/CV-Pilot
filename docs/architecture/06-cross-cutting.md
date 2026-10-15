@@ -21,6 +21,7 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `command_failed` | ERROR | `command`, `exc_info` | `cli/` boundary | built |
 | `run_started`, `run_finished`, `run_resumed` | INFO | `run_id`, `project`, `status`, `parent_run_id`, `task`, `n_points`, `duration_ms` | `runs/` | built (`run_finished` carries the final `status`, so `run_failed` and `run_preempted` are not separate events) |
 | `hook_attached`, `hook_missing` | INFO / ERROR | `hook`, `framework`, `extra`, `license_notice` (null unless the framework is copyleft) | `api.py` (`autolog`) | built |
+| `hook_no_epochs` | WARN | `hook`, `reason` (the framework trained without calling the hook) | `hooks/` (YOLO) | built |
 | `hook_failed`, `hook_disabled` | WARN | `hook`, `callback`, `error_type` (type only, never the text); `hook`, `failures` | `hooks/` (the guard around every callback) | built; `hook_failed` once per hook |
 | `metrics_flushed` | DEBUG | `run_id`, `n_points`, `file` | `runs/` | built |
 | `metrics_rejected` | ERROR | `run_id`, `key`, `step` | `runs/`, `store/` | planned (today `DuplicateMetricError` is raised to the caller) |
@@ -39,10 +40,10 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `checkpoint_save_failed` | ERROR | `run_id`, `step`, `exc_info` | `ckpt/` | planned |
 | `checkpoint_restore_empty` | INFO | `run_id`, `dir`, `remote` | `ckpt/` | planned |
 | `preemption_signal_received` | INFO | `run_id`, `signal`, `grace_seconds` | `ckpt/` | planned |
-| `forward_failed` | WARN | `forwarder`, `run_id`, `n_points`, `reason` (`exception`, `open_failed`, `queue_full`, `stalled`, `base_exception`, `construct_failed`, `submit_failed`), `error_type` (the exception class only, never its text) | `runs/forwarding.py` | built; logged once per forwarder |
+| `forward_failed` | WARN | `forwarder`, `run_id`, `n_points`, `reason` (`exception`, `open_failed`, `queue_full`, `stalled`, `base_exception`, `step_regressed`, `construct_failed`, `submit_failed`), `error_type` (the exception class only, never its text) | `runs/forwarding.py` | built; logged once per forwarder |
 | `forward_skipped_rank` | INFO | `forwarders` (the names that were not started) | `api.py` (`init`, when `RANK` or `LOCAL_RANK` is not 0) | built |
 | `metrics_dropped` | ERROR | `run_id`, `n_points`, `error_type` (a batch that failed with a data error and was dropped instead of re-queued) | `runs/` | built |
-| `forward_summary` | WARN | `forwarder`, `run_id`, `failed_calls`, `dropped_batches`, `dropped_points`, `disabled_reason`, `abandoned` | `runs/forwarding.py` at finish, only when something went wrong | built |
+| `forward_summary` | WARN | `forwarder`, `run_id`, `failed_calls`, `failed_points`, `dropped_batches`, `dropped_points`, `adapter_dropped_points`, `disabled_reason`, `abandoned` | `runs/forwarding.py` at finish, only when something went wrong | built |
 | `sync_batch_sent`, `sync_batch_failed`, `sync_outbox_full`, `sync_schema_mismatch` | DEBUG / WARN | `run_id`, `seq_from`, `seq_to`, `status_code`, `retry_in_s`, `outbox_size` | `sync/` | planned |
 | `alert_fired`, `alert_delivered`, `alert_delivery_failed` | INFO / INFO / WARN | `rule`, `run_id`, `channel`, `reason` | `alerts/`, `notify/` | planned |
 | `nvml_unavailable` | INFO | `reason` | `capture/` | planned (capture currently falls back to `nvidia-smi` or none without logging) |
@@ -181,12 +182,12 @@ Project specifics:
 | Integration or model | Classification | Reason |
 |---|---|---|
 | Lightning, HF Trainer, MMEngine/MMDetection, RF-DETR hooks | extras of this package | Apache-2.0 upstream |
-| Ultralytics hook (`hooks/ultralytics.py`) | `[ultralytics]` extra, lazy import inside the adapter, AGPL-3.0 notice in `--help` and [05-runtime.md](05-runtime.md) | AGPL-3.0; never core, never vendored, never imported from `core/` or application code |
+| Ultralytics hook (`hooks/ultralytics.py`) | `[ultralytics]` extra, lazy import inside the adapter, AGPL-3.0 notice in the adapter docstring, `license_notice`, the `hook_attached` event and [05-runtime.md](05-runtime.md); the package is never imported by this project | AGPL-3.0; never core, never vendored, never imported from `core/` or application code |
 | MLflow, W&B SDK, Trackio, TensorBoard forwarders | extras | Apache-2.0 / MIT upstream |
 | numpy | core, added with `eval/` (ADR-0003) | BSD |
 | faster-coco-eval, safetensors, fsspec | core; added in the change that lands `ckpt/`; `faster-coco-eval` is no longer planned (the engine computes COCO metrics itself) | Apache-2.0 / Apache-2.0 / BSD |
 | pycocotools | test dependency only (parity tier, pinned 2.0.11), never imported from `src/` | BSD |
-| supervision (diff gallery rendering) | dependency of `compare/`, imported lazily | MIT |
+| supervision (diff gallery rendering) | planned with the gallery; not a dependency today (reports use the standard library) | MIT |
 | FastAPI, Uvicorn, SQLAlchemy, asyncpg | `[server]` extra | MIT / BSD / MIT / Apache-2.0 (psycopg is not used: LGPL is outside the allow-list) |
 | `httpx` | `[alerts]` extra | BSD |
 | pyarrow, duckdb | core (ADR-0005) | Apache-2.0 / MIT |

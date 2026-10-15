@@ -77,19 +77,22 @@ def test_the_copyleft_notice_is_present_in_the_hook_and_the_module() -> None:
 
 def test_attach_registers_the_two_callbacks_and_detach_removes_them() -> None:
     model, _, hook = attach()
-    assert sorted(model.callbacks) == ["on_fit_epoch_end", "on_train_end"]
+    assert sorted(model.callbacks) == ["on_fit_epoch_end", "on_train_end", "on_val_end"]
     hook.detach()
     assert all(not v for v in model.callbacks.values())
 
 
 def test_epoch_end_logs_losses_metrics_and_per_class_ap_at_the_epoch_step() -> None:
     model, sink, _ = attach()
+    model.fire("on_val_end", make_yolo_trainer(epoch=3))  # a validation ran this epoch
     model.fire("on_fit_epoch_end", make_yolo_trainer(epoch=3))
     ((points, step),) = sink.logged
     assert step == 3
     assert points["train/box_loss"] == 0.25 and points["metrics/mAP50-95(B)"] == 0.5
     assert points["val/AP/cat"] == pytest.approx(0.4) and points["val/AP/dog"] == pytest.approx(0.6)
+    model.fire("on_val_end", make_yolo_trainer(epoch=3))
     model.fire("on_fit_epoch_end", make_yolo_trainer(epoch=3))  # same epoch again: skipped
+    model.fire("on_val_end", make_yolo_trainer(epoch=4))
     model.fire("on_fit_epoch_end", make_yolo_trainer(epoch=4))
     assert [s for _, s in sink.logged] == [3, 4]
 
@@ -160,6 +163,7 @@ def test_autolog_end_to_end_announces_the_license_notice(
     model = FakeYoloModel()
     run = api.autolog(model, project="proj", task="detection")
     for epoch in range(3):
+        model.fire("on_val_end", make_yolo_trainer(epoch=epoch))
         model.fire("on_fit_epoch_end", make_yolo_trainer(epoch=epoch))
     model.fire("on_train_end", make_yolo_trainer())
     view = runs.get_run_view("proj", run.run_id, store_dir=tmp_path / "store")

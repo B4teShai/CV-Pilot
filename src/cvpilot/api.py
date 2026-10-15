@@ -45,6 +45,12 @@ class Run:
     def __init__(self, handle: runs.RunHandle) -> None:
         self._handle = handle
 
+    def __reduce__(self) -> Any:
+        raise TypeError(
+            "a cvpilot Run cannot be pickled: it holds an open store connection (use one run "
+            "per process; strategy='ddp_spawn' pickles the trainer)"
+        )
+
     @property
     def run_id(self) -> str:
         return self._handle.run_id

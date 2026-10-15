@@ -37,6 +37,7 @@ INIT_TIMEOUT_S = 30
 
 class WandbForwarder:
     name = "wandb"
+    drop_reason = "step_regressed"
     requires = ("wandb",)
 
     def __init__(self, *, allow_insecure: bool = False, allowed_hosts: Sequence[str] = ()) -> None:

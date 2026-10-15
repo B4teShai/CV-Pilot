@@ -94,7 +94,9 @@ def main() -> None:
         "detections": len(preds),
     }
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+        top = Path(tmp)
+        root, out = top / "store", top / "out"  # reports never go inside the store
+        out.mkdir()
         store = open_store("bench", root)
         ids = []
         for p in (preds, worse):
@@ -117,11 +119,7 @@ def main() -> None:
             k: [] for k in ("resolve", "compare_gate", "reports", "cli")
         }
         for _ in range(args.repeat):
-            found, t = timed(
-                lambda: service.resolve(
-                    "bench", cand_id, "tag:prod", with_confusion=True, store_dir=root
-                )
-            )  # noqa: B023
+            found, t = timed(lambda: service.resolve("bench", cand_id, "tag:prod", store_dir=root))  # noqa: B023
             times["resolve"].append(t)
             (result, cmp), t = timed(lambda: _cmp(found, th))  # noqa: B023
             times["compare_gate"].append(t)
@@ -129,11 +127,18 @@ def main() -> None:
                 lambda: (render_html(cmp, result, th), report_json(cmp, result, th))  # noqa: B023
             )
             times["reports"].append(t)
-            done, t = timed(lambda: _cli(root, cand_id))
+            for stale in ("r.html", "r.json"):  # every iteration writes its own reports
+                (out / stale).unlink(missing_ok=True)
+            done, t = timed(lambda: _cli(root, out, cand_id))
+            if done.returncode != 1 or "gate: FAIL" not in done.stdout:  # the run must regress
+                raise SystemExit(
+                    f"unexpected gate result {done.returncode}: {done.stdout[:200]} "
+                    f"{done.stderr[-600:]}"
+                )
             times["cli"].append(t)
         report["gate_exit_code"] = done.returncode
-        report["html_kb"] = round((root / "r.html").stat().st_size / 1024, 1)
-        report["json_kb"] = round((root / "r.json").stat().st_size / 1024, 1)
+        report["html_kb"] = round((out / "r.html").stat().st_size / 1024, 1)
+        report["json_kb"] = round((out / "r.json").stat().st_size / 1024, 1)
     for key, values in times.items():
         report[f"{key}_median_s"] = round(statistics.median(values), 3)
         report[f"{key}_max_s"] = round(max(values), 3)
@@ -142,13 +147,13 @@ def main() -> None:
     print(json.dumps(report, indent=2))
 
 
-def _cli(root: Path, run_id: str) -> subprocess.CompletedProcess[str]:
+def _cli(root: Path, out: Path, run_id: str) -> subprocess.CompletedProcess[str]:
     exe = str(Path(sys.executable).parent / "cvpilot")
     argv = [
         exe, "gate", run_id, "--project", "bench", "--baseline", "tag:prod",
         "--max-drop", "mAP50_95=0.5", "--per-class-max-drop", "AP50_95=2.0",
-        "--slice-max-drop", "camera=*:1.5",
-        "--report", str(root / "r.html"), "--report-json", str(root / "r.json"),
+        "--slice-max-drop", "camera=*:1.5", "--report-dir", str(out),
+        "--report", str(out / "r.html"), "--report-json", str(out / "r.json"),
     ]  # fmt: skip
     env = {**os.environ, "CVPILOT_STORE_DIR": str(root)}
     return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)  # noqa: S603

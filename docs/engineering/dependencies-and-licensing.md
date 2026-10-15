@@ -24,7 +24,7 @@ bundled third-party material lives in `NOTICE`.
 
 - Copyleft (AGPL/GPL) packages are never core dependencies and their code is never vendored.
   They may be declared as an optional extra and imported lazily inside the adapter that
-  needs them. The adapter's `--help` text and the runtime docs state that using the extra
+  needs them. The adapter's docstring, its `license_notice` (logged in the `hook_attached` event) and the runtime docs state that using the extra
   makes the user's combined work subject to that package's license.
 - Code that includes or derives from copyleft code ships as a separately named package
   that depends on this one, so this distribution stays Apache-2.0.

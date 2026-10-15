@@ -6,8 +6,8 @@
 
 | Where | What runs | Threads and subprocesses |
 |---|---|---|
-| Training process (built: `api.py`, `runs/`, store and capture in-process; planned: hooks, `eval/`, `ckpt/`, forwarders, alerts) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training and the hook callbacks; `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; signal handlers for SIGTERM/SIGUSR1 set a flag only. No subprocess except `git` once at `init`. |
-| `cvpilot` CLI (built: `--version`, `doctor`, `runs`, `repro`) | one command per invocation, single-threaded | none; planned `compare` uses a `ThreadPoolExecutor` of `min(4, cpu_count)` for bootstrap resamples |
+| Training process (built: `api.py`, `runs/`, `eval/`, hooks, forwarders, store and capture in-process; planned: `ckpt/`, alerts) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training and the hook callbacks; `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; signal handlers for SIGTERM/SIGUSR1 set a flag only. No subprocess except `git` once at `init`. |
+| `cvpilot` CLI (built: `--version`, `doctor`, `runs`, `repro`, `eval`, `baseline`, `compare`, `gate`) | one command per invocation, single-threaded except `eval`, whose bootstrap uses up to 4 worker threads | none; `compare` and `gate` do no resampling (they read the intervals stored in the snapshots), so they use no thread pool |
 | Server container (planned) | Uvicorn with one FastAPI worker per CPU, websocket broadcaster, alert delivery worker | each worker is a process; alert delivery is an asyncio task; SQLite requires one worker, Postgres allows several |
 | CI runner (built) | `cvpilot gate` as a step, or the composite action `action.yml` that wraps it; the exit code gates the job | same as CLI; the action starts one `bash` |
 

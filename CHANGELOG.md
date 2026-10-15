@@ -7,6 +7,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Correctness fixes: lifecycle callbacks (finish, mark failed) still run after ten failed logs; the
+  Lightning hook finishes after the last stage so `trainer.test()` metrics reach the store, is
+  rank-gated in every stage and refuses to be pickled; the YOLO hook logs metrics only for epochs
+  with a validation; points a forwarder dropped or lost in failed calls are counted and summarised;
+  a missing snapshot or artifact file is an integrity error; the JSON report holds every violation;
+  IoU grids are compared with a tolerance and interval overlap needs equal bootstrap settings;
+  `none_gated` is decided per selector.
 - Forwarder endpoint checks close the allow-list bypasses: W&B always receives an explicit pinned
   `base_url`, URLs are validated structurally (no backslash, percent-encoding, `@`, query, fragment,
   non-ASCII or IPv6 hosts) and the normalised URL is what the SDK receives, ports other than 443

@@ -1,11 +1,11 @@
 """Lightning hook: a logger for ``self.log`` scalars and a callback for the run lifecycle.
 
 ``LightningHook.attach(trainer, sink)`` appends a ``CVPilotLogger`` (scalars, rank zero only)
-and a ``CVPilotCallback`` (rank zero detection, ``finished`` at fit end, ``failed`` on an
-exception) to the trainer. The two classes subclass Lightning's own ``Logger`` and ``Callback``,
-so they are built when the hook is attached (the package is imported then, never at module
-import); the logic lives in framework-free ``LightningCore``. Hyperparameters are not
-forwarded: the run's config is captured at ``init`` and redacted there.
+and a ``CVPilotCallback`` (rank zero detection in every stage, ``finished`` after the last stage,
+``failed`` on an exception) to the trainer. The two classes subclass Lightning's own ``Logger``
+and ``Callback``, so they are built when the hook is attached (the package is imported then,
+never at module import); the logic lives in framework-free ``LightningCore``.
+Hyperparameters are not forwarded: the run's config is captured at ``init`` and redacted there.
 
 The trainer is read through ``TrainerView`` only: ``is_global_zero``. Callbacks never raise into
 the trainer and make no network call (see ``cvpilot.hooks``).
@@ -13,6 +13,7 @@ the trainer and make no network call (see ``cvpilot.hooks``).
 
 from __future__ import annotations
 
+import atexit
 import importlib
 from collections.abc import Mapping
 from typing import Any
@@ -52,6 +53,8 @@ class LightningCore:
         self.guard = Guard("lightning")
         self.relay = ScalarRelay(sink, self.guard)
         self.enabled = True  # false on ranks other than zero
+        self.completed = False  # a stage ended without an exception
+        self.failed = False
 
     def log_metrics(self, metrics: Mapping[Any, Any], step: object) -> None:
         def body() -> None:
@@ -63,21 +66,43 @@ class LightningCore:
 
         self.guard.run("log_metrics", body)
 
-    def fit_start(self, trainer: object) -> None:
-        self.guard.run("on_fit_start", self._rank, trainer)
+    def setup(self, trainer: object) -> None:
+        """Every stage (fit, validate, test, predict) is rank-gated, not only fit."""
+        self.guard.run("setup", self._rank, trainer, always=True)
 
     def _rank(self, trainer: object) -> None:
         self.enabled = TrainerView(trainer).is_global_zero
 
     def fit_end(self) -> None:
-        self.guard.run("on_fit_end", self._finish, "finished")
+        self.completed = True
+
+    def teardown(self, stage: object) -> None:
+        """A stage ended. ``test`` and ``predict`` are the last stages of a script, so the run
+        finishes there; ``fit`` and ``validate`` leave it open for the stages that follow (their
+        metrics are the ones gates usually read), and ``finish_at_exit`` covers scripts that stop
+        after them."""
+        self.completed = True
+        if stage in ("test", "predict"):
+            self.guard.run("on_teardown", self._finish, "finished", always=True)
 
     def exception(self) -> None:
-        self.guard.run("on_exception", self._finish, "failed")
+        self.failed = True
+        self.guard.run("on_exception", self._finish, "failed", always=True)
+
+    def finish_at_exit(self) -> None:
+        """Registered with ``atexit``: finish a run whose training completed without error."""
+        if self.completed and not self.failed:
+            self.guard.run("at_exit", self._finish, "finished", always=True)
 
     def _finish(self, status: str) -> None:
         if self.enabled and getattr(self.sink, "status", "running") in ("running", "resumed"):
             self.sink.finish(status)
+
+
+_NO_PICKLE = (
+    "the cvpilot hook cannot be pickled: strategy='ddp_spawn' pickles the trainer, and a run "
+    "holds an open store connection. Use strategy='ddp' (one process per device, rank zero logs)."
+)
 
 
 def build_classes() -> tuple[type, type]:
@@ -103,14 +128,23 @@ def build_classes() -> tuple[type, type]:
             super().__init__()
             self._core = core
 
+        def setup(self, trainer: Any, pl_module: Any, stage: str) -> None:
+            self._core.setup(trainer)
+
         def on_fit_start(self, trainer: Any, pl_module: Any) -> None:
-            self._core.fit_start(trainer)
+            self._core.setup(trainer)
 
         def on_fit_end(self, trainer: Any, pl_module: Any) -> None:
             self._core.fit_end()
 
+        def on_teardown(self, trainer: Any, pl_module: Any, stage: str) -> None:
+            self._core.teardown(stage)
+
         def on_exception(self, trainer: Any, pl_module: Any, exception: BaseException) -> None:
             self._core.exception()
+
+        def __getstate__(self) -> Any:
+            raise TypeError(_NO_PICKLE)
 
     class CVPilotLogger(base_logger):  # type: ignore[misc, valid-type]
         def __init__(self, core: LightningCore) -> None:
@@ -137,6 +171,9 @@ def build_classes() -> tuple[type, type]:
 
         def save(self) -> None:
             return None
+
+        def __getstate__(self) -> Any:
+            raise TypeError(_NO_PICKLE)
 
         def finalize(self, status: str) -> None:
             return None
@@ -167,6 +204,7 @@ class LightningHook:
 
     def __init__(self) -> None:
         self._attached: list[tuple[object, object, object]] = []
+        self._cores: list[LightningCore] = []
 
     def matches(self, target: object) -> bool:
         cls = type(target)
@@ -181,6 +219,8 @@ class LightningHook:
                 raise HookAttachError(f"the trainer has no {attribute!r} list to add to")
         callback_cls, logger_cls = build_classes()
         core = LightningCore(sink)
+        atexit.register(core.finish_at_exit)
+        self._cores.append(core)
         callback, logger = callback_cls(core), logger_cls(core)
         _append(target, "callbacks", callback)
         _append(target, "loggers", logger)
@@ -191,3 +231,6 @@ class LightningHook:
             _remove(trainer, "callbacks", callback)
             _remove(trainer, "loggers", logger)
         self._attached.clear()
+        for core in self._cores:
+            atexit.unregister(core.finish_at_exit)
+        self._cores.clear()
