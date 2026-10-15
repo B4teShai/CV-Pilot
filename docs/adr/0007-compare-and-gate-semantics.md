@@ -99,12 +99,20 @@ Option B.
    a candidate is never its own baseline and a baseline run must be finished; `--skip-small-slices`
    is capped by `--max-skipped` (default 0).
 
+10. **Report files are written under rules.** `--report` and `--report-json` resolve the parent
+    directory strictly and refuse a target outside `--report-dir` (default: the current
+    directory) unless `--allow-outside`, anywhere inside the store directory, any file named by
+    `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`, `GITHUB_STEP_SUMMARY` or `GITHUB_STATE`, a
+    symbolic link, and an existing file that does not carry the report marker unless `--force`.
+    A report path is user input (often from a pull request's workflow inputs) and must not become
+    a way to overwrite another file.
+
 ## Consequences
 
 - A team adopting the gate sees failures where data is thin. The message names the check and
   the fix (`--min-images`, `--skip-small-slices`, a threshold for a slice that exists).
 - The gate never writes to the store: it opens it, verifies and compares. It writes only the
-  files named by `--report` and `--report-json`.
+  files named by `--report` and `--report-json`, under rules (point 10).
 - A stronger significance test (Option C) remains possible later without changing the
   threshold semantics: it would add a column to the report, not a way to pass.
 - Anyone who can write both the database and the snapshot files can recompute every digest;

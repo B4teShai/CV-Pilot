@@ -58,6 +58,8 @@ variable; default. There is no configuration file.
 | `CVPILOT_CHECKPOINT_DIR` | directory path | none | `CheckpointManager` default `dir` | planned |
 | `CVPILOT_CHECKPOINT_REMOTE` | fsspec URL | none | `CheckpointManager` default `remote` | planned |
 | `CVPILOT_FORWARD_TO` | comma-separated forwarder names `[a-z][a-z0-9_-]{0,31}`, at most 8, no repeats | empty | `init()` default `forward_to`; an unknown name or a missing extra fails `init()` before a run exists | built (`settings.py` parses it, `init` passes it to the fan-out; tests run it through the real `init` path) |
+| `CVPILOT_FORWARD_HOSTS` | comma-separated lower-case host names (no wildcards), at most 32 | empty (no restriction) | forwarders: only these hosts may be tracker endpoints; Trackio refuses to run with it set | built (parsed in `settings.py`, passed to every adapter by `init`; tests cover the real path) |
+| `RANK`, `LOCAL_RANK` | integers set by a distributed launcher | unset | `init`: a non-zero value starts no forwarder (`forward_skipped_rank`) | built |
 | `CVPILOT_ALERT_CHANNELS` | comma-separated channel names | empty | client-side alert delivery | planned |
 | `CVPILOT_SERVER_DATABASE_URL` | SQLAlchemy URL | `sqlite:////data/cvpilot.sqlite` | server only | planned |
 | `CVPILOT_SERVER_TOKEN_HASHES` | path to a file of `project:sha256(token)` lines | `/data/tokens` | server only | planned |

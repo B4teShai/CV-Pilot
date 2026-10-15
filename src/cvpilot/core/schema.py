@@ -226,8 +226,8 @@ class MetricPoint(_Model):
 
     run_id: str
     key: str
-    step: StrictInt = Field(ge=0)
-    epoch: StrictInt | None = Field(default=None, ge=0)
+    step: StrictInt = Field(ge=0, le=MAX_STEP)
+    epoch: StrictInt | None = Field(default=None, ge=0, le=MAX_STEP)
     value: float
     wall_time: float
 
@@ -529,8 +529,10 @@ class Forwarder(Protocol):
     """Pushes a run's scalars to a tracker; adapters register under ``forwarders``.
 
     An adapter is constructed with ``allow_insecure`` (true only when ``CVPILOT_ENV=dev``) and
-    reads its endpoint and credentials from the tracker SDK's own environment variables: it
-    takes no token argument, stores none and logs none. ``open``, ``log_points`` and ``close``
+    ``allowed_hosts`` (``CVPILOT_FORWARD_HOSTS``; empty means no restriction), reads the few
+    variables that decide where it connects once at construction, and takes its credentials from
+    the tracker SDK's own environment variables: it takes no token argument, stores none and logs
+    none. ``open``, ``log_points`` and ``close``
     run on a worker thread owned by the fan-out, never on the training thread.
     """
 

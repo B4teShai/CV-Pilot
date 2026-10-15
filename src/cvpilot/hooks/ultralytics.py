@@ -102,11 +102,14 @@ class YoloCore:
         self.relay.log(scalars, step)
 
     def train_end(self, trainer: object) -> None:
-        self.guard.run("on_train_end", self._train_end)
+        self.guard.run("on_train_end", self._finish, "finished")
 
-    def _train_end(self) -> None:
+    def failed(self) -> None:
+        self.guard.run("train_failed", self._finish, "failed")
+
+    def _finish(self, status: str) -> None:
         if getattr(self.sink, "status", "running") in ("running", "resumed"):
-            self.sink.finish("finished")
+            self.sink.finish(status)
 
 
 class YoloHook:
@@ -121,6 +124,7 @@ class YoloHook:
 
     def __init__(self) -> None:
         self._attached: list[tuple[object, Any]] = []
+        self._wrapped: list[tuple[object, Any, bool]] = []
 
     def matches(self, target: object) -> bool:
         return type(target).__module__.split(".")[0] == FRAMEWORK and callable(
@@ -136,6 +140,25 @@ class YoloHook:
         for event in EVENTS:
             add(event, handlers[event])
         self._attached.append((target, handlers))
+        self._wrap_train(target, core)
+
+    def _wrap_train(self, target: object, core: YoloCore) -> None:
+        """The framework has no failure event, so ``train`` is wrapped: an exception (or an
+        interrupt) marks the run failed, then propagates unchanged."""
+        original = getattr(target, "train", None)
+        if not callable(original):
+            return
+        had_own = "train" in vars(target)
+
+        def train(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return original(*args, **kwargs)
+            except BaseException:
+                core.failed()  # guarded: it can never mask the exception being raised
+                raise
+
+        target.train = train  # type: ignore[attr-defined]
+        self._wrapped.append((target, original, had_own))
 
     def detach(self) -> None:
         for target, handlers in self._attached:
@@ -146,3 +169,9 @@ class YoloHook:
                     if isinstance(registered, list) and handler in registered:
                         registered.remove(handler)
         self._attached.clear()
+        for target, original, had_own in self._wrapped:
+            if had_own:
+                target.train = original  # type: ignore[attr-defined]
+            else:
+                vars(target).pop("train", None)
+        self._wrapped.clear()

@@ -38,6 +38,7 @@ _FIELDS: dict[str, tuple[str, Callable[[str], str]]] = {
     "project": ("PROJECT", str),
     "store_dir": ("STORE_DIR", str),
     "forward_to": ("FORWARD_TO", str),
+    "forward_hosts": ("FORWARD_HOSTS", str),
 }
 
 
@@ -63,6 +64,47 @@ def parse_forwarders(value: Any) -> tuple[str, ...]:
     return tuple(names)
 
 
+_HOST = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
+MAX_FORWARD_HOSTS = 32
+
+
+def parse_hosts(value: Any) -> tuple[str, ...]:
+    """Lower-case host names from a comma-separated string or a sequence (no wildcards).
+
+    Raises:
+        ValueError: a name is empty, has characters outside ``[a-z0-9.-]``, or there are more
+            than ``MAX_FORWARD_HOSTS``.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        names = [part.strip().lower() for part in value.split(",")] if value.strip() else []
+    elif isinstance(value, (list, tuple)):
+        names = [str(v).strip().lower() for v in value]
+    else:
+        raise ValueError("must be a comma-separated list of host names")
+    if len(names) > MAX_FORWARD_HOSTS or len(set(names)) != len(names):
+        raise ValueError("too many or repeated hosts")
+    if not all(_HOST.fullmatch(n) for n in names):
+        raise ValueError("invalid host name")
+    return tuple(names)
+
+
+def is_rank_zero(environ: Mapping[str, str] | None = None) -> bool:
+    """False when ``RANK`` or ``LOCAL_RANK`` names a process other than rank zero.
+
+    Distributed launchers set these; only rank zero starts forwarders and other background
+    threads, so a multi-process job does not log every point once per process. A missing or
+    non-integer value counts as rank zero.
+    """
+    source = os.environ if environ is None else environ
+    for name in ("RANK", "LOCAL_RANK"):
+        raw = source.get(name, "").strip()
+        if raw.lstrip("-").isdigit() and int(raw) != 0:
+            return False
+    return True
+
+
 class SettingsError(ValueError):
     """An environment variable holds an invalid value."""
 
@@ -74,6 +116,12 @@ class Settings(BaseModel, frozen=True):
     project: str | None = None
     store_dir: Path | None = None
     forward_to: tuple[str, ...] = ()
+    forward_hosts: tuple[str, ...] = ()
+
+    @field_validator("forward_hosts", mode="before")
+    @classmethod
+    def _forward_hosts(cls, value: Any) -> tuple[str, ...]:
+        return parse_hosts(value)
 
     @field_validator("forward_to", mode="before")
     @classmethod

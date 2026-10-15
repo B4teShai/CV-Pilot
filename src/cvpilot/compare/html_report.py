@@ -23,6 +23,7 @@ import os
 import secrets
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from cvpilot.compare.engine import ClassDelta, Comparison, MetricDelta, SliceDelta, SnapshotRef
@@ -40,6 +41,10 @@ MAX_CELL_ROWS = 30
 """Changed confusion cells listed, largest change first."""
 MAX_REPORT_BYTES = 8 * 1024 * 1024
 """Largest report file written."""
+
+REPORT_MARKER = "cvpilot.compare/1"
+"""Appears in every report this tool writes (HTML ``generator`` meta, JSON ``schema``); a file
+without it was not created by the tool and is only replaced with ``force``."""
 
 _CSS = (
     "body{font:14px/1.4 system-ui,sans-serif;margin:1.5rem;max-width:72rem}"
@@ -265,6 +270,7 @@ def render_html(
         '<meta charset="utf-8">'
         f'<meta http-equiv="Content-Security-Policy" content="{CSP}">'
         '<meta name="referrer" content="no-referrer">'
+        f'<meta name="generator" content="{REPORT_MARKER}">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>CV-Pilot compare</title><style>{_CSS}</style>"
     )
@@ -275,21 +281,93 @@ class ReportWriteError(CvpilotError, OSError):
     """A report file could not be written."""
 
 
-def write_report(path: Path, text: str) -> None:
+RUNNER_FILE_VARIABLES = (
+    "GITHUB_ENV",
+    "GITHUB_OUTPUT",
+    "GITHUB_PATH",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_STATE",
+)
+"""Environment variables naming files a CI runner interprets; never a report target."""
+
+
+@dataclass(frozen=True)
+class ReportPolicy:
+    """Where ``write_report`` may write: inside ``root`` (the workspace or ``--report-dir``),
+    never inside a store directory or onto a runner file, and only over files this tool made
+    unless ``force``. ``allow_outside`` lifts only the root rule."""
+
+    root: Path
+    store_roots: tuple[Path, ...] = ()
+    allow_outside: bool = False
+    force: bool = False
+
+
+def _refuse(message: str) -> ReportWriteError:
+    return ReportWriteError(message)
+
+
+def _check_policy(target: Path, policy: ReportPolicy) -> Path:
+    """The strictly resolved target path after every rule of ``policy`` (or an error)."""
+    try:
+        parent = target.parent.resolve(strict=True)
+    except (FileNotFoundError, NotADirectoryError):
+        raise _refuse(
+            f"directory {target.parent.name or str(target.parent)} does not exist"
+        ) from None
+    except (OSError, RuntimeError) as exc:
+        raise _refuse(f"cannot resolve the report directory: {exc}") from None
+    real = parent / target.name
+    for variable in RUNNER_FILE_VARIABLES:
+        named = os.environ.get(variable)
+        if named and Path(named).resolve() == real.resolve():
+            raise _refuse(f"{target.name} is the file {variable} names; refusing to write it")
+    for store_root in policy.store_roots:
+        if real.is_relative_to(store_root.resolve()):
+            raise _refuse("reports are never written inside the run store")
+    if not policy.allow_outside and not real.is_relative_to(policy.root.resolve()):
+        raise _refuse(
+            f"{target.name} would be outside {policy.root.name or policy.root} "
+            "(use --report-dir, or --allow-outside)"
+        )
+    return real
+
+
+def _made_by_this_tool(path: Path) -> bool:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            return REPORT_MARKER.encode() in handle.read(MAX_REPORT_BYTES + 1)
+    finally:
+        os.close(fd)
+
+
+def write_report(path: Path, text: str, policy: ReportPolicy | None = None) -> None:
     """Write ``text`` to ``path`` atomically (temp file, fsync, rename), mode 0644.
 
     The target must be absent or a regular file that is not a symbolic link; the rename replaces
     a directory entry and never follows one, so a link planted in between is replaced, not
-    followed.
+    followed. With a ``policy`` the parent directory is also resolved strictly (no symlinked
+    directory may lead out of the root), the target must lie inside the policy's root, outside
+    every store directory and not be a runner file, and an existing file that carries no
+    ``REPORT_MARKER`` is replaced only with ``force``.
 
     Raises:
-        ReportWriteError: too large, a symbolic link, not a regular file, no such directory, or
-            an I/O error (no temporary file is left behind).
+        ReportWriteError: too large, a symbolic link, not a regular file, no such directory, a
+            policy rule, or an I/O error (no temporary file is left behind).
     """
     data = text.encode("utf-8")
     if len(data) > MAX_REPORT_BYTES:
         raise ReportWriteError(f"the report is too large ({len(data)} bytes)")
     target = Path(path)
+    if policy is not None:
+        target = _check_policy(target, policy)
     try:
         mode = os.lstat(target).st_mode
     except FileNotFoundError:
@@ -300,6 +378,15 @@ def write_report(path: Path, text: str) -> None:
         raise ReportWriteError(f"{target.name} is a symbolic link; refusing to write through it")
     if mode is not None and not stat.S_ISREG(mode):
         raise ReportWriteError(f"{target.name} is not a regular file")
+    if (
+        policy is not None
+        and mode is not None
+        and not policy.force
+        and not _made_by_this_tool(target)
+    ):
+        raise ReportWriteError(
+            f"{target.name} exists and was not created by cvpilot; pass --force to replace it"
+        )
     parent = target.parent
     if not parent.is_dir():
         raise ReportWriteError(f"directory {parent.name or str(parent)} does not exist")

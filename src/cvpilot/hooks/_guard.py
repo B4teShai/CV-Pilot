@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import math
+import operator
 from collections.abc import Callable
 from typing import Any
 
+from cvpilot.core.schema import MAX_STEP
 from cvpilot.logging import get_logger
 
 MAX_CONSECUTIVE_FAILURES = 10
@@ -67,13 +69,17 @@ def metric_value(raw: object) -> float | None:
 
 
 def step_value(raw: object) -> int | None:
-    """A non-negative integer step, or None."""
+    """An integer step in ``[0, MAX_STEP]``, or None (larger values are skipped, not clamped)."""
     if isinstance(raw, bool) or raw is None:
         return None
     try:
-        number = float(raw)  # type: ignore[arg-type]
-    except Exception:  # noqa: BLE001
-        return None
-    if not math.isfinite(number) or number != int(number) or number < 0:
-        return None
-    return int(number)
+        number = operator.index(raw)  # type: ignore[arg-type]  # exact for ints and numpy integers
+    except TypeError:
+        try:
+            as_float = float(raw)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001
+            return None
+        if not math.isfinite(as_float) or as_float != int(as_float):
+            return None
+        number = int(as_float)
+    return number if 0 <= number <= MAX_STEP else None

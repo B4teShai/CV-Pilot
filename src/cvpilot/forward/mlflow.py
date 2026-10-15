@@ -1,7 +1,10 @@
 """MLflow forwarder (``cvpilot[mlflow]``): one MLflow run per CV-Pilot run.
 
-Endpoint and credentials come from MLflow's own environment variables; this adapter reads only
-``MLFLOW_TRACKING_URI`` and ``MLFLOW_TRACKING_INSECURE_TLS`` to refuse unsafe settings. It
+Credentials come from MLflow's own environment variables. This adapter reads, once at
+construction, ``MLFLOW_TRACKING_URI`` (https only, no credentials, on an allowed host when
+``CVPILOT_FORWARD_HOSTS`` is set) and the TLS switches (``MLFLOW_TRACKING_INSECURE_TLS`` and
+the certificate-authority overrides are refused outside development), and passes the checked
+URI to the client explicitly. It
 sends the run id, project, task and parent run id as tags and the metrics; never the config,
 the command line, the dataset path or an artifact. MLflow limits metric names to
 alphanumerics and ``_ - . space /`` (250 characters), so other characters in a key become ``_``;
@@ -10,13 +13,19 @@ steps and float64 values are passed unchanged.
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Sequence
 from typing import Any
 
 from cvpilot.core.schema import MetricPoint, Repro, RunMeta, RunStatus
-from cvpilot.forward._common import check_endpoint, load_sdk, refuse_insecure_flag
+from cvpilot.forward._common import (
+    CA_OVERRIDE_VARIABLES,
+    check_endpoint,
+    freeze_env,
+    load_sdk,
+    refuse_ca_overrides,
+    refuse_insecure_flag,
+)
 
 MAX_BATCH_METRICS = 1000
 """MLflow accepts at most 1000 metrics per ``log_batch`` call."""
@@ -33,20 +42,26 @@ class MlflowForwarder:
     name = "mlflow"
     requires = ("mlflow|mlflow-skinny",)
 
-    def __init__(self, *, allow_insecure: bool = False) -> None:
+    def __init__(self, *, allow_insecure: bool = False, allowed_hosts: Sequence[str] = ()) -> None:
+        env = freeze_env(
+            ("MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_INSECURE_TLS", *CA_OVERRIDE_VARIABLES)
+        )
         check_endpoint(
-            os.environ.get("MLFLOW_TRACKING_URI"),
+            env["MLFLOW_TRACKING_URI"],
             allow_insecure=allow_insecure,
             what="MLFLOW_TRACKING_URI",
+            allowed_hosts=allowed_hosts,
         )
-        refuse_insecure_flag("MLFLOW_TRACKING_INSECURE_TLS", allow_insecure=allow_insecure)
+        refuse_insecure_flag(env, "MLFLOW_TRACKING_INSECURE_TLS", allow_insecure=allow_insecure)
+        refuse_ca_overrides(env, allow_insecure=allow_insecure)
+        self._uri = env["MLFLOW_TRACKING_URI"]  # the value that was checked is the value used
         self._client: Any = None
         self._run_id = ""
         self._metric: Any = None
 
     def open(self, meta: RunMeta, repro: Repro) -> None:
         sdk = load_sdk("mlflow", "mlflow")
-        client = sdk.MlflowClient()
+        client = sdk.MlflowClient(tracking_uri=self._uri) if self._uri else sdk.MlflowClient()
         experiment = client.get_experiment_by_name(meta.project)
         experiment_id = (
             experiment.experiment_id if experiment else client.create_experiment(meta.project)

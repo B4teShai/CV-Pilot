@@ -264,7 +264,7 @@ report: snapshots come from `get_snapshot` (file digest and run chain verified),
 `gate:` or two spaces so a class name cannot become a CI workflow command.
 
 Reports (`compare/html_report.py`, `compare/report.py`): `--report PATH` writes a static HTML
-page and `--report-json PATH` the canonical JSON (`compare` and `gate` both take them; `--json`
+page and `--report-json PATH` (both restricted by `--report-dir`, `--allow-outside` and `--force`, ADR-0007) the canonical JSON (`compare` and `gate` both take them; `--json`
 prints the JSON). The page is built from element constructors that escape every string child
 (names also pass `safe_text`), has no script, no external resource, no link and no data-carrying
 attribute, and declares `default-src 'none'; style-src 'sha256-<its one inline style>';
@@ -494,7 +494,7 @@ accepts the object (from the `hooks` registry, which imports no framework), chec
 starts a run (`init`) and attaches; `HookNotFoundError` when nothing matches, no run is started.
 `hook_attached` carries the hook, the framework version and the license notice.
 
-Rules every hook follows (`hooks/__init__.py`, tests `test_hooks_*.py`): callbacks never raise
+Rules every hook follows (`hooks/__init__.py`, tests `test_hooks_*.py`; the YOLO hook also wraps the model's `train`, because the framework has no failure event: an exception or interrupt marks the run failed and propagates unchanged): callbacks never raise
 into the host (a `Guard` catches `Exception`, counts it, logs the first as `hook_failed` with the
 error type only, and disables the hook after 10 failures in a row with `hook_disabled`;
 `KeyboardInterrupt` and `SystemExit` pass through); callbacks make no network call and block the
@@ -523,7 +523,8 @@ class Forwarder(Protocol):  # core/schema.py
     def close(self, status: RunStatus) -> None: ...
 
 
-# constructed as cls(allow_insecure=<CVPILOT_ENV == "dev">); no token argument exists
+# constructed as cls(allow_insecure=<CVPILOT_ENV == "dev">, allowed_hosts=<CVPILOT_FORWARD_HOSTS>);
+# no token argument exists
 ```
 
 Adapters: `forward/mlflow.py` (`cvpilot[mlflow]`, `mlflow-skinny`), `forward/wandb.py`
@@ -533,10 +534,13 @@ Adapters: `forward/mlflow.py` (`cvpilot[mlflow]`, `mlflow-skinny`), `forward/wan
 check (`requires`) raises the same error at `init()` before any run exists. Endpoint and
 credentials come from the SDK's own environment variables (`MLFLOW_TRACKING_URI`,
 `WANDB_API_KEY`, ...): an adapter reads no credential, accepts none, stores none and logs
-none. At construction it refuses an endpoint with credentials in the URL, a plain `http`
-endpoint (unless `CVPILOT_ENV=dev`), and the SDK switches that disable TLS verification
-(`MLFLOW_TRACKING_INSECURE_TLS`, `WANDB_INSECURE_DISABLE_SSL`); the message names the variable
-and never the value. Adapters send the run id, project, task, parent run id and the metrics
+none. At construction (on the training thread, reading the environment once and passing the
+checked values to the SDK explicitly) it accepts only an `https` endpoint (`http` in dev; no
+other scheme), without credentials, on a host of `CVPILOT_FORWARD_HOSTS` when that is set, and
+refuses the SDK switches that disable TLS verification (`MLFLOW_TRACKING_INSECURE_TLS`,
+`WANDB_INSECURE_DISABLE_SSL`) and the certificate-authority overrides outside dev; the message
+names the variable and never the value. Trackio passes no endpoint, so it cannot verify its
+destination and refuses to run when an allow-list is set (ADR-0008). Adapters send the run id, project, task, parent run id and the metrics
 (MLflow: tags; W&B and Trackio: a small config), never `Repro.config`, the command line, the
 dataset path or artifacts. Keys: MLflow replaces characters it does not accept with `_` (steps
 and float64 values are unchanged); W&B requires non-decreasing steps, so points are sent grouped
@@ -544,7 +548,7 @@ by ascending step and points older than the last forwarded step are counted in
 `dropped_points`. Artifact forwarding is not built (predictions can reveal the dataset; it will
 be opt-in).
 
-The fan-out lives in `runs/forwarding.py` (ADR-0008): a bounded queue, a daemon worker thread and
+The fan-out lives in `runs/forwarding.py` (ADR-0008): a bounded queue (256 batches and 200 000 points), a daemon worker thread and
 a stall timeout per forwarder, so a failing, slow or hung tracker is counted and logged once and
 never raises into or blocks the training loop. Depends on: `core/`; the tracker SDK inside the
 adapter. Status: built (`mlflow`, `wandb`, `trackio`); planned: TensorBoard.

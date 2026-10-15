@@ -24,6 +24,18 @@ def open_store(project: str, store_dir: Path | None, *, create: bool = True) -> 
     return stores.get("local")(project, store_dir, create=create)
 
 
+def store_location(project: str, store_dir: Path | None) -> Path | None:
+    """The directory of a project's store, or None when it does not exist (nothing is created)."""
+    try:
+        store = open_store(project, store_dir, create=False)
+    except StoreNotFoundError:
+        return None
+    try:
+        return store.path
+    finally:
+        store.close()
+
+
 @dataclass(frozen=True)
 class RunView:
     """Everything stored about one run, for ``runs show``."""

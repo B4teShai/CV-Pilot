@@ -30,13 +30,16 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
 from cvpilot.cli.baseline_cmds import eval_set_option
 from cvpilot.cli.runs_cmds import JsonOpt, ProjectOpt, RunIdArg, _project
 from cvpilot.core.schema import MAX_STEP
+
+if TYPE_CHECKING:
+    from cvpilot.compare.html_report import ReportPolicy
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{7,64}")
@@ -93,6 +96,37 @@ ReportJsonOpt = Annotated[
 ]
 
 
+ReportDirOpt = Annotated[
+    Path | None,
+    typer.Option(
+        "--report-dir",
+        file_okay=False,
+        help="Directory reports must stay inside (default: the current directory).",
+    ),
+]
+AllowOutsideOpt = Annotated[
+    bool, typer.Option("--allow-outside", help="Allow reports outside --report-dir.")
+]
+ForceOpt = Annotated[
+    bool, typer.Option("--force", help="Replace a report file that cvpilot did not create.")
+]
+
+
+def _policy(
+    ctx: typer.Context, project: str, report_dir: Path | None, allow_outside: bool, force: bool
+) -> ReportPolicy:
+    from cvpilot.compare.html_report import ReportPolicy
+    from cvpilot.runs.queries import store_location
+
+    location = store_location(project, ctx.obj.store_dir)
+    return ReportPolicy(
+        root=report_dir or Path.cwd(),
+        store_roots=() if location is None else (location.parent,),
+        allow_outside=allow_outside,
+        force=force,
+    )
+
+
 def _baseline_ref(value: str) -> tuple[str | None, str | None]:
     from cvpilot.compare.service import parse_baseline_ref
 
@@ -136,6 +170,9 @@ def compare_command(
     expect_baseline_chain: ExpectChainOpt = None,
     report: ReportOpt = None,
     report_json_path: ReportJsonOpt = None,
+    report_dir: ReportDirOpt = None,
+    allow_outside: AllowOutsideOpt = False,
+    force: ForceOpt = False,
     as_json: JsonOpt = False,
 ) -> None:
     """Compare a run with a baseline (deltas, intervals, worst classes, slices, confusion)."""
@@ -144,15 +181,17 @@ def compare_command(
     from cvpilot.compare.report import report_json
 
     _baseline_ref(baseline)
+    name = _project(ctx, project)
     cmp = service.run_compare(
-        _project(ctx, project), run_id, baseline, eval_set=eval_set, step=step,
+        name, run_id, baseline, eval_set=eval_set, step=step,
         store_dir=ctx.obj.store_dir, require_commit=require_commit,
         expect_chain=expect_baseline_chain,
     )  # fmt: skip
+    policy = _policy(ctx, name, report_dir, allow_outside, force)
     if report is not None:
-        write_report(report, render_html(cmp))
+        write_report(report, render_html(cmp), policy)
     if report_json_path is not None:
-        write_report(report_json_path, report_json(cmp))
+        write_report(report_json_path, report_json(cmp), policy)
     if as_json:
         typer.echo(report_json(cmp))
     else:
@@ -222,6 +261,9 @@ def gate_command(
     expect_baseline_chain: ExpectChainOpt = None,
     report: ReportOpt = None,
     report_json_path: ReportJsonOpt = None,
+    report_dir: ReportDirOpt = None,
+    allow_outside: AllowOutsideOpt = False,
+    force: ForceOpt = False,
     as_json: JsonOpt = False,
 ) -> None:
     """Gate a run against a baseline; exit 1 on a regression or any unverifiable check."""
@@ -256,15 +298,21 @@ def gate_command(
 
         apply_memory_limit(DEFAULT_MAX_MEMORY_MB)
         spec = RecomputeSpec(gt, read_class_names(classes))
+    name = _project(ctx, project)
     outcome = service.run_gate(
-        _project(ctx, project), run_id, baseline, thresholds, eval_set=eval_set, step=step,
+        name, run_id, baseline, thresholds, eval_set=eval_set, step=step,
         store_dir=ctx.obj.store_dir, require_commit=require_commit,
         expect_chain=expect_baseline_chain, recompute=spec,
     )  # fmt: skip
+    policy = _policy(ctx, name, report_dir, allow_outside, force)
     if report is not None:  # a report that cannot be written fails the command, pass or not
-        write_report(report, render_html(outcome.comparison, outcome.result, thresholds))
+        write_report(report, render_html(outcome.comparison, outcome.result, thresholds), policy)
     if report_json_path is not None:
-        write_report(report_json_path, report_json(outcome.comparison, outcome.result, thresholds))
+        write_report(
+            report_json_path,
+            report_json(outcome.comparison, outcome.result, thresholds),
+            policy,
+        )
     if as_json:
         typer.echo(report_json(outcome.comparison, outcome.result, thresholds))
     else:

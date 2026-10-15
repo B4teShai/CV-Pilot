@@ -31,7 +31,7 @@ from cvpilot.settings import SettingsError, load_settings
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
-    for var in ("CVPILOT_ENV", "CVPILOT_PROJECT", "CVPILOT_FORWARD_TO"):
+    for var in ("CVPILOT_ENV", "CVPILOT_PROJECT", "CVPILOT_FORWARD_TO", "CVPILOT_FORWARD_HOSTS"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("CVPILOT_STORE_DIR", str(tmp_path / "store"))
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
@@ -85,6 +85,27 @@ def test_the_environment_variable_selects_forwarders_and_an_argument_wins(
 def test_invalid_forwarder_names_are_settings_errors(raw: str) -> None:
     with pytest.raises(SettingsError, match="CVPILOT_FORWARD_TO"):
         load_settings({"CVPILOT_FORWARD_TO": raw})
+
+
+@pytest.mark.parametrize(
+    "raw", ["*", "Host_One", "a b", "a,,b", ",a", "-x.example", "a" * 300, "https://x"]
+)
+def test_invalid_allow_listed_hosts_are_settings_errors(raw: str) -> None:
+    with pytest.raises(SettingsError, match="CVPILOT_FORWARD_HOSTS"):
+        load_settings({"CVPILOT_FORWARD_HOSTS": raw})
+
+
+def test_forward_hosts_settings_parse_and_reach_the_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert load_settings({}).forward_hosts == ()
+    parsed = load_settings({"CVPILOT_FORWARD_HOSTS": " Tracker.Example , api.wandb.ai "})
+    assert parsed.forward_hosts == ("tracker.example", "api.wandb.ai")
+    use_forwarders(monkeypatch, recording=Recording)
+    monkeypatch.setenv("CVPILOT_FORWARD_HOSTS", "tracker.example")
+    run = api.init("proj", task="detection", forward_to=["recording"])
+    run.finish()
+    assert Recording.instances[0].allowed_hosts == ("tracker.example",)
 
 
 def test_forward_to_settings_parse() -> None:

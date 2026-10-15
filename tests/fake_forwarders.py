@@ -20,8 +20,9 @@ class Recording:
     requires: tuple[str, ...] = ()
     instances: list[Recording] = []
 
-    def __init__(self, *, allow_insecure: bool = False) -> None:
+    def __init__(self, *, allow_insecure: bool = False, allowed_hosts: Sequence[str] = ()) -> None:
         self.allow_insecure = allow_insecure
+        self.allowed_hosts = tuple(allowed_hosts)
         self.calls: list[tuple[str, Any]] = []
         self.release = threading.Event()
         self.release.set()
@@ -62,15 +63,15 @@ class FailsToOpen(Recording):
 class FailsToConstruct(Recording):
     name = "failsctor"
 
-    def __init__(self, *, allow_insecure: bool = False) -> None:
+    def __init__(self, *, allow_insecure: bool = False, allowed_hosts: Sequence[str] = ()) -> None:
         raise RuntimeError("plugin bug")
 
 
 class Blocking(Recording):
     name = "blocking"
 
-    def __init__(self, *, allow_insecure: bool = False) -> None:
-        super().__init__(allow_insecure=allow_insecure)
+    def __init__(self, *, allow_insecure: bool = False, allowed_hosts: Sequence[str] = ()) -> None:
+        super().__init__(allow_insecure=allow_insecure, allowed_hosts=allowed_hosts)
         self.release.clear()
 
 

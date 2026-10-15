@@ -44,7 +44,9 @@ Option B, with these rules (each has a test):
 1. **Never blocks, never raises.** `Fanout.submit` is non-blocking and wraps everything; the only
    wait on the training side is `Fanout.close` at `finish`, bounded at `CLOSE_TIMEOUT_S` (5 s)
    in total. Workers are daemon threads, so a hung SDK cannot keep the process alive.
-2. **Bounded.** `QUEUE_BATCHES` (256) batches per forwarder (a batch is at most 10 000 points);
+2. **Bounded.** `QUEUE_BATCHES` (256) batches and `MAX_QUEUED_POINTS` (200 000) points pending per
+   forwarder (queued or being sent; a batch is at most 10 000 points), so a stalled tracker pins a
+   bounded amount of memory in points as well as in batches;
    `CALL_TIMEOUT_S` (30 s): a call running longer disables the forwarder the next time a batch is
    offered. A hung call occupies only its own worker; the SDK's own timeouts end it eventually.
 3. **Failures are counted and logged once.** The first failure per forwarder is `forward_failed`
@@ -56,14 +58,33 @@ Option B, with these rules (each has a test):
    (checked by distribution name before any import, `a|b` for alternatives) and an unsafe
    endpoint raise from `init()` before a run exists. A plugin that fails with any other
    exception while being constructed is skipped and logged.
-5. **Secrets.** Adapters take no token argument and read no credential variable: the SDK reads
-   its own environment. They refuse credentials inside a URL, plain `http` (unless
-   `CVPILOT_ENV=dev`) and the SDK switches that disable TLS verification, with messages that
-   name the variable and never the value. Nothing from `Repro` (config, command line, dataset
-   path) is sent.
-6. **Extras and licences.** SDKs are optional extras imported inside `open()`; core never
+5. **Secrets and transport.** Adapters take no token argument and read no credential variable:
+   the SDK reads its own environment. Every configured endpoint must be `https` (`http` only when
+   `CVPILOT_ENV=dev`; `file:`, `sqlite:`, other schemes and bare paths are refused in every
+   mode), carry no credentials and, when `CVPILOT_FORWARD_HOSTS` is set, be on exactly one of the
+   listed hosts (no suffix matching; an unset endpoint means the SDK default, which must itself
+   be listed, and MLflow's local default has no host so it is refused). The SDK switches that
+   disable TLS verification and the certificate-authority overrides
+   (`MLFLOW_TRACKING_SERVER_CERT_PATH`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `SSL_CERT_FILE`,
+   `SSL_CERT_DIR`) are refused outside development. The few variables that decide where an
+   adapter connects are read **once, on the training thread, at construction**, checked, and
+   passed to the SDK explicitly (`MlflowClient(tracking_uri=...)`, `Settings(base_url=...)`), so
+   a later change of the environment cannot swap a checked value. Messages name the variable and
+   never the value. Nothing from `Repro` (config, command line, dataset path) is sent.
+   **Trackio:** the adapter passes no endpoint and no Space, so it makes no request of its own;
+   Trackio's optional Space sync is configured outside this adapter, which cannot see or verify
+   it. The adapter therefore applies the CA-override check and refuses to run when
+   `CVPILOT_FORWARD_HOSTS` is set (an allow-list cannot be honoured for a destination the
+   adapter cannot see).
+6. **One copy per job.** Only rank zero starts forwarders: when `RANK` or `LOCAL_RANK` is set to
+   a non-zero integer `init` logs `forward_skipped_rank` and starts none. A forked child (a
+   dataloader worker, a spawned rank) inherits the `Fanout` object but not its threads;
+   `os.register_at_fork` marks it closed in the child, drops the inherited run handle (its SQLite
+   connection is never used or closed in the child) and forgets the active run, so the child
+   neither forwards the parent's points again nor waits for threads that do not exist.
+7. **Extras and licences.** SDKs are optional extras imported inside `open()`; core never
    imports them (layering test). MLflow uses `mlflow-skinny` (Apache-2.0).
-7. **Scope.** Scalars only. Artifact forwarding is deferred because predictions can reveal the
+8. **Scope.** Scalars only. Artifact forwarding is deferred because predictions can reveal the
    dataset; it will be opt-in.
 
 ## Consequences

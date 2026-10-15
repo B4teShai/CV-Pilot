@@ -26,9 +26,11 @@ bounds what the *training* thread waits (nothing, except ``close`` at ``finish``
 from __future__ import annotations
 
 import contextvars
+import os
 import queue
 import threading
 import time
+import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -42,6 +44,9 @@ from cvpilot.registry import forwarders as default_registry
 
 QUEUE_BATCHES = 256
 """Batches queued per forwarder; a batch holds at most ``FLUSH_POINTS`` (10 000) points."""
+MAX_QUEUED_POINTS = 200_000
+"""Points pending per forwarder (queued or being sent); a batch that would exceed it is dropped,
+so the memory a stalled tracker can pin is bounded in points, not only in batches."""
 CALL_TIMEOUT_S = 30.0
 """An adapter call running longer than this marks the forwarder stalled."""
 CLOSE_TIMEOUT_S = 5.0
@@ -68,6 +73,7 @@ def resolve_forwarders(
     names: Sequence[str],
     *,
     allow_insecure: bool = False,
+    allowed_hosts: Sequence[str] = (),
     registry: Registry[ForwarderFactory] | None = None,
 ) -> list[Forwarder]:
     """Instantiate the forwarders ``names`` through the registry (duplicates are ignored).
@@ -85,7 +91,7 @@ def resolve_forwarders(
         factory = reg.get(name)
         check_requires(name, factory)
         try:
-            found.append(factory(allow_insecure=allow_insecure))
+            found.append(factory(allow_insecure=allow_insecure, allowed_hosts=tuple(allowed_hosts)))
         except CvpilotError:
             raise
         except Exception as exc:  # noqa: BLE001  # plugin boundary: isolate, count, log once
@@ -106,6 +112,7 @@ class _Worker:
         self.queue: queue.Queue[tuple[MetricPoint, ...]] = queue.Queue(maxsize=fan.queue_batches)
         self.stats = ForwarderStats()
         self.busy_since: float | None = None
+        self.pending_points = 0
         self.stop = threading.Event()
         self.status: RunStatus = "finished"
         self.opened = False
@@ -159,9 +166,21 @@ class _Worker:
         if self.stats.disabled_reason is not None:
             self._drop(batch)
             return
+        with self._lock:
+            if self.pending_points + len(batch) > self._fan.max_queued_points:
+                over = True
+            else:
+                over = False
+                self.pending_points += len(batch)
+        if over:
+            self._drop(batch)
+            self._note("queue_full", n_points=len(batch))
+            return
         try:
             self.queue.put_nowait(batch)
         except queue.Full:
+            with self._lock:
+                self.pending_points -= len(batch)
             self._drop(batch)
             self._note("queue_full", n_points=len(batch))
 
@@ -197,8 +216,10 @@ class _Worker:
                 continue
             if self.stats.disabled_reason is not None or not self.opened:
                 self._drop(batch)
-                continue
-            self._call(partial(self.adapter.log_points, batch), n_points=len(batch))
+            else:
+                self._call(partial(self.adapter.log_points, batch), n_points=len(batch))
+            with self._lock:
+                self.pending_points -= len(batch)
         if self.opened:
             self._call(lambda: self.adapter.close(self.status))
 
@@ -213,6 +234,7 @@ class Fanout:
         repro: Repro,
         *,
         queue_batches: int | None = None,
+        max_queued_points: int | None = None,
         call_timeout_s: float | None = None,
         close_timeout_s: float | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -220,6 +242,9 @@ class Fanout:
         self.queue_batches = QUEUE_BATCHES if queue_batches is None else queue_batches
         if self.queue_batches < 1:
             raise ValueError("queue_batches must be positive")
+        self.max_queued_points = (
+            MAX_QUEUED_POINTS if max_queued_points is None else max_queued_points
+        )
         self.meta = meta
         self.repro = repro
         self.call_timeout_s = CALL_TIMEOUT_S if call_timeout_s is None else call_timeout_s
@@ -236,8 +261,15 @@ class Fanout:
             self._workers.append(_Worker(adapter, self, name))
 
     def start(self) -> None:
+        _LIVE.add(self)
         for worker in self._workers:
             worker.thread.start()
+
+    def _orphan(self) -> None:
+        """In a forked child: the worker threads do not exist here; never deliver or join."""
+        self._closed = True
+        for worker in self._workers:
+            worker.stats.disabled_reason = "forked"
 
     def submit(self, points: Sequence[MetricPoint]) -> None:
         """Offer one flushed batch to every forwarder; never blocks, never raises."""
@@ -284,3 +316,18 @@ class Fanout:
                         abandoned=s.abandoned,
                     )
         return {w.name: w.stats for w in self._workers}
+
+
+_LIVE: weakref.WeakSet[Fanout] = weakref.WeakSet()
+
+
+def _orphan_fanouts() -> None:
+    for fan in list(_LIVE):
+        fan._orphan()
+    _LIVE.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    # A forked child (a dataloader worker, a DDP spawn) inherits the Fanout object but not its
+    # threads; it must neither deliver the parent's points a second time nor wait for threads.
+    os.register_at_fork(after_in_child=_orphan_fanouts)

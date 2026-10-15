@@ -55,8 +55,20 @@ def make_trainer(*, rank_zero: bool = True) -> Any:
 class FakeYoloModel:
     """Has ``add_callback`` like the framework's model; its class claims the framework module."""
 
-    def __init__(self) -> None:
+    def __init__(self, fail_with: BaseException | None = None) -> None:
         self.callbacks: dict[str, list[Any]] = {}
+        self.fail_with = fail_with
+        self.train_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def train(self, *args: Any, **kwargs: Any) -> str:
+        """Like the framework's ``train``: fires the epoch callbacks, then ends or crashes."""
+        self.train_calls.append((args, kwargs))
+        for epoch in range(2):
+            self.fire("on_fit_epoch_end", make_yolo_trainer(epoch=epoch))
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.fire("on_train_end", make_yolo_trainer(epoch=1))
+        return "metrics"
 
     def add_callback(self, event: str, func: Any) -> None:
         self.callbacks.setdefault(event, []).append(func)

@@ -14,8 +14,10 @@ Events (constant messages, ``request_id`` = ``<run_id>:<seq>``): ``run_started``
 from __future__ import annotations
 
 import itertools
+import os
 import threading
 import time
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +31,7 @@ from cvpilot.core.errors import (
     RunClosedError,
 )
 from cvpilot.core.schema import (
+    MAX_STEP,
     Artifact,
     ArtifactKind,
     Forwarder,
@@ -50,6 +53,19 @@ if TYPE_CHECKING:
 FLUSH_POINTS = 10_000
 FLUSH_INTERVAL_S = 2.0
 FinalStatus = Literal["finished", "failed", "preempted"]
+
+
+_HANDLES: weakref.WeakSet[RunHandle] = weakref.WeakSet()
+_ORPHANED_STORES: list[Any] = []
+
+
+def _orphan_handles() -> None:
+    for handle in list(_HANDLES):
+        handle._orphan()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_orphan_handles)
 
 
 def _log() -> Any:
@@ -109,6 +125,8 @@ class RunHandle:
         self._seq = itertools.count(1)
         self._status: RunStatus = meta.status
         self._fanout = fanout
+        self._orphaned = False
+        _HANDLES.add(self)
 
     @property
     def run_id(self) -> str:
@@ -125,6 +143,25 @@ class RunHandle:
     @property
     def store_path(self) -> Path:
         return self._store.path
+
+    def _orphan(self) -> None:
+        """In a forked child: stop using the inherited store connection, buffer and forwarders.
+
+        SQLite connections must not cross a fork, so the child never touches (or closes) the
+        parent's connection; the object is kept alive so that garbage collection cannot close it.
+        """
+        self._orphaned = True
+        self._closed = True
+        self._buffer = []
+        self._fanout = None
+        _ORPHANED_STORES.append(self._store)
+
+    def _closed_error(self) -> RunClosedError:
+        if self._orphaned:
+            return RunClosedError(
+                f"run {self.run_id} belongs to the parent process; a forked child cannot use it"
+            )
+        return RunClosedError(f"run {self.run_id} is finished")
 
     def emit(self, level: str, event: str, **fields: Any) -> None:
         """Log one event with ``request_id`` = ``<run_id>:<seq>``."""
@@ -144,13 +181,17 @@ class RunHandle:
             StoreError: a flush triggered by this call failed; the points stay buffered.
         """
         if self._closed:
-            raise RunClosedError(f"run {self.run_id} is finished")
+            raise self._closed_error()
         if not points:
             return
         step_i = _as_int("step", step)
         epoch_i = None if epoch is None else _as_int("epoch", epoch)
         if step_i < 0 or (epoch_i is not None and epoch_i < 0):
             raise ValueError("step and epoch must be non-negative")
+        if step_i > MAX_STEP:
+            raise ValueError(f"step must be at most {MAX_STEP}")
+        if epoch_i is not None and epoch_i > MAX_STEP:
+            raise ValueError(f"epoch must be at most {MAX_STEP}")
         now = time.time()
         batch = []
         for key, value in points.items():
@@ -210,6 +251,13 @@ class RunHandle:
                 return
             try:
                 name = self._store.append_points(batch)
+            except (ValueError, TypeError, OverflowError) as exc:
+                # A data error is deterministic: the same batch would fail forever and the buffer
+                # would grow without bound, so the batch is dropped (counted, logged) and raised.
+                self.emit(
+                    "error", "metrics_dropped", n_points=len(batch), error_type=type(exc).__name__
+                )
+                raise
             except BaseException:
                 with self._buffer_lock:
                     self._buffer[:0] = batch
@@ -224,7 +272,7 @@ class RunHandle:
     ) -> Artifact:
         """Store a file by content address and register it with the run."""
         if self._closed:
-            raise RunClosedError(f"run {self.run_id} is finished")
+            raise self._closed_error()
         return self._store.put_artifact(self.run_id, Path(path), kind, dict(meta or {}))
 
     def log_eval(
@@ -249,7 +297,7 @@ class RunHandle:
             RunClosedError: the run has finished.
         """
         if self._closed:
-            raise RunClosedError(f"run {self.run_id} is finished")
+            raise self._closed_error()
         from cvpilot.eval.record import record_eval  # numpy is only needed once eval is used
 
         return record_eval(

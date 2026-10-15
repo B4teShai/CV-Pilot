@@ -8,6 +8,7 @@ exception, ``finished`` otherwise). Settings come from ``CVPILOT_*`` variables r
 from __future__ import annotations
 
 import atexit
+import os
 import platform
 import threading
 from collections.abc import Mapping, Sequence
@@ -28,7 +29,7 @@ from cvpilot.core.schema import SCHEMA_VERSION, Artifact, ArtifactKind, EvalSnap
 from cvpilot.logging import ensure_configured, get_logger
 from cvpilot.registry import check_requires, hooks
 from cvpilot.repro import capture_repro
-from cvpilot.settings import load_settings, parse_forwarders
+from cvpilot.settings import is_rank_zero, load_settings, parse_forwarders
 
 if TYPE_CHECKING:
     from cvpilot.eval import AnnotationTable, PredictionTable
@@ -184,7 +185,12 @@ def init(
                 f"run {_active.run_id} is still active; call finish() before init()"
             )
         names = settings.forward_to if forward_to is None else parse_forwarders(forward_to)
-        chosen = runs.resolve_forwarders(names, allow_insecure=settings.env == "dev")
+        if names and not is_rank_zero():
+            get_logger("cvpilot.api").info("forward_skipped_rank", forwarders=list(names))
+            names = ()  # only rank zero forwards: one tracker run, one copy of every point
+        chosen = runs.resolve_forwarders(
+            names, allow_insecure=settings.env == "dev", allowed_hosts=settings.forward_hosts
+        )
         run_id = new_run_id()
         captured = capture_repro(
             run_id,
@@ -334,6 +340,16 @@ def log_artifact(
 def finish(status: Literal["finished", "failed", "preempted"] = "finished") -> None:
     """Finish the active run."""
     _require_active().finish(status)
+
+
+def _forget_active_in_child() -> None:
+    """A forked child inherits the active run but may not use it (see ``RunHandle._orphan``)."""
+    global _active
+    _active = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_active_in_child)
 
 
 def _flush_active_at_exit() -> None:

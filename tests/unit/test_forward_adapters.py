@@ -30,6 +30,11 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "MLFLOW_TRACKING_INSECURE_TLS",
         "WANDB_BASE_URL",
         "WANDB_INSECURE_DISABLE_SSL",
+        "MLFLOW_TRACKING_SERVER_CERT_PATH",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -50,8 +55,10 @@ def fake_mlflow(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
             self.key, self.value, self.timestamp, self.step = key, value, timestamp, step
 
     class Client:
-        def __init__(self) -> None:
-            calls.append(("client", None))
+        def __init__(
+            self, tracking_uri: str | None = None, registry_uri: str | None = None
+        ) -> None:
+            calls.append(("client", tracking_uri))
 
         def get_experiment_by_name(self, name: str) -> None:
             calls.append(("get_experiment", name))
@@ -212,15 +219,31 @@ def test_mlflow_refuses_insecure_or_credentialed_endpoints_without_echoing_them(
     assert value not in str(exc.value) and "pw" not in str(exc.value) and env in str(exc.value)
 
 
+def test_mlflow_accepts_an_https_endpoint_or_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    MlflowForwarder()  # unset: MLflow's own default (a local file store), no network host
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://tracker.example")
+    MlflowForwarder()
+
+
 @pytest.mark.parametrize(
     "uri",
-    ["https://tracker.example", "file:///tmp/mlruns", "sqlite:///m.db", "databricks", "./mlruns"],
+    [
+        "file:///tmp/mlruns",
+        "sqlite:///m.db",
+        "databricks",
+        "./mlruns",
+        "ftp://h/x",
+        "s3://b/k",
+        "//h/x",
+    ],
 )
-def test_mlflow_accepts_secure_or_local_endpoints(
-    monkeypatch: pytest.MonkeyPatch, uri: str
+@pytest.mark.parametrize("dev", [False, True])
+def test_every_scheme_but_https_is_refused_even_in_dev(
+    monkeypatch: pytest.MonkeyPatch, uri: str, dev: bool
 ) -> None:
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
-    MlflowForwarder()
+    with pytest.raises(CvpilotError, match="MLFLOW_TRACKING_URI"):
+        MlflowForwarder(allow_insecure=dev)
 
 
 def test_dev_may_use_plain_http_but_never_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -328,7 +351,7 @@ def test_adapters_take_no_token_argument_and_read_no_credential_variable() -> No
 
     for cls in (MlflowForwarder, WandbForwarder, TrackioForwarder):
         params = set(inspect.signature(cls.__init__).parameters) - {"self"}
-        assert params == {"allow_insecure"}, cls
+        assert params == {"allow_insecure", "allowed_hosts"}, cls
     for path in sorted(SRC.glob("*.py")):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
@@ -373,3 +396,93 @@ def test_requirement_alternatives_are_accepted() -> None:
 
     with pytest.raises(MissingExtraError, match=r"cvpilot\[neither\]"):
         check_requires("neither", Neither)
+
+
+# -- allow-listed hosts, CA overrides, frozen environment ------------------------------------------
+
+CA_VARIABLES = [
+    "MLFLOW_TRACKING_SERVER_CERT_PATH",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+]
+
+
+@pytest.mark.parametrize("variable", CA_VARIABLES)
+@pytest.mark.parametrize("cls", [MlflowForwarder, WandbForwarder, TrackioForwarder])
+def test_certificate_authority_overrides_are_refused_outside_dev(
+    monkeypatch: pytest.MonkeyPatch, variable: str, cls: Any
+) -> None:
+    monkeypatch.setenv(variable, "ca/evil-ca.pem")
+    with pytest.raises(CvpilotError) as exc:
+        cls()
+    assert variable in str(exc.value) and "evil-ca" not in str(exc.value)
+    cls(allow_insecure=True)  # a development machine may use a private CA
+
+
+def test_only_allow_listed_hosts_are_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://tracker.example:8443/path")
+    MlflowForwarder(allowed_hosts=["tracker.example"])
+    MlflowForwarder(allowed_hosts=["other.example", "TRACKER.example"])
+    with pytest.raises(CvpilotError, match="CVPILOT_FORWARD_HOSTS"):
+        MlflowForwarder(allowed_hosts=["other.example"])
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://tracker.example.evil.test/")
+    with pytest.raises(CvpilotError, match="CVPILOT_FORWARD_HOSTS"):
+        MlflowForwarder(allowed_hosts=["tracker.example"])  # no suffix matching
+
+
+def test_an_allow_list_needs_an_explicit_endpoint_for_mlflow_and_covers_the_wandb_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(CvpilotError, match="CVPILOT_FORWARD_HOSTS"):
+        MlflowForwarder(allowed_hosts=["tracker.example"])  # the local default has no host
+    WandbForwarder(allowed_hosts=["api.wandb.ai"])
+    with pytest.raises(CvpilotError, match="CVPILOT_FORWARD_HOSTS"):
+        WandbForwarder(allowed_hosts=["tracker.example"])
+    monkeypatch.setenv("WANDB_BASE_URL", "https://wandb.example")
+    WandbForwarder(allowed_hosts=["wandb.example"])
+    with pytest.raises(CvpilotError, match="CVPILOT_FORWARD_HOSTS"):
+        WandbForwarder(allowed_hosts=["api.wandb.ai"])
+
+
+def test_trackio_cannot_honour_an_allow_list_and_refuses_to_run_with_one() -> None:
+    TrackioForwarder()
+    with pytest.raises(CvpilotError, match="CVPILOT_FORWARD_HOSTS"):
+        TrackioForwarder(allowed_hosts=["anything.example"])
+
+
+def test_the_environment_is_frozen_when_the_adapter_is_built(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sdk = fake_mlflow(monkeypatch)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://tracker.example")
+    adapter = MlflowForwarder()
+    # something else in the process changes the environment after the check
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://attacker.invalid")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "ca/evil.pem")
+    (meta, repro), _ = points()
+    adapter.open(meta, repro)
+    assert sdk.calls[0] == (
+        "client",
+        "https://tracker.example",
+    )  # the checked value is the used one
+
+
+def test_wandb_receives_the_frozen_base_url_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+    sdk = fake_wandb(monkeypatch)
+    monkeypatch.setenv("WANDB_BASE_URL", "https://wandb.example")
+    adapter = WandbForwarder()
+    monkeypatch.setenv("WANDB_BASE_URL", "http://attacker.invalid")
+    (meta, repro), _ = points()
+    adapter.open(meta, repro)
+    assert sdk.calls[0][1]["settings"][1]["base_url"] == "https://wandb.example"
+
+
+def test_check_endpoint_rules_directly() -> None:
+    _common.check_endpoint(None, allow_insecure=False, what="X")
+    _common.check_endpoint("https://h/x", allow_insecure=False, what="X")
+    _common.check_endpoint("http://localhost:5000", allow_insecure=True, what="X")
+    for bad in ("http://h", "ws://h", "https://u:p@h", "https://", "https://h/\x01", "x" * 3000):
+        with pytest.raises(CvpilotError):
+            _common.check_endpoint(bad, allow_insecure=False, what="X")

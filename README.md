@@ -130,7 +130,7 @@ closed (exit 1) on an absent or non-finite metric, an absent or too small slice,
 fails its integrity check, an unknown tag, and a different `eval_set_hash`, task, class names or
 evaluation parameters; with no threshold at all it is a usage error (exit 2).
 `--skip-small-slices` is the one explicit opt-in, capped by `--max-skipped` (default 0). In CI add `--recompute --gt GT --classes FILE`, `--require-commit SHA` and `--expect-baseline-chain SHA256` (the digest printed by `baseline show`); without them the gate trusts the store and protects against accidents only (see the trust model under "GitHub Action"). `--report` writes static HTML (no script, strict
-CSP, every name escaped), `--report-json` the canonical JSON. Semantics: ADR-0007.
+CSP, every name escaped), `--report-json` the canonical JSON; paths must stay inside `--report-dir` (default: the current directory), outside the store and off runner files such as `$GITHUB_ENV`, and an existing file that cvpilot did not create needs `--force` (`--allow-outside` lifts the directory rule). Semantics: ADR-0007.
 `python benchmarks/compare_throughput.py` times it on 5 000 images.
 
 ## Forward to a tracker and hook into a framework

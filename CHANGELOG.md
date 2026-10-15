@@ -7,6 +7,15 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Hardening: report files are written only inside `--report-dir` (default the current directory),
+  never in the store or onto `$GITHUB_ENV`/`$GITHUB_OUTPUT`/`$GITHUB_PATH`/`$GITHUB_STEP_SUMMARY`,
+  and only over files cvpilot created unless `--force` (`--allow-outside` lifts the root rule);
+  metric steps are bounded to the store range and a batch that fails with a data error is dropped
+  (`metrics_dropped`) instead of growing the buffer; forwarder queues are bounded in points
+  (200 000), only rank zero forwards (`RANK`, `LOCAL_RANK`), forked children drop the inherited run
+  and fan-out, and a crashed YOLO training marks the run failed; forwarders accept only https
+  endpoints (http in dev), an optional `CVPILOT_FORWARD_HOSTS` allow-list, refuse CA overrides
+  outside dev and read and freeze their environment once on the training thread.
 - Trusted CI gates: `gate --recompute --gt GT --classes FILE` re-evaluates the stored predictions on
   trusted ground truth and fails unless every stored metric matches; `slice_hash` (slice membership)
   is stored in snapshots and must be equal, with equal per-slice image counts; `--require-commit`
