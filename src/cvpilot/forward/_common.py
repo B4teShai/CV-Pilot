@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit
@@ -64,6 +65,15 @@ def refuse_insecure_flag(env: Mapping[str, str | None], name: str, *, allow_inse
         )
 
 
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_HOST = re.compile(rf"{_LABEL}(?:\.{_LABEL})*")
+_FORBIDDEN_CHARS = frozenset("\\%@?#")
+
+
+def _refuse_endpoint(what: str, why: str) -> ForwardConfigError:
+    return ForwardConfigError(f"{what} {why}")  # never the URL: it may carry credentials
+
+
 def check_endpoint(
     url: str | None,
     *,
@@ -71,44 +81,76 @@ def check_endpoint(
     what: str,
     allowed_hosts: Sequence[str] = (),
     default_host: str | None = None,
-) -> None:
-    """Accept only an ``https`` endpoint (``http`` too in dev) without credentials, on an
-    allowed host when ``allowed_hosts`` is set.
+) -> str | None:
+    """Validate an endpoint and return the **normalised** URL that must be passed to the SDK.
 
-    An unset endpoint means the SDK default: with an allow-list that default must itself be
-    allowed (``default_host``; None when the default is not a network host, which an allow-list
-    cannot vouch for). ``what`` names the environment variable; the URL is never put into a
-    message, because it may carry the credentials this check exists to reject.
+    Accepted: ``https`` (``http`` too in dev) with an ASCII host made of lower-case-able DNS
+    labels, no userinfo, no query or fragment, no IPv6 literal, no percent-encoding, backslash,
+    whitespace or control character anywhere, and a port of 443 (80 for http), or another port
+    only when ``CVPILOT_FORWARD_HOSTS`` lists ``host:port`` (dev may use any port). The host is
+    lower-cased and one trailing dot removed; the returned URL is rebuilt from the parsed parts,
+    so the string the SDK receives is the string that was checked, not the original text (which
+    another parser could read differently).
+
+    With ``allowed_hosts`` the host must equal an entry exactly (no suffix or substring
+    matching; an entry with a port allows that port only, one without allows the default port
+    only). An unset endpoint means the SDK default: with an allow-list that default must itself be
+    listed (``default_host``; None when the default is not a network host, which an allow-list
+    cannot vouch for) and None is returned. ``what`` names the environment variable; the URL is
+    never put into a message.
 
     Raises:
-        ForwardConfigError: the endpoint is unsafe.
+        ForwardConfigError: the endpoint is unsafe or not allowed.
     """
-    hosts = [h.lower() for h in allowed_hosts]
+    entries = [h.lower() for h in allowed_hosts]
+    plain = {e for e in entries if ":" not in e}
     if not url:
-        if hosts and (default_host is None or default_host.lower() not in hosts):
-            raise ForwardConfigError(
-                f"CVPILOT_FORWARD_HOSTS is set but {what} names no allowed endpoint"
-            )
-        return
-    if len(url) > MAX_URL_CHARS or any(ord(c) < 32 or ord(c) == 127 for c in url):
-        raise ForwardConfigError(f"{what} is too long or contains control characters")
+        if entries and (default_host is None or default_host.lower() not in plain):
+            raise _refuse_endpoint(what, "names no allowed endpoint (CVPILOT_FORWARD_HOSTS is set)")
+        return None
+    if (
+        len(url) > MAX_URL_CHARS
+        or not url.isascii()
+        or any(c.isspace() or ord(c) < 32 or ord(c) == 127 or c in _FORBIDDEN_CHARS for c in url)
+    ):
+        raise _refuse_endpoint(what, "is too long or has characters that parsers read differently")
     try:
         parts = urlsplit(url)
-        userinfo = parts.username is not None or parts.password is not None or "@" in parts.netloc
-        host = (parts.hostname or "").lower()
     except ValueError:
-        raise ForwardConfigError(f"{what} is not a valid URL") from None
-    if userinfo:
-        raise ForwardConfigError(f"{what} contains credentials; pass them in the SDK's environment")
+        raise _refuse_endpoint(what, "is not a valid URL") from None
     scheme = parts.scheme.lower()
     if scheme != "https" and not (scheme == "http" and allow_insecure):
-        raise ForwardConfigError(
-            f"{what} must be an https URL (CVPILOT_ENV=dev also allows http for a local server)"
+        raise _refuse_endpoint(
+            what, "must be an https URL (CVPILOT_ENV=dev also allows http for a local server)"
         )
-    if not host:
-        raise ForwardConfigError(f"{what} has no host")
-    if hosts and host not in hosts:
-        raise ForwardConfigError(f"the host of {what} is not in CVPILOT_FORWARD_HOSTS")
+    netloc = parts.netloc
+    if not netloc or "[" in netloc or "]" in netloc:
+        raise _refuse_endpoint(what, "must name a DNS host (no IPv6 literal)")
+    host_text, _, port_text = netloc.partition(":")
+    if ":" in port_text:
+        raise _refuse_endpoint(what, "is not a valid URL")
+    host = host_text.lower().removesuffix(".")
+    if len(host) > 253 or not _HOST.fullmatch(host):
+        raise _refuse_endpoint(what, "has an invalid host")
+    port: int | None = None
+    if port_text:
+        if not (port_text.isascii() and port_text.isdigit() and 1 <= int(port_text) <= 65535):
+            raise _refuse_endpoint(what, "has an invalid port")
+        port = int(port_text)
+    if port == (443 if scheme == "https" else 80):
+        port = None
+    if entries:
+        if port is None and host not in plain:
+            raise _refuse_endpoint(what, "has a host that is not in CVPILOT_FORWARD_HOSTS")
+        if port is not None and f"{host}:{port}" not in entries:
+            raise _refuse_endpoint(
+                what, "has a port that is not allowed; list host:port in CVPILOT_FORWARD_HOSTS"
+            )
+    elif port is not None and not allow_insecure:
+        raise _refuse_endpoint(
+            what, "has a port other than 443; list host:port in CVPILOT_FORWARD_HOSTS to allow it"
+        )
+    return f"{scheme}://{host}{f':{port}' if port is not None else ''}{parts.path}"
 
 
 def load_sdk(module: str, extra: str) -> Any:

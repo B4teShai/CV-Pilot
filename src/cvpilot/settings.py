@@ -64,12 +64,15 @@ def parse_forwarders(value: Any) -> tuple[str, ...]:
     return tuple(names)
 
 
-_HOST = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_HOST = re.compile(rf"{_LABEL}(?:\.{_LABEL})*(?::[0-9]{{1,5}})?")
 MAX_FORWARD_HOSTS = 32
 
 
 def parse_hosts(value: Any) -> tuple[str, ...]:
-    """Lower-case host names from a comma-separated string or a sequence (no wildcards).
+    """Lower-case ``host`` or ``host:port`` entries from a comma-separated string or a sequence.
+
+    No wildcards, no schemes, no paths; an entry without a port allows only the default port.
 
     Raises:
         ValueError: a name is empty, has characters outside ``[a-z0-9.-]``, or there are more
@@ -85,8 +88,12 @@ def parse_hosts(value: Any) -> tuple[str, ...]:
         raise ValueError("must be a comma-separated list of host names")
     if len(names) > MAX_FORWARD_HOSTS or len(set(names)) != len(names):
         raise ValueError("too many or repeated hosts")
-    if not all(_HOST.fullmatch(n) for n in names):
+    if not all(_HOST.fullmatch(n) and len(n) <= 260 for n in names):
         raise ValueError("invalid host name")
+    for entry in names:
+        port = entry.partition(":")[2]
+        if port and not 1 <= int(port) <= 65535:
+            raise ValueError("invalid port")
     return tuple(names)
 
 

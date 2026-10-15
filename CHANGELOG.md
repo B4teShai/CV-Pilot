@@ -7,6 +7,10 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Forwarder endpoint checks close the allow-list bypasses: W&B always receives an explicit pinned
+  `base_url`, URLs are validated structurally (no backslash, percent-encoding, `@`, query, fragment,
+  non-ASCII or IPv6 hosts) and the normalised URL is what the SDK receives, ports other than 443
+  need a `host:port` entry in `CVPILOT_FORWARD_HOSTS`, and `MLFLOW_REGISTRY_URI` is checked and pinned.
 - Smaller hardening: the error boundary maps `SystemExit` and `KeyboardInterrupt` (an `exit(0)` inside
   a command is a failure, never success); a limit of 100 points is refused because it can never
   fail; snapshots whose per-class support differs are refused (`class_support`); `open_artifact`

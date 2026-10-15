@@ -63,14 +63,32 @@ Option B, with these rules (each has a test):
    the SDK reads its own environment. Every configured endpoint must be `https` (`http` only when
    `CVPILOT_ENV=dev`; `file:`, `sqlite:`, other schemes and bare paths are refused in every
    mode), carry no credentials and, when `CVPILOT_FORWARD_HOSTS` is set, be on exactly one of the
-   listed hosts (no suffix matching; an unset endpoint means the SDK default, which must itself
+   listed hosts (whole-host equality, no suffix or substring matching; entries are `host` or
+   `host:port`, an entry without a port allows only 443 (80 for http), a non-default port needs its
+   own `host:port` entry even without an allow-list, wildcards and empty entries are refused at
+   start; an empty variable means no restriction; an unset endpoint means the SDK default, which must itself
    be listed, and MLflow's local default has no host so it is refused). The SDK switches that
    disable TLS verification and the certificate-authority overrides
    (`MLFLOW_TRACKING_SERVER_CERT_PATH`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `SSL_CERT_FILE`,
    `SSL_CERT_DIR`) are refused outside development. The few variables that decide where an
    adapter connects are read **once, on the training thread, at construction**, checked, and
    passed to the SDK explicitly (`MlflowClient(tracking_uri=...)`, `Settings(base_url=...)`), so
-   a later change of the environment cannot swap a checked value. Messages name the variable and
+   a later change of the environment cannot swap a checked value. URLs are validated structurally
+   before the host is compared, because the allow-list and the HTTP client must read the same
+   host: backslashes, percent-encoding, whitespace, control characters, `@` and `?` or `#`
+   anywhere, non-ASCII hosts (punycode must be written as `xn--`, and is compared as such), IPv6
+   literals, empty labels and userinfo in any form are refused; the host is lower-cased and one
+   trailing dot removed, and the **rebuilt, normalised URL** (not the original text) is what the
+   SDK receives. W&B always receives an explicit `base_url` (the validated one, or
+   `https://api.wandb.ai` after allow-list approval of that default) so an unset variable cannot
+   leave the endpoint to a settings file in the working directory, `~/.config/wandb/settings` or
+   netrc, which a checkout can control; explicit settings are the SDK's highest-precedence source.
+   I did not find an SDK option that disables reading those files and do not claim one: pinning
+   the endpoint is the control. MLflow's `MLFLOW_REGISTRY_URI` gets the same checks and the client
+   receives explicit tracking and registry URIs (the registry follows the tracking URI when
+   unset). Tests record what the fake SDKs receive and spy on `os.environ` to show that
+   construction reads only the endpoint and TLS variables, never a credential, and that `open`,
+   `log_points` and `close` read nothing. Messages name the variable and
    never the value. Nothing from `Repro` (config, command line, dataset path) is sent.
    **Trackio:** the adapter passes no endpoint and no Space, so it makes no request of its own;
    Trackio's optional Space sync is configured outside this adapter, which cannot see or verify

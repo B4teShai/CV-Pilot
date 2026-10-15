@@ -44,24 +44,44 @@ class MlflowForwarder:
 
     def __init__(self, *, allow_insecure: bool = False, allowed_hosts: Sequence[str] = ()) -> None:
         env = freeze_env(
-            ("MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_INSECURE_TLS", *CA_OVERRIDE_VARIABLES)
+            (
+                "MLFLOW_TRACKING_URI",
+                "MLFLOW_REGISTRY_URI",
+                "MLFLOW_TRACKING_INSECURE_TLS",
+                *CA_OVERRIDE_VARIABLES,
+            )
         )
-        check_endpoint(
+        self._uri = check_endpoint(
             env["MLFLOW_TRACKING_URI"],
             allow_insecure=allow_insecure,
             what="MLFLOW_TRACKING_URI",
             allowed_hosts=allowed_hosts,
         )
+        self._registry = (
+            check_endpoint(
+                env["MLFLOW_REGISTRY_URI"],
+                allow_insecure=allow_insecure,
+                what="MLFLOW_REGISTRY_URI",
+                allowed_hosts=allowed_hosts,
+            )
+            if env["MLFLOW_REGISTRY_URI"]
+            else None
+        )
         refuse_insecure_flag(env, "MLFLOW_TRACKING_INSECURE_TLS", allow_insecure=allow_insecure)
         refuse_ca_overrides(env, allow_insecure=allow_insecure)
-        self._uri = env["MLFLOW_TRACKING_URI"]  # the value that was checked is the value used
         self._client: Any = None
         self._run_id = ""
         self._metric: Any = None
 
     def open(self, meta: RunMeta, repro: Repro) -> None:
         sdk = load_sdk("mlflow", "mlflow")
-        client = sdk.MlflowClient(tracking_uri=self._uri) if self._uri else sdk.MlflowClient()
+        # the normalised, checked values are the ones the SDK receives; the registry follows the
+        # tracking URI explicitly instead of being resolved from the environment later
+        registry = self._registry or self._uri
+        if self._uri or registry:
+            client = sdk.MlflowClient(tracking_uri=self._uri, registry_uri=registry)
+        else:
+            client = sdk.MlflowClient()
         experiment = client.get_experiment_by_name(meta.project)
         experiment_id = (
             experiment.experiment_id if experiment else client.create_experiment(meta.project)

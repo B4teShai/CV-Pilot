@@ -29,6 +29,7 @@ from cvpilot.forward._common import (
 )
 
 DEFAULT_HOST = "api.wandb.ai"
+DEFAULT_URL = f"https://{DEFAULT_HOST}"
 """The host the SDK talks to when ``WANDB_BASE_URL`` is unset."""
 INIT_TIMEOUT_S = 30
 """Seconds the SDK may take to start its run before ``init`` fails (and the failure is counted)."""
@@ -40,7 +41,7 @@ class WandbForwarder:
 
     def __init__(self, *, allow_insecure: bool = False, allowed_hosts: Sequence[str] = ()) -> None:
         env = freeze_env(("WANDB_BASE_URL", "WANDB_INSECURE_DISABLE_SSL", *CA_OVERRIDE_VARIABLES))
-        check_endpoint(
+        checked = check_endpoint(
             env["WANDB_BASE_URL"],
             allow_insecure=allow_insecure,
             what="WANDB_BASE_URL",
@@ -49,7 +50,9 @@ class WandbForwarder:
         )
         refuse_insecure_flag(env, "WANDB_INSECURE_DISABLE_SSL", allow_insecure=allow_insecure)
         refuse_ca_overrides(env, allow_insecure=allow_insecure)
-        self._base_url = env["WANDB_BASE_URL"]  # the value that was checked is the value used
+        # always pinned: an unset variable must not leave the endpoint to settings files or
+        # netrc, which a checkout can control
+        self._base_url = checked or DEFAULT_URL
         self._run: Any = None
         self._owns = False
         self._last_step = -1
@@ -58,9 +61,7 @@ class WandbForwarder:
     def open(self, meta: RunMeta, repro: Repro) -> None:
         sdk = load_sdk("wandb", "wandb")
         self._owns = getattr(sdk, "run", None) is None
-        settings: dict[str, Any] = {"init_timeout": INIT_TIMEOUT_S}
-        if self._base_url:
-            settings["base_url"] = self._base_url
+        settings: dict[str, Any] = {"init_timeout": INIT_TIMEOUT_S, "base_url": self._base_url}
         self._run = sdk.init(
             project=meta.project,
             name=meta.name,

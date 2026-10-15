@@ -423,7 +423,10 @@ def test_certificate_authority_overrides_are_refused_outside_dev(
 
 def test_only_allow_listed_hosts_are_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://tracker.example:8443/path")
-    MlflowForwarder(allowed_hosts=["tracker.example"])
+    with pytest.raises(CvpilotError, match="port"):
+        MlflowForwarder(allowed_hosts=["tracker.example"])  # a port needs its own entry
+    MlflowForwarder(allowed_hosts=["tracker.example:8443"])
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://tracker.example/path")
     MlflowForwarder(allowed_hosts=["other.example", "TRACKER.example"])
     with pytest.raises(CvpilotError, match="CVPILOT_FORWARD_HOSTS"):
         MlflowForwarder(allowed_hosts=["other.example"])
