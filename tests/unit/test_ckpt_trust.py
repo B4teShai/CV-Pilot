@@ -228,8 +228,9 @@ def test_the_key_never_reaches_logs_files_the_store_or_error_text(
     path = tmp_path / "ckpt" / run.run_id / manifest.path
     make_writable(path)
     path.write_bytes(b"damaged")
-    assert manager.restore() is None
-    texts = [json.dumps(e, default=str) for e in events()]
+    with pytest.raises(CheckpointUntrustedError) as gone:  # step 1 is known, nothing verifies
+        manager.restore()
+    texts = [json.dumps(e, default=str) for e in events()] + [str(gone.value)]
     with pytest.raises(CheckpointError) as info:
         manager.save_now(1, model={"w": [2.0]})
     texts.append(str(info.value))

@@ -174,13 +174,17 @@ def find_resume_point(
                     )  # fmt: skip
                     return point
                 failure = gate_failure(found.skipped, policy)
-                if failure is not None and failure[0] in ("rolled_back", "anchor_error"):
+                if failure is not None and failure[0] in (
+                    "rolled_back",
+                    "checkpoint_missing",
+                    "anchor_error",
+                ):
                     raise CheckpointUntrustedError(failure[1], reason=failure[0])
     finally:
         if opened is not None:
             opened[1]()
     if mark is not None:
-        rejected.append(Skipped(None, kind, kind, "rolled_back"))
+        rejected.append(Skipped(None, kind, kind, "rolled_back", mark))
     failure = gate_failure(rejected, policy)
     if failure is not None:
         raise CheckpointUntrustedError(failure[1], reason=failure[0])

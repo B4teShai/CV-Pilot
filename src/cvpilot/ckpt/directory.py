@@ -89,6 +89,7 @@ TRUST_REASONS = frozenset(
         "anchor_error",
         "store_mismatch",
         "rolled_back",
+        "checkpoint_missing",
         "binding_mismatch",
     }
 )
@@ -120,6 +121,7 @@ class Skipped:
     kind: str
     name: str
     reason: str
+    floor: int | None = None  # for rolled_back / checkpoint_missing: the step known to have existed
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,21 @@ class Admission:
             return None
         return "rolled_back"
 
+    def _warn_progress_lost(self) -> None:
+        """Under ``any`` rollback is not enforced, but an empty result must not look like a fresh
+        start when the run store says checkpoints existed: say so, with the floor."""
+        if self._rc.require_trust != "any":
+            return
+        try:
+            stored = self._rc._anchor_max(self._kind)
+        except CheckpointUntrustedError:
+            return
+        if stored:
+            self._rc._emit(
+                "warning", "checkpoint_progress_lost", kind=self._kind, floor=stored,
+                reason="rolled_back", policy="any",
+            )  # fmt: skip
+
     def decide(self, cand: _Cand | None) -> str | None:
         """None when ``cand`` may be used, else the reason it may not. ``None`` as the candidate
         asks whether finding nothing at all is acceptable (it is not when checkpoints are known to
@@ -231,9 +248,15 @@ class Admission:
         if self._error is not None:
             return self._error
         if cand is None:  # the external mark is checked by the caller across the whole lineage
-            if self._known is None or any(t >= self._known for t in self._trusted):
-                return None  # nothing known, or the newest is still here but damaged
-            return self._rolled_back(None, self._known)
+            if self._known is None:
+                self._warn_progress_lost()
+                return None  # nothing is known to have existed: a genuine fresh start
+            verdict = self._rolled_back(None, self._known)
+            if verdict is None:
+                return None  # starting over was accepted on purpose (logged)
+            # the newest is still here but nothing verifies, or it is gone: never a fresh start
+            damaged = any(t >= self._known for t in self._trusted)
+            return "checkpoint_missing" if damaged else verdict
         if cand.reason is not None:
             return cand.reason
         manifest = cand.manifest
@@ -255,13 +278,22 @@ class Admission:
 
 def gate_failure(skipped: Iterable[Skipped], policy: str) -> tuple[str, str] | None:
     """``(reason, message)`` when the gate, not damage, is why nothing could be returned: a
-    rollback, a failing run store, or (under a strict policy) candidates that lack the required
-    proof. The caller logs it and raises ``CheckpointUntrustedError``."""
-    reasons = [s.reason for s in skipped]
+    rollback or nothing that verifies although progress is known, a failing run store, or (under a
+    strict policy) candidates that lack the required proof. The caller logs it and raises
+    ``CheckpointUntrustedError``."""
+    items = list(skipped)
+    reasons = [s.reason for s in items]
+    floors = [s.floor for s in items if s.floor is not None]
+    known = f"step {max(floors)}" if floors else "an earlier step"
     if "rolled_back" in reasons:
         return "rolled_back", (
-            "checkpoints were rolled back: a newer checkpoint is known to have existed and is gone "
-            "(restore it, or accept the rollback on purpose)"
+            f"checkpoints were rolled back: {known} is known to have existed and nothing at or "
+            "above it is left (restore it, or accept the rollback on purpose)"
+        )
+    if "checkpoint_missing" in reasons:
+        return "checkpoint_missing", (
+            f"{known} is known to have existed but no checkpoint at or above it verifies "
+            "(restore the data, or accept starting over on purpose with accept_rollback_to)"
         )
     if "anchor_error" in reasons and policy != "any":
         return "anchor_error", (
@@ -392,10 +424,13 @@ class RunCheckpoints:
             with fsops.lock(run_fd, timeout=self._lock_timeout):
                 yield run_fd
 
-    def _skip(self, step: int | None, kind: str, name: str, reason: str) -> None:
-        self.skipped.append(Skipped(step, kind, name, reason))
+    def _skip(
+        self, step: int | None, kind: str, name: str, reason: str, floor: int | None = None
+    ) -> None:
+        self.skipped.append(Skipped(step, kind, name, reason, floor))
         event = "checkpoint_untrusted" if reason in TRUST_REASONS else "checkpoint_skipped_corrupt"
-        self._emit("warning", event, step=step, kind=kind, reason=reason)
+        extra = {} if floor is None else {"floor": floor}
+        self._emit("warning", event, step=step, kind=kind, reason=reason, **extra)
 
     # -- manifests and pointers ---------------------------------------------------------------
 
@@ -832,7 +867,7 @@ class RunCheckpoints:
                 if not yielded:
                     reason = gate.decide(None)
                     if reason is not None:
-                        self._skip(None, kind, kind, reason)
+                        self._skip(None, kind, kind, reason, gate.floor)
             finally:
                 if kind_fd is not None:
                     os.close(kind_fd)

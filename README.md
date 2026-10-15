@@ -92,18 +92,47 @@ Notes:
 
 ## Checkpoints that survive a kill
 
-```python notest
-from cvpilot.ckpt import CheckpointManager
+```python file=restart.py
+import cvpilot
+from cvpilot.ckpt import CheckpointManager, find_resume_point
+from cvpilot.runs import recover_run
 
-run = cvpilot.init("fridge-sku", task="detection")
-ckpt = CheckpointManager(run, dir="/checkpoint", keep_last=3, monitor="val/mAP50_95")
-state = ckpt.restore_latest_valid()  # None on a fresh start
-for step in range(start, total_steps):
-    ...
-    ckpt.maybe_save(step, model=model, optimizer=opt, rng=True, metrics={"val/mAP50_95": m})
+point = find_resume_point("fridge-sku")  # newest run of this project that can be resumed, or None
+if point is not None and point.needs_recover:  # the earlier process was killed outright
+    recover_run("fridge-sku", point.run_id)
+run = cvpilot.init(
+    "fridge-sku", task="detection", resume_from=None if point is None else point.run_id
+)
+ckpt = CheckpointManager(run, every_n_steps=1)  # directory: CVPILOT_CHECKPOINT_DIR
+restored = ckpt.restore()  # None on a fresh start; this run's directory, then the runs it resumed
+start = 0 if restored is None else restored.manifest.step + 1
+print(f"starting at step {start}")
+for step in range(start, start + 3):
+    ckpt.maybe_save(step, model={"w": [float(step)]})
     if ckpt.preempted():
         break  # SIGTERM or SIGUSR1 set a flag; the run is already marked preempted
 ```
+
+Run it twice. The first process stands in for a job that was killed, the second is its restart: a
+new run that resumes the first and starts where it stopped. **The run store and the checkpoint
+directory must both live on storage that survives the restart** (a persistent mount); the restart
+finds its predecessor through them.
+
+```bash
+export CVPILOT_PROJECT=fridge-sku CVPILOT_STORE_DIR="$PWD/state/store" CVPILOT_CHECKPOINT_DIR="$PWD/state/ckpt"
+python restart.py
+python restart.py
+```
+
+```text expect
+starting at step 0
+starting at step 3
+```
+
+On a node that has neither (a fresh machine that only reaches the bucket), configure `remote=` or
+`CVPILOT_CHECKPOINT_REMOTE` and call `ckpt.restore(discover=True)`: it lists the newest runs on the
+remote and restores the best step through the same checks as any other checkpoint
+([docs/guide/checkpoints.md](docs/guide/checkpoints.md)).
 
 A save is atomic and verified; a restore skips (and counts) anything truncated, corrupt, forged,
 replaced or symlinked and never loads it; `cvpilot.resume_path("fridge-sku")` returns the newest

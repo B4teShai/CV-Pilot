@@ -73,6 +73,50 @@ A resumed run restores from its own directory first, then from the runs it resum
 and from the remote when nothing local verifies. `cvpilot.resume_path("proj")` and
 `cvpilot.ckpt.find_resume_point` tell a restarted script which run and file to resume from.
 
+### A restart, end to end
+
+A restarted script gets a **new run id**, so it finds its predecessor through the run store and the
+checkpoint directory: both must live on storage that survives the restart (a persistent mount).
+This is the recipe the README runs twice in a test:
+
+```python notest
+import cvpilot
+from cvpilot.ckpt import CheckpointManager, find_resume_point
+from cvpilot.runs import recover_run
+
+point = find_resume_point("fridge-sku")  # newest run of this project that can be resumed, or None
+if point is not None and point.needs_recover:  # the earlier process was killed outright
+    recover_run("fridge-sku", point.run_id)
+run = cvpilot.init(
+    "fridge-sku", task="detection", resume_from=None if point is None else point.run_id
+)
+ckpt = CheckpointManager(run, every_n_steps=1)  # directory: CVPILOT_CHECKPOINT_DIR
+restored = ckpt.restore()  # None on a fresh start; this run's directory, then the runs it resumed
+start = 0 if restored is None else restored.manifest.step + 1
+print(f"starting at step {start}")
+for step in range(start, start + 3):
+    ckpt.maybe_save(step, model={"w": [float(step)]})
+    if ckpt.preempted():
+        break  # SIGTERM or SIGUSR1 set a flag; the run is already marked preempted
+```
+
+### A fresh node with only the bucket
+
+When neither the run store nor the checkpoint directory survived, set `remote=` (or
+`CVPILOT_CHECKPOINT_REMOTE`) and ask for discovery:
+
+```python notest
+restored = ckpt.restore(discover=True)  # or ckpt.restore_latest_valid(discover=True)
+```
+
+Only if the run's own lineage yields nothing does it list the newest 20 run prefixes on the remote
+(at most 1000 are read), orders the candidates by step (the newer run wins a tie) and fetches each
+through the same gate as any remote checkpoint: policy, size caps, rollback floor, then the
+SHA-256, before anything is installed. `restore_latest_valid(run_ids=[...])` names the runs to
+search explicitly. Discovery cannot tell whose job a run prefix belongs to: use a bucket prefix per
+job, and `CVPILOT_CKPT_KEY` with `authenticated` so that only checkpoints written with your key are
+accepted.
+
 ## Retention
 
 `keep_last` and `keep_best` (defaults 3 and 2) apply after every save and count only checkpoints

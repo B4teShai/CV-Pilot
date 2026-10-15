@@ -63,7 +63,12 @@ Option C, implemented by `ckpt/` with the following rules.
    and SHA-256 against the manifest, loads it (`safetensors`, or `torch.load(...,
    weights_only=True)`), and returns the state. If any step fails it logs
    `checkpoint_skipped_corrupt` and tries the previous manifest in step order. It returns
-   `None` when no valid checkpoint exists. Files without a manifest are never loaded.
+   `None` when no valid checkpoint exists **and nothing is known to have existed**: when the run
+   store, a tag-checked pointer or `min_step` proves that a step was saved, finding nothing at or
+   above it raises `CheckpointUntrustedError` (`rolled_back` or `checkpoint_missing`, with the
+   step in the message) under `anchored` and `authenticated`; under `any` it returns `None` and
+   logs `checkpoint_progress_lost` with the floor. Starting over is `accept_rollback_to=0`.
+   Files without a manifest are never loaded.
 3. **Last versus best.** `kind="last"` holds the full training state (model, optimizer,
    scheduler, scaler, RNG, dataloader state) in a `.pt` file loaded with `weights_only=True`.
    `kind="best"` holds model weights and EMA as `safetensors`. Retention is per kind:
@@ -75,7 +80,10 @@ Option C, implemented by `ckpt/` with the following rules.
 5. **Remote mirror.** When `remote=` is set, the `.pt`/`.safetensors` file and its manifest
    are uploaded through `fsspec` after local verification; the remote manifest is written
    last. On restore, if local `LATEST` is missing (new node), the manager lists remote
-   manifests and applies rule 2 to them, downloading to `<dir>` first.
+   manifests and applies rule 2 to them, downloading to `<dir>` first. A restart has a new run
+   id, so the remote is searched by the run's lineage (the run store must have survived) or, with
+   `restore(discover=True)`, by listing the newest runs on the remote and ordering their
+   candidates by step; every candidate passes the same gate before a byte is installed.
 6. **Preemption.** A handler for SIGTERM and SIGUSR1 (configurable) and a poller for cloud
    preemption notices (AWS, GCP, Azure metadata endpoints) set a flag; `maybe_save` saves
    at the next call inside the grace window regardless of `every_n_minutes`. The run is

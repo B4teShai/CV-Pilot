@@ -74,6 +74,7 @@ from cvpilot.settings import load_settings
 
 DEFAULT_INTERVAL_MINUTES = 10.0
 MAX_REMOTE_CANDIDATES = 10
+MAX_DISCOVERED_RUNS = 20  # newest remote runs looked at when discovering
 MAX_GRACE_S = 3600.0
 _WEIGHT_KEYS = ("model", "ema")
 _STATE_OBJECTS = ("model", "optimizer", "scheduler", "scaler", "ema")
@@ -730,6 +731,7 @@ class CheckpointManager:
         *,
         map_location: str = "cpu",
         run_ids: Sequence[str] | None = None,
+        discover: bool = False,
         require_trust: RequireTrust | None = None,
         accept_rollback_to: int | None = None,
     ) -> Restored | None:
@@ -749,7 +751,15 @@ class CheckpointManager:
         raised; ``accept_rollback_to=N`` accepts a restore at step N or later on purpose (logged;
         0 accepts starting from nothing). A newer checkpoint that is still present but damaged is
         corruption, not rollback.
+
+        ``discover=True`` is for a restarted script on a node that has neither the run store nor
+        the checkpoint directory of the earlier run (a new run has a new id and no lineage): when
+        the lineage yields nothing, the newest ``MAX_DISCOVERED_RUNS`` run prefixes on the remote
+        are listed, their candidates are ordered by step (newest run first on a tie) and each goes
+        through the same gate as any other remote checkpoint. It needs a remote.
         """
+        if discover and self._mirror is None:
+            raise ValueError("discover=True needs a remote (remote= or CVPILOT_CHECKPOINT_REMOTE)")
         policy = self._effective_policy(require_trust)
         order = (
             list(run_ids)
@@ -775,9 +785,16 @@ class CheckpointManager:
             self._announce(found, run_id, kind, len(skipped), policy)
             self.last_restore = found
             return found
+        if discover:
+            found = self._restore_discovered(order, kind, map_location, skipped, policy, ctx)
+            if found is not None:
+                found.policy, found.weaker_allowed = policy, self.allow_weaker_trust
+                self._announce(found, found.run_id, kind, len(skipped), policy)
+                self.last_restore = found
+                return found
         self.last_restore = None
         if self.min_step is not None and not self.allow_weaker_trust:
-            skipped.append(Skipped(None, kind, kind, "rolled_back"))  # progress is known: min_step
+            skipped.append(Skipped(None, kind, kind, "rolled_back", self.min_step))  # min_step
         failure = gate_failure(skipped, policy)
         if failure is not None:
             reason, message = failure
@@ -866,33 +883,78 @@ class CheckpointManager:
             return None
         ctx = replace(ctx, present=frozenset(steps))  # still listed, so not "gone"
         for step in steps[:MAX_REMOTE_CANDIDATES]:
-            try:
-                self._mirror.fetch(found, kind, step, ctx)
-            except (CheckpointCorruptError, OSError) as exc:
-                reason = (
-                    exc.reason if isinstance(exc, CheckpointCorruptError) else "remote_unavailable"
-                )
-                skipped.append(Skipped(step, kind, f"remote:{kind}/{step}", reason))
-                event = (
-                    "checkpoint_untrusted"
-                    if reason in TRUST_REASONS
-                    else ("checkpoint_skipped_corrupt")
-                )
-                self._emit(
-                    "warning", event, run_id=run_id, step=step, kind=kind,
-                    reason=reason, remote=self._mirror.label,
-                )  # fmt: skip
+            if not self._fetch_one(found, run_id, kind, step, skipped, ctx):
                 continue
             restored = self._restore_local(run_id, kind, map_location, skipped, policy, ctx)
             if restored is not None:
                 return restored
         return None
 
+    def _restore_discovered(
+        self,
+        known: Sequence[str],
+        kind: CheckpointKind,
+        map_location: str,
+        skipped: list[Skipped],
+        policy: str,
+        ctx: AdmitContext,
+    ) -> Restored | None:
+        """Candidates from the newest remote runs outside ``known``, best step first."""
+        assert self._mirror is not None  # noqa: S101  # the caller checked
+        try:
+            run_ids = [r for r in self._mirror.list_runs() if r not in set(known)]
+            run_ids = run_ids[:MAX_DISCOVERED_RUNS]
+            listed = {run_id: self._mirror.list_steps(run_id, kind) for run_id in run_ids}
+        except OSError as exc:
+            self._emit(
+                "warning", "checkpoint_download_failed", kind=kind, error_type=type(exc).__name__
+            )
+            return None
+        candidates = sorted(
+            ((step, run_id) for run_id, steps in listed.items() for step in steps), reverse=True
+        )[:MAX_REMOTE_CANDIDATES]
+        for step, run_id in candidates:
+            found = self._dir_for(run_id, policy)
+            one = replace(ctx, present=frozenset(listed[run_id]))
+            if self._fetch_one(found, run_id, kind, step, skipped, one):
+                restored = self._restore_local(run_id, kind, map_location, skipped, policy, one)
+                if restored is not None:
+                    return restored
+        return None
+
+    def _fetch_one(
+        self,
+        found: RunCheckpoints,
+        run_id: str,
+        kind: CheckpointKind,
+        step: int,
+        skipped: list[Skipped],
+        ctx: AdmitContext,
+    ) -> bool:
+        """Fetch one remote candidate through the gate; False (counted, logged) when refused."""
+        assert self._mirror is not None  # noqa: S101  # the caller checked
+        try:
+            self._mirror.fetch(found, kind, step, ctx)
+        except (CheckpointCorruptError, OSError) as exc:
+            reason = exc.reason if isinstance(exc, CheckpointCorruptError) else "remote_unavailable"
+            skipped.append(Skipped(step, kind, f"remote:{kind}/{step}", reason))
+            event = (
+                "checkpoint_untrusted" if reason in TRUST_REASONS else "checkpoint_skipped_corrupt"
+            )
+            self._emit(
+                "warning", event, run_id=run_id, step=step, kind=kind,
+                reason=reason, remote=self._mirror.label,
+            )  # fmt: skip
+            return False
+        return True
+
     @overload
     def restore_latest_valid(
         self,
         *,
         map_location: str = ...,
+        run_ids: Sequence[str] | None = ...,
+        discover: bool = ...,
         require_trust: RequireTrust | None = ...,
         with_trust: Literal[False] = ...,
     ) -> dict[str, Any] | None: ...
@@ -902,6 +964,8 @@ class CheckpointManager:
         self,
         *,
         map_location: str = ...,
+        run_ids: Sequence[str] | None = ...,
+        discover: bool = ...,
         require_trust: RequireTrust | None = ...,
         with_trust: Literal[True],
     ) -> Restored | None: ...
@@ -910,16 +974,23 @@ class CheckpointManager:
         self,
         *,
         map_location: str = "cpu",
+        run_ids: Sequence[str] | None = None,
+        discover: bool = False,
         require_trust: RequireTrust | None = None,
         with_trust: bool = False,
     ) -> dict[str, Any] | Restored | None:
         """The state of the newest valid ``last`` checkpoint, or ``None`` on a fresh start.
 
-        ``require_trust`` overrides the policy for this call. By default only the state is
-        returned (as before); with ``with_trust=True`` the whole ``Restored`` comes back, so the
-        caller sees the trust level that was achieved (``Restored.trust``).
+        ``require_trust`` can raise the policy for this call, never lower it. ``run_ids`` names
+        the runs to search (default: this run and the runs it resumed); ``discover=True`` also
+        looks through the newest runs on the remote (see ``restore``). By default only the state
+        is returned (as before); with ``with_trust=True`` the whole ``Restored`` comes back, so
+        the caller sees the trust level that was achieved (``Restored.trust``).
         """
-        restored = self.restore("last", map_location=map_location, require_trust=require_trust)
+        restored = self.restore(
+            "last", map_location=map_location, run_ids=run_ids, discover=discover,
+            require_trust=require_trust,
+        )  # fmt: skip
         if restored is None:
             return None
         return restored if with_trust else restored.state

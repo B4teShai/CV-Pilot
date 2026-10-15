@@ -19,10 +19,15 @@ from cvpilot.core.schema import (
 )
 from cvpilot.core.ulid import is_valid_ulid
 from cvpilot.registry import stores
+from cvpilot.settings import load_settings
 
 
 def open_store(project: str, store_dir: Path | None, *, create: bool = True) -> RunStore:
-    """Open a project's store through the ``stores`` registry (default adapter ``local``)."""
+    """Open a project's store through the ``stores`` registry (default adapter ``local``).
+
+    ``store_dir=None`` means ``CVPILOT_STORE_DIR`` (default ``~/.cvpilot``), as for ``init``."""
+    if store_dir is None:
+        store_dir = load_settings().store_dir
     return stores.get("local")(project, store_dir, create=create)
 
 

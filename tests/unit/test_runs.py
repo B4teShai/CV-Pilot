@@ -325,6 +325,18 @@ def test_unfinished_run_stays_running_and_can_be_marked_failed(tmp_path: Path, l
         runs.recover_run("p", h.run_id, store_dir=tmp_path)
 
 
+def test_the_run_functions_honour_the_store_directory_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``init`` and ``find_resume_point`` read CVPILOT_STORE_DIR; so must the functions a restart
+    recipe calls next (``recover_run``, ``list_runs``, ``get_run_view``)."""
+    monkeypatch.setenv("CVPILOT_STORE_DIR", str(tmp_path))
+    h = start(tmp_path)
+    assert [m.run_id for m in runs.list_runs("p")] == [h.run_id]
+    runs.recover_run("p", h.run_id)
+    assert runs.get_run_view("p", h.run_id).meta.status == "failed"
+
+
 def test_recover_unknown_run(tmp_path: Path) -> None:
     with pytest.raises(RunNotFoundError):
         runs.recover_run("p", new_run_id(), store_dir=tmp_path)

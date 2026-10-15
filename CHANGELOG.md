@@ -5,7 +5,21 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Added
+
+- `CheckpointManager.restore(discover=True)` and `restore_latest_valid(discover=True, run_ids=...)`:
+  a restarted script on a node without the run store or checkpoint directory finds the earlier
+  run's checkpoints on the remote (newest 20 runs, best step first), through the same gate as any
+  other checkpoint. A fresh-node test runs across real processes. The README restart recipe is
+  executed by the test suite; `recover_run`, `list_runs` and `get_run_view` now honour
+  `CVPILOT_STORE_DIR` like `init` does. Remote listings are bounded.
+
 ### Security
+
+- No valid checkpoint with a known floor is never a fresh start: restore, `resume_path` and
+  `find_resume_point` raise `rolled_back` or `checkpoint_missing` (with the step) under the strict
+  policies and log `checkpoint_progress_lost` under `any`; `accept_rollback_to=0` starts over on
+  purpose.
 
 - Trust and rollback settings are monotone: the effective policy is the strictest of the
   constructor argument, `CVPILOT_CKPT_REQUIRE_TRUST` and the implicit `authenticated` default under

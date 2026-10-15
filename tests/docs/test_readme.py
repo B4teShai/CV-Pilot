@@ -14,7 +14,7 @@ def test_the_readme_quickstart_runs_and_prints_what_it_promises(tmp_path: Path) 
     home = tmp_path / "home"
     home.mkdir()
     results = run_page(README.read_text(), tmp_path / "work", clean_env(home))
-    assert len(results) == 1 and "run_started" in results[0].output
+    assert len(results) == 2 and "run_started" in results[0].output
 
 
 def test_every_other_command_block_in_the_readme_is_marked_notest() -> None:
@@ -28,3 +28,12 @@ def test_the_readme_names_no_unbuilt_feature_as_available() -> None:
     text = README.read_text()
     assert "Planned usage" not in text and "Planned: resume-safe checkpoints" not in text
     assert "no checkpoint manager" not in text
+
+
+def test_the_guide_shows_the_recipe_the_readme_runs() -> None:
+    """The guide shows, character for character, the restart recipe the README test executes."""
+    from docs_harness import blocks as parse
+
+    recipe = next(b for b in parse(README.read_text()) if b.file == "restart.py").body
+    guide = (ROOT / "docs" / "guide" / "checkpoints.md").read_text()
+    assert recipe in guide

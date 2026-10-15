@@ -342,6 +342,20 @@ ATTACKS = [
         env=(("CVPILOT_CKPT_KEY", KEY), ("CVPILOT_CKPT_REQUIRE_TRUST", "authenticated")),
     ),
     Attack(
+        "every checkpoint deleted",
+        lambda w: remove_steps(w, (3, 2, 1)),
+        "authenticated",
+        True,
+        reasons=frozenset({"rolled_back", "checkpoint_missing"}),
+    ),
+    Attack(
+        "directory replaced by an empty one",
+        lambda w: (shutil.rmtree(w.ckpt / w.victim), (w.ckpt / w.victim).mkdir()),
+        "authenticated",
+        True,
+        reasons=frozenset({"rolled_back", "checkpoint_missing"}),
+    ),
+    Attack(
         "operator floor lowered per call",
         lambda w: remove_steps(w, (3, 2)),
         "authenticated",
@@ -395,6 +409,23 @@ def entry_manager_restore_run_ids(world: World, attack: Attack) -> Outcome:
         lambda: mgr.restore(  # type: ignore[arg-type]
             world.kind,
             run_ids=[world.victim],
+            accept_rollback_to=attack.accept,
+            require_trust=weak(attack),
+        ),
+        attack.reasons,
+    )
+
+
+def entry_manager_restore_discover(world: World, attack: Attack) -> Outcome:
+    mgr = CheckpointManager(
+        world.child, dir=world.tmp / "elsewhere", every_n_steps=1, install_signal_handlers=False,
+        remote=URI, remote_store=world.fake, remote_sleep=lambda s: None,
+    )  # fmt: skip
+    return judge(
+        lambda: mgr.restore(  # type: ignore[arg-type]
+            world.kind,
+            run_ids=[],
+            discover=True,
             accept_rollback_to=attack.accept,
             require_trust=weak(attack),
         ),
@@ -518,6 +549,10 @@ ENTRIES: dict[str, tuple[Callable[..., Outcome], set[str]]] = {
     # name: (adapter, attacks it does not apply to)
     "CheckpointManager.restore": (entry_manager_restore, set()),
     "CheckpointManager.restore(run_ids=)": (entry_manager_restore_run_ids, set()),
+    "CheckpointManager.restore(discover=)": (
+        entry_manager_restore_discover,
+        {a.name for a in ATTACKS if not a.remote},
+    ),
     "CheckpointManager.restore_latest_valid": (
         entry_restore_latest_valid,
         {"best checkpoints rolled back", "accept override too high"},
@@ -626,7 +661,10 @@ def test_the_same_attack_gets_the_same_answer_from_every_entry_point(
     world.child.finish()
 
 
-@pytest.mark.parametrize("entry", [e for e in ENTRIES if e not in {"Mirror.fetch"}])
+@pytest.mark.parametrize(
+    "entry",
+    [e for e in ENTRIES if e not in {"Mirror.fetch", "CheckpointManager.restore(discover=)"}],
+)
 def test_the_control_group_every_gated_entry_point_serves_an_honest_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -647,3 +685,13 @@ def test_the_control_group_every_gated_entry_point_serves_an_honest_directory(
     assert outcome == expected, entry
     world.child.finish()
     assert json  # keep the import used
+
+
+def test_the_control_group_for_discovery_serves_an_honest_remote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, store_root: Path
+) -> None:
+    attack = Attack("honest", lambda w: None, "authenticated", True, remote=True)
+    world = build(tmp_path / "w", monkeypatch, policy="authenticated", keyed=True, remote=True)
+    monkeypatch.setenv("CVPILOT_STORE_DIR", str(world.store))
+    assert entry_manager_restore_discover(world, attack) == "served"
+    world.child.finish()

@@ -11,8 +11,8 @@
         "maybe_save": "(self, step: 'int', *, model: 'Any', optimizer: 'Any | None' = None, scheduler: 'Any | None' = None, scaler: 'Any | None' = None, rng: 'bool' = True, dataloader_state: 'Mapping[str, Any] | None' = None, metrics: 'Mapping[str, float] | None' = None, ema: 'Any | None' = None) -> 'CheckpointManifest | None'",
         "preempted": "(self) -> 'bool'",
         "remote_url": "property",
-        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None) -> 'Restored | None'",
-        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', require_trust: 'RequireTrust | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
+        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None) -> 'Restored | None'",
+        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
         "save_now": "(self, step: 'int', *, kind: 'CheckpointKind' = 'last', **state: 'Any') -> 'CheckpointManifest'",
         "verify": "(self, manifest: 'CheckpointManifest') -> 'bool'"
       }
@@ -76,8 +76,8 @@
         "maybe_save": "(self, step: 'int', *, model: 'Any', optimizer: 'Any | None' = None, scheduler: 'Any | None' = None, scaler: 'Any | None' = None, rng: 'bool' = True, dataloader_state: 'Mapping[str, Any] | None' = None, metrics: 'Mapping[str, float] | None' = None, ema: 'Any | None' = None) -> 'CheckpointManifest | None'",
         "preempted": "(self) -> 'bool'",
         "remote_url": "property",
-        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None) -> 'Restored | None'",
-        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', require_trust: 'RequireTrust | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
+        "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None) -> 'Restored | None'",
+        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
         "save_now": "(self, step: 'int', *, kind: 'CheckpointKind' = 'last', **state: 'Any') -> 'CheckpointManifest'",
         "verify": "(self, manifest: 'CheckpointManifest') -> 'bool'"
       }

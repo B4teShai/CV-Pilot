@@ -37,6 +37,15 @@ accept a restore below them. The one way to weaken a manager is the constructor 
 `policy` field of `ckpt verify --json` show what was in force. Nothing in the checkpoint directory
 (manifests, markers, extra files) is ever read as a setting.
 
+**Nothing left is not a fresh start.** When the run store, a tag-checked pointer or `min_step`
+proves that a step was saved, a restore that finds no valid checkpoint at or above it raises
+`CheckpointUntrustedError` (`rolled_back`, or `checkpoint_missing` when manifests are present but
+nothing verifies; the step is in the message) under `anchored` and `authenticated`. Under `any`
+rollback is not enforced, but the empty result is logged as `checkpoint_progress_lost` with the
+floor. `find_resume_point` and `resume_path` behave the same. Starting over is an explicit
+`accept_rollback_to=0` (logged); after it only verified saves move the floor forward, and
+re-saving an old step number is refused by the run store.
+
 **Recommendation.** Keep the default `any` only for a directory that nobody else can write (a
 laptop, a private node). For a directory that is shared, restored from a bucket or writable by
 others, set both:
