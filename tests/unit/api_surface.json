@@ -123,6 +123,10 @@
       "kind": "function",
       "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, store_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None, kind: 'CheckpointKind' = 'last', min_step: 'int | None' = None, accept_rollback_to: 'int | None' = None, name: 'str | None' = None, alive_within_s: 'float' = 900.0, force: 'bool' = False) -> 'ResumePoint | None'"
     },
+    "private_copy": {
+      "kind": "function",
+      "signature": "(point: 'ResumePoint') -> 'Path'"
+    },
     "resume_path": {
       "kind": "function",
       "signature": "(project: 'str', *, checkpoint_dir: 'str | Path | None' = None, store_dir: 'str | Path | None' = None, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None, with_trust: 'bool' = False) -> 'Path | ResumePoint | None'"

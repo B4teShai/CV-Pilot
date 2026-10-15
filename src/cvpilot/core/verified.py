@@ -25,6 +25,11 @@ def remember(path: Path, fmt: str) -> None:
         _VERIFIED.popitem(last=False)
 
 
+def format_of(path: Path) -> str | None:
+    """The format recorded for a verified path, or None when it was never remembered."""
+    return _VERIFIED.get(str(path))
+
+
 def framework_file(value: Any) -> Path:
     """The path a framework may load: a verified ``pt`` checkpoint, given as the path or as the
     resume point (anything with ``.path`` and ``.manifest.format``) that ``resume_path`` returned.

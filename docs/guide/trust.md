@@ -56,11 +56,32 @@ export CVPILOT_CKPT_REQUIRE_TRUST=authenticated
 ```
 
 The key is read from the environment only; it is never logged, stored, put in a manifest or
-repeated in an error message. It must be 32 to 1024 bytes. Tags cover a domain label, the run id
+repeated in an error message. It must be 32 to 1024 bytes; a value made only of hex digits must be
+at least 64 of them (32 bytes of key material) and a padded base64 value must decode to at least 32
+bytes. A key that looks guessable (a repeated pattern, few distinct characters, low entropy) is
+accepted but logged once as `checkpoint_key_weak` with the reason, never the value; generate it with
+`openssl rand -hex 32`. Tags cover a domain label, the run id
 and the canonical bytes of the record, so a manifest cannot be moved to another run or replayed as
-a pointer. **Rotation:** tags made under the old key fail under the new one (`auth_invalid`);
+a pointer. A manifest also names its run's `project` and `parent_run_id` inside the tagged record: a
+restart of another project refuses it (`binding_mismatch`), also from a shared bucket, and a
+lineage restore refuses a manifest that misstates its parent. Under a key the `step_N.remote.json`
+upload marker is tagged too, so a forged marker cannot make retention believe a checkpoint is
+safely uploaded. **Rotation:** tags made under the old key fail under the new one (`auth_invalid`);
 re-save to re-tag. Files written before a key existed have no tag and are accepted only under
 `any`.
+
+## Verified, then opened: the gap
+
+`resume_path` verifies a file and hands you its path; your framework opens it later. Anyone who can
+write the checkpoint directory in that interval can swap the file after the check (a
+time-of-check-to-time-of-use race that no check inside this library can close, because the open
+happens in the framework). Restrict write access to the directory, which the first section already
+asks for, or close the gap yourself: `cvpilot.ckpt.private_copy(point)` copies the verified bytes
+into a new directory only you can use (mode 0700, the file 0600), checking the SHA-256 and size
+while it copies, and returns that path for `resume_arguments`; the restore path of
+`CheckpointManager.restore` does not have the gap at all, because the bytes that were hashed are the
+bytes that are parsed. A `pt` file is read once on the way to a resume point: the archive scan runs
+over the bytes whose digest was just checked.
 
 ## Forgery is not rollback
 

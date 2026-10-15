@@ -270,6 +270,9 @@ class CheckpointManager:
         self.restart_chain = restart_chain  # explicit, never from the environment
         self._remote_max: dict[str, int | None] = {}
         self._anchor = _HandleAnchor(self._handle)
+        weak = None if key is None else auth.weakness(key)
+        if weak is not None:  # the reason only: the key itself is never in a log
+            self._handle.emit("warning", "checkpoint_key_weak", reason=weak)
         self.require_trust: RequireTrust = require_trust
         self.allow_pt = allow_pt_format
         self._clock = clock
@@ -501,6 +504,8 @@ class CheckpointManager:
                 before_publish=self._record,
                 floor_hint=self._floor_hint(kind),
                 restart_chain=self.restart_chain,
+                project=self._handle.meta.project,
+                parent_run_id=self._handle.meta.parent_run_id,
             )
         except Exception as exc:  # noqa: BLE001  # logged and re-raised; callers decide
             self._emit(
@@ -882,11 +887,16 @@ class CheckpointManager:
         )
         if self._mirror is not None:
             self._mirror.begin_restore()
+        lineage = [self._handle.run_id, *self._handle.ancestors()]
+        parents: dict[str, str | None] = {lineage[0]: self._handle.meta.parent_run_id}
+        parents.update({a: b for a, b in zip(lineage[1:], lineage[2:], strict=False)})
         ctx = AdmitContext(
             accept_rollback_to=accept_rollback_to,
             min_step=self.min_step,
             waive_min_step=self.allow_weaker_trust,
             max_candidate_bytes=self._remote_candidate_bytes,
+            project=self._handle.meta.project,
+            parents=parents,
         )
         skipped: list[Skipped] = []
         for run_id in order:

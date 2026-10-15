@@ -72,6 +72,7 @@ EXEMPT = {
     "cvpilot.ckpt.CheckpointManager": "the class itself",
     "cvpilot.ckpt.Restored": "a result type",
     "cvpilot.ckpt.ResumePoint": "a result type",
+    "cvpilot.ckpt.private_copy": "copies a file a resume point already verified, checking it again",
     "cvpilot.ckpt.apply_rng": "applies a validated state; hands out nothing",
     "cvpilot.ckpt.capture_rng": "reads generators",
     "cvpilot.CheckpointManager": "the class itself",

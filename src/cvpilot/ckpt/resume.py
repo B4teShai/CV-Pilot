@@ -14,13 +14,17 @@ access to the checkpoint directory (see the threat model).
 
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, overload
 
 from cvpilot import runs
-from cvpilot.ckpt import auth, serializers
+from cvpilot.ckpt import auth, fsops, serializers
 from cvpilot.ckpt.directory import AdmitContext, RunCheckpoints, Skipped, gate_failure
 from cvpilot.core import verified as verified_files
 from cvpilot.core.errors import CheckpointCorruptError, CheckpointUntrustedError
@@ -135,11 +139,14 @@ def find_resume_point(
         require_trust, settings.ckpt_require_trust, key
     )
     log = get_logger("cvpilot.ckpt")
+    weak = None if key is None else auth.weakness(key)
+    if weak is not None:
+        log.warning("checkpoint_key_weak", reason=weak)
     if require_trust is not None and auth.is_weaker(require_trust, policy):
         log.warning("checkpoint_trust_downgrade_ignored", requested=require_trust, effective=policy)
     marks = [m for m in (min_step, settings.ckpt_min_step) if m is not None]
     mark = max(marks) if marks else None  # both bind: a call cannot lower the operator's floor
-    ctx = AdmitContext(accept_rollback_to=accept_rollback_to, min_step=mark)
+    ctx = AdmitContext(accept_rollback_to=accept_rollback_to, min_step=mark, project=project)
     opened = runs.open_anchor(project, store_root)
     anchor = opened[0] if opened is not None else None
     rejected: list[Skipped] = []
@@ -206,11 +213,11 @@ def _first_usable(
     root: Path,
     ctx: AdmitContext,
 ) -> ResumePoint | None:
-    for verified in found.iter_valid(kind, ctx=ctx):
+    for verified in found.iter_valid(kind, load="pt", ctx=ctx):
         manifest = verified.manifest
         if manifest.format == "pt":
             try:
-                _check_pt(found, manifest)
+                _check_pt(verified.data)
             except CheckpointCorruptError as exc:
                 found.skipped.append(Skipped(manifest.step, kind, manifest.path, exc.reason))
                 get_logger("cvpilot.ckpt").warning(
@@ -228,17 +235,57 @@ def _first_usable(
     return None
 
 
-def _check_pt(found: RunCheckpoints, manifest: CheckpointManifest) -> None:
-    """A pt file goes to a framework's own loader: require a safe version and a clean archive."""
+def _check_pt(data: bytes | None) -> None:
+    """A pt file goes to a framework's own loader: require a safe version and a clean archive,
+    scanned from the very bytes whose SHA-256 was just verified."""
     version = serializers.framework_version()
     if version is None or version < serializers.MIN_PT_VERSION:
         raise CheckpointCorruptError(
             "the framework is too old for pt files", reason="unsafe_loader"
         )
-    data = found.read_range(manifest, 0, manifest.size_bytes)
-    if len(data) != manifest.size_bytes:
-        raise CheckpointCorruptError("the file changed while read", reason="size_mismatch")
+    if data is None:  # pragma: no cover  # load="pt" always sets it
+        raise CheckpointCorruptError("the file was not read", reason="unloadable")
     serializers.scan_pt_archive(data)
+
+
+def private_copy(point: ResumePoint) -> Path:
+    """Copy the verified checkpoint of ``point`` into a new private directory (mode 0700, file
+    0600) and return the copy's path, verified against the manifest's size and SHA-256 while it is
+    copied. A framework that opens this path cannot be handed a file somebody replaced in the
+    shared checkpoint directory between the check and the open. The directory is the caller's to
+    delete; it is registered as a verified file for the hooks' ``resume_arguments``.
+
+    Raises:
+        CheckpointCorruptError: the data does not match the manifest (nothing is left behind).
+    """
+    manifest = point.manifest
+    if manifest is None or verified_files.format_of(point.path) is None:
+        raise ValueError("this resume point was not returned by cvpilot.resume_path here")
+    folder = Path(tempfile.mkdtemp(prefix="cvpilot-resume-"))
+    folder.chmod(0o700)
+    target = folder / point.path.name
+    try:
+        digest = hashlib.sha256()
+        size = 0
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+        out = os.open(target, flags, 0o600)
+        try:
+            for chunk in fsops.iter_regular_file(point.path, max_bytes=manifest.size_bytes):
+                digest.update(chunk)
+                size += len(chunk)
+                os.write(out, chunk)
+            os.fsync(out)
+        finally:
+            os.close(out)
+        if (digest.hexdigest(), size) != (manifest.sha256, manifest.size_bytes):
+            raise CheckpointCorruptError(
+                "the checkpoint changed after it was verified", reason="digest_mismatch"
+            )
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    verified_files.remember(target, manifest.format)
+    return target
 
 
 @overload

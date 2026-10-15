@@ -15,10 +15,14 @@ are only accepted under the ``any`` policy (as ``local_chain_only``).
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
+import math
 import os
 import re
+from collections import Counter
 from collections.abc import Mapping
 
 from cvpilot.core.errors import CheckpointError
@@ -28,7 +32,11 @@ MIN_KEY_BYTES = 32
 MAX_KEY_BYTES = 1024
 MANIFEST_LABEL = b"cvpilot-ckpt-manifest-v1"
 POINTER_LABEL = b"cvpilot-ckpt-pointer-v1"
+MARKER_LABEL = b"cvpilot-ckpt-marker-v1"
 _HEX = re.compile(r"[0-9a-f]{64}")
+_HEX_KEY = re.compile(r"[0-9a-fA-F]+")
+_B64_KEY = re.compile(r"[A-Za-z0-9+/_-]+={0,2}")
+MIN_ENTROPY_BITS = 3.0
 
 
 def load_key(environ: Mapping[str, str] | None = None) -> bytes | None:
@@ -41,13 +49,47 @@ def load_key(environ: Mapping[str, str] | None = None) -> bytes | None:
     raw = (os.environ if environ is None else environ).get(KEY_ENV)
     if raw is None or not raw.strip():
         return None
-    key = raw.strip().encode("utf-8")
+    text = raw.strip()
+    key = text.encode("utf-8")
     if not MIN_KEY_BYTES <= len(key) <= MAX_KEY_BYTES:
         raise CheckpointError(
             f"{KEY_ENV} must be {MIN_KEY_BYTES} to {MAX_KEY_BYTES} bytes long "
             "(for example the output of: openssl rand -hex 32)"
         )
+    if _HEX_KEY.fullmatch(text) and len(text) < 2 * MIN_KEY_BYTES:
+        raise CheckpointError(
+            f"{KEY_ENV} looks like hex but holds fewer than {MIN_KEY_BYTES} bytes of key "
+            f"material: use at least {2 * MIN_KEY_BYTES} hex characters "
+            "(openssl rand -hex 32)"
+        )
+    if "=" in text and _B64_KEY.fullmatch(text):
+        try:
+            decoded = base64.b64decode(text, altchars=b"-_" if "-" in text or "_" in text else None)
+        except (binascii.Error, ValueError):
+            decoded = key
+        if len(decoded) < MIN_KEY_BYTES:
+            raise CheckpointError(
+                f"{KEY_ENV} looks like base64 but decodes to fewer than {MIN_KEY_BYTES} bytes "
+                "of key material (openssl rand -base64 32)"
+            )
     return key
+
+
+def weakness(key: bytes) -> str | None:
+    """Why a key looks guessable (a short repeated pattern, few distinct characters, low Shannon
+    entropy per character), or None. A hint, never a refusal: the value is not echoed."""
+    text = key.decode("utf-8", "replace")
+    n = len(text)
+    for size in range(1, n // 2 + 1):
+        if n % size == 0 and text == text[:size] * (n // size):
+            return "it repeats a short pattern"
+    if len(set(text)) < 8:
+        return "it uses very few distinct characters"
+    counts = Counter(text)
+    entropy = -sum(c / n * math.log2(c / n) for c in counts.values())
+    if entropy < MIN_ENTROPY_BITS:
+        return "its characters are not varied enough to look random"
+    return None
 
 
 STRICTNESS = ("any", "anchored", "authenticated")  # weakest first

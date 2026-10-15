@@ -13,6 +13,7 @@ _LAZY = {
     "Restored": "cvpilot.ckpt.manager",
     "ResumePoint": "cvpilot.ckpt.resume",
     "find_resume_point": "cvpilot.ckpt.resume",
+    "private_copy": "cvpilot.ckpt.resume",
     "resume_path": "cvpilot.ckpt.resume",
     "capture_rng": "cvpilot.ckpt.rng",
     "apply_rng": "cvpilot.ckpt.rng",
@@ -20,7 +21,7 @@ _LAZY = {
 
 if TYPE_CHECKING:
     from cvpilot.ckpt.manager import CheckpointManager, Restored
-    from cvpilot.ckpt.resume import ResumePoint, find_resume_point, resume_path
+    from cvpilot.ckpt.resume import ResumePoint, find_resume_point, private_copy, resume_path
     from cvpilot.ckpt.rng import apply_rng, capture_rng
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "apply_rng",
     "capture_rng",
     "find_resume_point",
+    "private_copy",
     "resume_path",
 ]
 

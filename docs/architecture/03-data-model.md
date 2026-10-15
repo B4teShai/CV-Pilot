@@ -147,6 +147,10 @@ Sidecar record written next to every checkpoint file ([ADR-0006](../adr/0006-che
 | `prev_manifest_sha256` | `str` | no | SHA-256 of the previous manifest file of the same `(run, kind)` (64 zeros for the first) (added field) |
 | `prev_chain_sha256` | `str` | no | the previous manifest's `chain_sha256` (added field) |
 | `chain_sha256` | `str` | no | `sha256(prev_chain, run_id, kind, step, sha256, size_bytes)` (added field) |
+| `project` | `str` | yes | project of the writing run, covered by the tag; a restart of another project refuses the manifest (`binding_mismatch`) (added field) |
+| `parent_run_id` | `str` | yes | the run that run resumed, covered by the tag; checked in a lineage restore when `project` is set (added field) |
+| `chain_reset` | `bool` | no | true when `restart_chain=True` deliberately started a new chain although progress was known (added field) |
+| `chain_reset_reason` | `str` | yes | why the chain was reset (added field) |
 | `prev_step` | `int` | yes | step of the manifest `prev_manifest_sha256` names, so a predecessor removed by retention (a gap) is told from one that was replaced (added field; absent in manifests written before it existed) |
 | `auth_tag` | `str` | yes | HMAC-SHA256 over a domain label, the run id and the canonical record, present when `CVPILOT_CKPT_KEY` was set (added field) |
 

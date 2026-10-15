@@ -79,6 +79,18 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Security
 
+- A resume point is verified, then opened by your framework later: that gap is now documented and
+  closable (`cvpilot.ckpt.private_copy(point)` copies the verified bytes into a private 0700
+  directory, checking them as it copies). A `pt` file is read once on the way to a resume point
+  instead of twice, and the default restore size limit is 8 GiB.
+
+- Manifests name their run's `project` and `parent_run_id` inside the tagged record: another
+  project's checkpoint (also from a shared bucket, also through `discover`) and a lineage that is
+  misstated are refused as `binding_mismatch`. Under a key the upload marker is tagged, so a forged
+  marker cannot make retention delete on a false "uploaded". A hex key shorter than 32 bytes or a
+  padded base64 key that decodes to fewer is refused, and a guessable key is logged once as
+  `checkpoint_key_weak` (the reason, never the value).
+
 - Saves follow strict rules. The step must exceed a floor made of every self-consistent manifest
   (trusted or not, quarantined included), the run store, a tag-valid pointer, `min_step` and the
   remote; an untrusted manifest above every trusted one is quarantined and reported

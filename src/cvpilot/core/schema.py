@@ -551,6 +551,11 @@ class CheckpointManifest(_Model):
     prev_manifest_sha256: str
     prev_chain_sha256: str
     chain_sha256: str
+    project: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    """The project of the run that wrote this checkpoint (covered by the tag): a restart of
+    another project refuses it even from a shared bucket. Absent in older manifests."""
+    parent_run_id: str | None = None
+    """The run this run resumed (covered by the tag; meaningful when ``project`` is set)."""
     chain_reset: bool = False
     """True when this manifest deliberately starts a new chain although earlier progress was known
     to exist (``restart_chain=True``); covered by the tag, so it is visible in every verify."""
@@ -568,10 +573,10 @@ class CheckpointManifest(_Model):
             raise ValueError("must be 64 lower-case hex characters")
         return value
 
-    @field_validator("run_id")
+    @field_validator("run_id", "parent_run_id")
     @classmethod
-    def _ulid(cls, value: str) -> str:
-        if not is_valid_ulid(value):
+    def _ulid(cls, value: str | None) -> str | None:
+        if value is not None and not is_valid_ulid(value):
             raise ValueError("must be a valid ULID")
         return value
 

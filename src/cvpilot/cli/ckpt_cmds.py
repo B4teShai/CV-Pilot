@@ -101,6 +101,9 @@ class _Session:
             self.key = auth.load_key()
         except CheckpointError as exc:
             raise _usage(str(exc)) from None
+        weak = None if self.key is None else auth.weakness(self.key)
+        if weak is not None:
+            get_logger("cvpilot.cli").warning("checkpoint_key_weak", reason=weak)
         asked = trust.value if trust else None
         self.policy: Any = auth.resolve_policy(asked, settings.ckpt_require_trust, self.key)
         if asked is not None and auth.is_weaker(asked, self.policy):

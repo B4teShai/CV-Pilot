@@ -34,7 +34,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -177,6 +177,8 @@ class AdmitContext:
     accept_rollback_to: int | None = None
     min_step: int | None = None
     waive_min_step: bool = False  # only a constructor-level acknowledgement sets this
+    project: str | None = None  # a manifest that names another project is refused
+    parents: Mapping[str, str | None] = field(default_factory=dict)  # run -> parent, from the store
     max_candidate_bytes: int | None = None
 
 
@@ -266,6 +268,12 @@ class Admission:
             return "manifest_invalid"
         if manifest.format == "pt" and not self._rc.allow_pt:
             return "pt_not_allowed"
+        if manifest.project is not None:  # a manifest of the new format names its run's project
+            if self._ctx.project is not None and manifest.project != self._ctx.project:
+                return "binding_mismatch"
+            known = self._ctx.parents
+            if manifest.run_id in known and manifest.parent_run_id != known[manifest.run_id]:
+                return "binding_mismatch"
         limit = self._ctx.max_candidate_bytes
         if manifest.size_bytes > self._rc.max_bytes or (
             limit is not None and manifest.size_bytes > limit
@@ -986,12 +994,18 @@ class RunCheckpoints:
         return None
 
     def iter_valid(
-        self, kind: CheckpointKind, *, load: bool = False, ctx: AdmitContext | None = None
+        self,
+        kind: CheckpointKind,
+        *,
+        load: bool | Literal["pt"] = False,
+        ctx: AdmitContext | None = None,
     ) -> Iterator[Verified]:
         """Checkpoints of ``kind`` the gate admits and whose data verifies, newest step first;
         each refusal is counted in ``skipped`` and logged. With ``load`` the verified bytes are
-        returned, read once. When nothing is yielded the gate is asked whether finding nothing is
-        acceptable (it is not when checkpoints are known to have existed)."""
+        returned, read once (``load="pt"`` only for ``pt`` files, which a resume then scans from
+        the same bytes instead of reading them again). When nothing is yielded the gate is asked
+        whether finding nothing is acceptable (it is not when checkpoints are known to have
+        existed)."""
         _check_kind(kind)
         self.skipped = []
         import os
@@ -1020,7 +1034,11 @@ class RunCheckpoints:
                         continue
                     assert kind_fd is not None  # noqa: S101  # judged is empty without it
                     try:
-                        data = self._check_data(kind_fd, cand.manifest, load=load)
+                        data = self._check_data(
+                            kind_fd,
+                            cand.manifest,
+                            load=load is True or (load == "pt" and cand.manifest.format == "pt"),
+                        )
                     except CheckpointCorruptError as exc:
                         self._skip(cand.manifest.step, kind, cand.name, exc.reason)
                         continue
@@ -1168,6 +1186,8 @@ class RunCheckpoints:
         before_publish: Callable[[CheckpointManifest, str], None] | None = None,
         floor_hint: int | None = None,
         restart_chain: bool = False,
+        project: str | None = None,
+        parent_run_id: str | None = None,
     ) -> CheckpointManifest:
         """Write one checkpoint atomically and return its manifest.
 
@@ -1198,6 +1218,7 @@ class RunCheckpoints:
                     run_fd, kind_fd, kind, step, data, format, serializer.suffix, versions,
                     dataset_hash, metric_key, metric_value, metric_mode, git_commit, uri,
                     created_at, verify, before_publish, floor_hint, restart_chain,
+                    project, parent_run_id,
                 )  # fmt: skip
             finally:
                 os.close(kind_fd)
@@ -1223,6 +1244,8 @@ class RunCheckpoints:
         before_publish: Callable[[CheckpointManifest, str], None] | None,
         floor_hint: int | None = None,
         restart_chain: bool = False,
+        project: str | None = None,
+        parent_run_id: str | None = None,
     ) -> CheckpointManifest:
         self._cleanup(kind_fd, run_fd, kind)
         self.last_save_noop = False
@@ -1350,6 +1373,8 @@ class RunCheckpoints:
                 prev_manifest_sha256=prev_digest,
                 prev_chain_sha256=prev_chain,
                 prev_step=previous.step if previous and previous.digest else None,
+                project=project,
+                parent_run_id=parent_run_id,
                 chain_reset=reset_reason is not None,
                 chain_reset_reason=reset_reason,
                 chain_sha256=checkpoint_chain(prev_chain, self.run_id, kind, step, sha256, size),
@@ -1581,12 +1606,16 @@ class RunCheckpoints:
             if kind_fd is None:
                 raise CheckpointError("the checkpoint directory is gone")
             try:
-                marker = {
+                marker: dict[str, Any] = {
                     "uri": uri,
                     "manifest_sha256": self._manifest_digest(kind_fd, manifest),
                     "sha256": manifest.sha256,
                     "size_bytes": manifest.size_bytes,
                 }
+                if self._key is not None:  # under a key a marker is tagged: no one else can confirm
+                    marker["auth_tag"] = auth.tag(
+                        self._key, auth.MARKER_LABEL, self.run_id, self._marker_bytes(marker)
+                    )
                 name = marker_name(manifest.step)
                 if self._marker_valid(kind_fd, manifest):
                     return  # already confirmed: a marker is never rewritten in place
@@ -1604,12 +1633,28 @@ class RunCheckpoints:
             finally:
                 os.close(kind_fd)
 
+    @staticmethod
+    def _marker_bytes(marker: dict[str, Any]) -> bytes:
+        body = {k: v for k, v in marker.items() if k != "auth_tag"}
+        return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+
     def _marker_valid(self, kind_fd: int, manifest: CheckpointManifest) -> bool:
         try:
             raw = fsops.read_regular(
                 kind_fd, marker_name(manifest.step), max_bytes=MAX_MANIFEST_BYTES
             )
             marker = json.loads(raw)
+            if self._key is not None and not (
+                isinstance(marker, dict)
+                and auth.verify(
+                    self._key,
+                    auth.MARKER_LABEL,
+                    self.run_id,
+                    self._marker_bytes(marker),
+                    marker.get("auth_tag"),
+                )
+            ):
+                return False
             return bool(
                 isinstance(marker, dict)
                 and marker.get("manifest_sha256") == self._manifest_digest(kind_fd, manifest)
