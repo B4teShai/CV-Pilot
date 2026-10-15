@@ -3,9 +3,9 @@
 Exit codes follow [errors-and-logging.md](../engineering/errors-and-logging.md): `0` ok,
 `1` the command ran and failed (including a gate that fails or a refused comparison), `2`
 usage or configuration error, `130` interrupted. Log event names are the constant
-`message` values of [06-cross-cutting.md](06-cross-cutting.md). Flow B is planned. In Flow A the
+`message` values of [06-cross-cutting.md](06-cross-cutting.md). Flow A is partly built (the
 run-capture steps, the eval steps 3 and 4 and the compare and gate steps 5 to 8 are built; hooks
-and forwarders are described in the status note under Flow A.
+and forwarders are described in the status note under Flow A); Flow B is built.
 
 ## Flow A: hook → log → eval → gate
 
@@ -95,27 +95,35 @@ duplicate-batch failure is raised to the caller without a `metrics_rejected` eve
 
 Purpose: guarantee that a training job killed at any moment can resume from the newest
 checkpoint that is complete and verified, locally or from object storage, with the run
-lineage recorded.
+lineage recorded, and that a missing, rolled-back or forged checkpoint is never mistaken for a
+fresh start.
 
 Preconditions:
 
 - `CheckpointManager(run, dir=..., remote=..., keep_last=3, keep_best=2, monitor=...)` is
-  created inside the training process; signal handlers are installed on construction.
+  created inside the training process; signal handlers are installed on construction, after
+  everything that can fail has succeeded (a failure puts them back).
 - `dir` is on local disk (or a bucket mounted in MOUNT mode for SkyPilot); `remote`, when
-  set, is an fsspec URL with write access.
-- The trainer calls `maybe_save` at step boundaries and `restore_latest_valid` before the
-  first step.
+  set, is an fsspec URL with write access. The run store and the checkpoint directory must
+  survive a restart for lineage resume; on a node that has neither, `restore(discover=True)`
+  finds the earlier run's checkpoints on the remote.
+- The trainer calls `maybe_save` at step boundaries and restores before the first step. With
+  `CVPILOT_CKPT_KEY` set the policy defaults to `authenticated`; a per-call or per-flag setting can
+  only tighten it (`allow_weaker_trust=True` on the constructor is the one explicit opt-out).
 
 ![Flow B](../diagrams/png/flow-b.png)
 
 Sequence (as built):
 
 1. `maybe_save(step, ...)` decides whether to save (interval elapsed, `best` improved, or the
-   preemption flag is set); otherwise returns `None`.
-2. Under the directory lock, debris of a killed save is removed; the state is written to a
-   private temp file (`O_EXCL`, mode 0600), `fsync`ed and made read-only.
-3. SHA-256 is computed while the bytes are written; the manifest (size, digest, chain value to the
-   previous manifest, optional HMAC tag) is written the same way.
+   preemption flag is set); otherwise returns `None`. A `best` is saved only if it beats the best
+   of the whole lineage (this run and the runs it resumed).
+2. The state is split into tensors and a JSON skeleton and checked with the very bounds a restore
+   applies (integers, size, depth, dtypes NumPy can hold); anything a restore would refuse is
+   refused here. Under the directory lock, debris of a killed save is removed; the data is written
+   to a private temp file (`O_EXCL`, mode 0600), `fsync`ed and made read-only.
+3. SHA-256 is computed while the bytes are written; the manifest (size, digest, chain value and
+   step of the previous manifest, optional HMAC tag) is written the same way.
 4. The manifest is renamed into place, then the data file; the directory is `fsync`ed.
 5. The data file is re-read and re-hashed (`verify_after_save`); the manifest digest is recorded in
    the run store; then `LATEST` is rewritten and `checkpoint_saved` and `checkpoint_verified` are
@@ -125,107 +133,34 @@ Sequence (as built):
    uploaded last and a local marker is written; `checkpoint_uploaded` is logged. Failures are
    logged and caught up by a later save.
 7. Retention deletes valid checkpoints beyond `keep_last`/`keep_best`, never the newest valid one
-   and, with a remote, only once the newest is confirmed there (ADR-0006 rule 4).
+   and, with a remote, only once the newest is confirmed there (ADR-0006 rule 4). A file this
+   process already verified (same inode, size and times) is not hashed again; the best are ranked
+   by the mode they were saved with.
 8. SIGTERM or SIGUSR1 (or a cloud notice, if polled) sets the flag; nothing else happens in the
-   handler. The next `maybe_save` logs `preemption_signal_received`, saves inside the grace window,
-   marks the run `preempted` and logs `run_preempted`; past the window it logs
-   `preemption_save_incomplete` and the previous checkpoint is the resume point.
-9. On restart, `restore_latest_valid()` walks back from the newest manifest: it must parse, match
-   its name and run, chain, and have the required trust level, and the file must be a regular file
-   of the right size, structure and SHA-256 (read once, parsed from the same bytes). A file that
-   fails is skipped with `checkpoint_skipped_corrupt` (or `checkpoint_untrusted`). With nothing
-   valid locally the newest remote checkpoints are fetched and verified before they are
-   installed.
-10. The trainer receives the state (or `None`); the child run (`init(resume_from=...)`, found with
-    `resume_path` or `find_resume_point`) has `parent_run_id` and status `resumed`;
-    `checkpoint_restored` (with `trust_level`) and `run_resumed` are logged.
-
-Failure paths:
-
-| Failure | Behaviour | Exit | Event |
-|---|---|---|---|
-| Hook extra not installed | `autolog` raises `MissingExtraError` naming the extra; no object matches: `HookNotFoundError`; no run is started in either case | 1 (Python API raises; CLI not involved) | `hook_missing` |
-| A callback fails inside the framework (store full, odd value) | caught by the hook's guard, counted, the first logged once; the hook is disabled after 10 failures in a row; the framework never sees an exception | n/a | `hook_failed`, `hook_disabled` (WARN) |
-| Duplicate `(key, step)` in a batch | batch rejected, exception to the caller; training continues only if the caller catches it | n/a | `metrics_rejected` |
-| Forwarder error (tracker down, slow or hung) | counted; the first failure per forwarder is logged once; the next batch is offered again (not after `open` failed or a stall); a full queue drops the batch; `log` and the training loop are never blocked or raised into | n/a | `forward_failed` (WARN, once), `forward_summary` (WARN, at finish) |
-| Store write error (disk full, permissions) | `log()` raises `StoreError`; training loop decides | n/a | `store_write_failed` (ERROR) |
-| `gate` run, baseline tag or run not found, or the project has no store | one line on `stderr` | 1 | `command_failed` |
-| Unknown option, bad threshold syntax (`--max-drop mAP50_95`), no threshold given, `--min-images 0` | Typer usage error | 2 | none (usage errors are not logged) |
-| `eval_set_hash`, task, class names, evaluation parameters or slice membership differ, a slice holds other images, the candidate has no snapshot for the baseline's set or step, the baseline is the candidate or not finished, the candidate's commit is not `--require-commit` | refused, no verdict and no report | 1 | `compare_refused` (with `reason`) |
-| `--recompute` finds a stored result that differs from a re-evaluation on the trusted ground truth | no verdict | 1 | `gate_recompute_failed` |
-| `--expect-baseline-chain` differs from the baseline table head (rollback) | no verdict | 1 | `baseline_integrity_failed` |
-| A snapshot, the baseline row or the baseline chain fails verification | one line on `stderr`, no verdict | 1 | `snapshot_integrity_failed` or `baseline_integrity_failed` |
-| Metric absent or not finite, slice absent or built from another column, evaluation set smaller than `--min-images`, per-class or slice threshold that gated nothing | violation listed | 1 | `gate_failed` |
-| Slice smaller than `--min-images` | violation `slice_too_small`; with `--skip-small-slices` it is listed as skipped, counted against `--max-skipped` (default 0: any skip fails) and a threshold whose slices were all skipped still fails | 1 (0 with the flag and a sufficient `--max-skipped`, when the other checks hold) | `gate_failed`; `slice_skipped` (WARN) with the flag |
-| Any threshold exceeded (a drop above the limit, in points on the 0..100 scale) | violations printed, worst first | 1 | `gate_failed` |
-| All thresholds hold (improvements never fail) | verdict printed | 0 | `gate_passed` |
-| Unexpected exception anywhere in the command | one line on `stderr` | 1 | `command_failed` |
-| Ctrl-C while the command runs | partial output discarded | 130 | none |
-
-Logged events (in order of a successful flow): `run_started`, `hook_attached`,
-`metrics_flushed`, `eval_completed`, `compare_completed`, `gate_passed` or `gate_failed`,
-`run_finished`.
-
-Status: partly built. Built parts of this flow: `cvpilot.init()` starts a run (`run_started`);
-`log(points, step=...)` validates the batch (invariant 2), buffers and appends it to the store
-as Parquet (`metrics_flushed`, DEBUG); `finish()` compacts and logs `run_finished`. Steps 3 and 4
-are built: `Run.log_eval(preds, gts, step=...)` (or `cvpilot eval` for Parquet files) validates
-the tables, hashes the evaluation set, refuses an existing `(run, hash, step)`, evaluates
-(detection or top-1, slices, seeded bootstrap), stores `predictions.parquet` and
-`confusion.parquet` in the CAS and the immutable snapshot, and logs `eval_completed` (INFO:
-`run_id`, `step`, `eval_set_hash`, `n_images`, `n_classes`, `n_predictions`, `task`,
-`duration_ms`). Evaluating into a finished, failed or preempted run needs `allow_closed` (`--allow-closed`);
-`--checkpoint-sha256` and `--git-commit` record provenance. Failure paths of eval: a closed run, invalid tables, a limit exceeded, a slice cardinality
-above 256, malformed Parquet or an existing snapshot give `EvalInputError`,
-`SliceCardinalityError` or `SnapshotExistsError`, exit 1 with one `error:` line and one
-`command_failed` event, and nothing is stored. Steps 5 to 8 are built: `cvpilot baseline`,
-`cvpilot compare` and `cvpilot gate` (ADR-0007) read only verified snapshots and never trust a
-stored comparison. Forwarders (ADR-0008) and the Lightning and Ultralytics hooks (steps 1 and 2, scalars only; `autolog`) are built; the outbox and alert rules are not built, and the
-duplicate-batch failure is raised to the caller without a `metrics_rejected` event.
-`cvpilot runs show` and `cvpilot repro` read the result.
-
-## Flow B: atomic checkpoint → preemption → restore_latest_valid
-
-Purpose: guarantee that a training job killed at any moment can resume from the newest
-checkpoint that is complete and verified, locally or from object storage, with the run
-lineage recorded.
-
-Preconditions:
-
-- `CheckpointManager(run, dir=..., remote=..., keep_last=3, keep_best=2, monitor=...)` is
-  created inside the training process; signal handlers are installed on construction.
-- `dir` is on local disk (or a bucket mounted in MOUNT mode for SkyPilot); `remote`, when
-  set, is an fsspec URL with write access.
-- The trainer calls `maybe_save` at step boundaries and `restore_latest_valid` before the
-  first step.
-
-![Flow B](../diagrams/png/flow-b.png)
-
-Sequence:
-
-1. `maybe_save(step, ...)` decides whether to save (interval elapsed, `best` improved, or a
-   preemption flag is set); otherwise returns `None`.
-2. The state is written to `last/step_<step>.pt.tmp`; the file and its directory are
-   `fsync`ed.
-3. SHA-256 is computed over the file.
-4. `step_<step>.manifest.json` is written (`CheckpointManifest`), then the `.tmp` file is
-   renamed into place with `os.replace`.
-5. `LATEST` is rewritten atomically with the manifest's relative path; `checkpoint_saved`
-   is logged with `step`, `size_bytes`, `sha256_prefix`, `kind`.
-6. When `remote` is set, the file and then the manifest are uploaded; the remote size and
-   checksum are compared; `checkpoint_uploaded` is logged.
-7. Retention deletes older checkpoints of the same kind beyond `keep_last`/`keep_best`,
-   never the newest verified one (ADR-0006 rule 4).
-8. A SIGTERM or a cloud preemption notice sets the preemption flag; the next `maybe_save`
-   saves regardless of interval, marks the run `preempted`, and `run_preempted` is logged
-   with the signal name.
-9. On restart, `restore_latest_valid()` reads `LATEST` (local, else remote), verifies size and
-   SHA-256 against the manifest and loads the file (`weights_only=True` or safetensors). A
-   file that fails is skipped with `checkpoint_skipped_corrupt` and the previous manifest is
-   tried.
-10. The trainer receives the state dict (or `None` on a fresh start); `runs/` creates the
-    child run with `parent_run_id` and status `resumed`; `checkpoint_restored` and
-    `run_resumed` are logged.
+   handler (a handler that was installed before runs after it, once reported as
+   `signal_handler_displaced`). The next `maybe_save` logs `preemption_signal_received`, saves
+   locally, **marks the run `preempted` and logs `run_preempted` as soon as that checkpoint is
+   verified**, and only then uploads with what is left of the grace window and prunes
+   (`preemption_upload_deferred` when cut short). Past the window it logs
+   `preemption_save_incomplete`; any failure on this path is logged and never reaches the loop.
+9. On restart, `restore()` (or `restore_latest_valid()`) walks this run's directory, then the runs
+   it resumed, nearest first. Every candidate passes one gate: the manifest must parse, match its
+   name and run and chain, reach the required trust level (tag, run-store digest), not be older
+   than the rollback floor (the newest step the run store, a tag-checked pointer or
+   `CVPILOT_CKPT_MIN_STEP` proves existed), be within the size caps; then the file must be a
+   regular file of the right size, structure and SHA-256 (read once, parsed from the same bytes).
+   A file that fails is skipped with `checkpoint_skipped_corrupt` or `checkpoint_untrusted`.
+10. With nothing valid locally the remote is consulted through the same gate (the manifest is judged
+    before any data is read, within a byte budget); with `discover=True` the newest remote runs are
+    listed and their candidates tried best step first.
+11. If a floor above zero is known and nothing at or above it verifies, restore, `resume_path` and
+    `find_resume_point` raise `CheckpointUntrustedError` (`rolled_back`, or `checkpoint_missing`),
+    under `any` they log `checkpoint_progress_lost`; starting over is the explicit
+    `accept_rollback_to=0`. Only when nothing is known is the result `None`.
+12. The trainer receives the state (or `None`) and applies the random state itself
+    (`apply_rng(state["rng"])`); the child run (`init(resume_from=...)`, found with `resume_path`
+    or `find_resume_point`) has `parent_run_id` and status `resumed`; `checkpoint_restored` (with
+    `trust_level`) and `run_resumed` are logged.
 
 Failure paths:
 
@@ -234,14 +169,20 @@ Failure paths:
 | Kill during the temp write | the temp file has no manifest and is invisible to restore; deleted by the next save | n/a | none |
 | Kill after the manifest rename, before the data rename | manifest without data; skipped as `data_missing`, deleted by the next save | n/a | `checkpoint_skipped_corrupt` |
 | Kill after the renames, before `LATEST` moves | `LATEST` points at the previous valid checkpoint; the new one is found through the chain (or the run-store digest) | n/a | none |
-| Kill during upload | remote manifest absent or checksum mismatch; the local copy is re-uploaded on the next save or on `cvpilot ckpt verify` | n/a | `checkpoint_upload_failed` (WARN) |
+| Kill during upload | remote manifest absent or checksum mismatch; the local copy is uploaded again by a later save (`ckpt verify` only reads and reports) | n/a | `checkpoint_upload_failed` (WARN) |
 | Disk full during save | `OSError` raised to the trainer; previous checkpoint untouched | n/a | `checkpoint_save_failed` (ERROR) |
-| No valid checkpoint anywhere | `restore_latest_valid()` returns `None` | n/a | `checkpoint_restore_empty` |
-| `cvpilot ckpt verify <dir>` finds a corrupt, truncated, forged or untrusted file | listed on `stdout` | 1 | `checkpoint_verify_failed`, `checkpoint_untrusted` |
+| A state a restore would refuse (integer over 2**64, too deep, a bfloat16 tensor) | `CheckpointError` naming the cause, nothing written | n/a | `checkpoint_save_failed` (ERROR) |
+| Nothing is known to have existed and no valid checkpoint anywhere | `restore()` returns `None` (a fresh start) | n/a | `checkpoint_restore_empty` |
+| A floor is known and no valid checkpoint reaches it (deleted, emptied, corrupted, rolled back) | `CheckpointUntrustedError` `rolled_back` or `checkpoint_missing`, the step in the message; under `any`, `None` plus the event | n/a (library) | `checkpoint_untrusted` (ERROR); `checkpoint_progress_lost` (WARN) under `any` |
 | Candidates exist but none reaches `CVPILOT_CKPT_REQUIRE_TRUST` | nothing is loaded; `CheckpointUntrustedError` | n/a (library) | `checkpoint_untrusted` (ERROR) |
+| A call asks for a weaker policy or a lower floor than the configuration | ignored; the stricter setting applies | n/a | `checkpoint_trust_downgrade_ignored` (WARN) |
+| The run store cannot answer under `anchored` or `authenticated` | fails closed | n/a (library) | `checkpoint_untrusted` (reason `anchor_error`) |
+| A `pt` file is skipped as an unsafe archive | not returned; the reason is logged | n/a | `resume_point_skipped`, `resume_point_unavailable` (WARN) |
+| `cvpilot ckpt verify <dir>` finds a corrupt, truncated, forged or untrusted file | listed on `stdout` | 1 | `checkpoint_verify_failed`, `checkpoint_untrusted` |
 | `cvpilot ckpt verify <dir>` with nothing valid | `error: no checkpoints found` or the list, on `stderr`/`stdout` | 1 | `command_failed` |
 | `cvpilot ckpt ...` on a path that is not a checkpoint dir | usage error | 2 | none |
-| Grace window expires before the save completes | the partial file is handled as above; the run stays `preempted` with the previous checkpoint as resume point | n/a | `preemption_save_incomplete` (WARN) |
+| The metadata service of a preemption notice fails | retried with backoff; the thread says why it ends | n/a | `notice_poller_degraded`, `notice_poller_recovered`, `preemption_poller_stopped` |
+| Grace window expires before the save completes | the partial file is handled as above; the run is already or becomes `preempted` with the previous checkpoint as resume point | n/a | `preemption_save_incomplete` (WARN) |
 
 Logged events (in order): `checkpoint_saved`, `checkpoint_verified`, `checkpoint_uploaded`,
 `preemption_signal_received`, `run_preempted`, `checkpoint_skipped_corrupt` or
@@ -250,5 +191,5 @@ Logged events (in order): `checkpoint_saved`, `checkpoint_verified`, `checkpoint
 Status: built and tested (`tests/unit/test_ckpt_*.py`, `tests/chaos/test_ckpt_*.py`). Deviations
 from the first sketch: pointers are `LATEST` and `LATEST_BEST`; checkpoints are safetensors files
 (the pickle-based `pt` format is opt-in); a remote upload that fails never raises into the
-trainer; `cvpilot ckpt restore` was replaced by `list`, `verify` and `prune`; re-uploading an
-earlier checkpoint happens on the next save, not through a CLI command.
+trainer; `cvpilot ckpt restore` was replaced by `list`, `verify` and `prune`; an upload that
+failed is repeated by the next save, not by a CLI command.

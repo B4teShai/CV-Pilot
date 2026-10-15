@@ -139,3 +139,18 @@ def test_the_checkpoint_guide_states_what_restoring_does_not_do_and_what_cannot_
         assert dtype in guide
     changelog = (DOCS.parent / "CHANGELOG.md").read_text(encoding="utf-8")
     assert "RNG state capture and restore" not in changelog
+
+
+def test_every_flow_heading_appears_once_and_flow_b_is_not_a_copy_of_flow_a() -> None:
+    text = (DOCS / "architecture" / "04-flows.md").read_text(encoding="utf-8")
+    headings = [line for line in text.splitlines() if line.startswith("## ")]
+    assert len(headings) == len(set(headings)), headings
+    assert sum(h.startswith("## Flow A") for h in headings) == 1
+    assert sum(h.startswith("## Flow B") for h in headings) == 1
+    flow_b = text[text.index("## Flow B") :]
+    for flow_a_only in ("`gate_failed`", "compare_refused", "`metrics_rejected`", "baseline set"):
+        assert flow_a_only not in flow_b, f"Flow B carries a row of Flow A: {flow_a_only}"
+    for behaviour in ("checkpoint_missing", "discover=True", "run_preempted", "apply_rng"):
+        assert behaviour in flow_b
+    assert "Flow B is planned" not in text
+    assert "or on `cvpilot ckpt verify`" not in text  # verify reads and reports, it uploads nothing

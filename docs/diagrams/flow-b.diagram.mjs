@@ -13,10 +13,10 @@ const steps = [
   { note: "previous valid checkpoint kept until this one verifies", at: "ckpt" },
   { divider: "preemption" },
   { from: "sched", to: "trainer", text: "SIGTERM sets a flag (or spot notice)" },
-  { from: "trainer", to: "ckpt", text: "next maybe_save: save, status preempted" },
+  { from: "trainer", to: "ckpt", text: "next maybe_save: save, mark preempted, then upload" },
   { divider: "restart on a new node" },
   { from: "trainer", to: "ckpt", text: "restore_latest_valid()" },
-  { from: "ckpt", to: "disk", text: "walk back; skip and count bad files" },
+  { from: "ckpt", to: "disk", text: "walk back; skip bad files; refuse a rollback" },
   { from: "ckpt", to: "s3", text: "none valid locally: fetch, verify" },
   { from: "ckpt", to: "trainer", text: "state (model, optimizer, rng…) or None", kind: "return" },
 ];
