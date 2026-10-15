@@ -73,9 +73,8 @@ def confusion_matrix(n_classes: int, diagonal: float = 10.0) -> np.ndarray[Any, 
     return matrix
 
 
-def add_snapshot(
-    store: LocalRunStore,
-    run_id: str,
+def build_snapshot(
+    run_id: str | None = None,
     *,
     h: str = H1,
     step: int = 0,
@@ -88,13 +87,48 @@ def add_snapshot(
     ci: Mapping[str, tuple[float, float]] | None = None,
     n_images: int = 100,
     params: Mapping[str, Any] | None = PARAMS,
-    confusion: np.ndarray[Any, Any] | None = None,
+    confusion_sha256: str = SHA,
+    predictions_sha256: str = SHA,
 ) -> EvalSnapshot:
+    """A snapshot object with chosen values; nothing is stored."""
     names = list(class_names)
     if metrics is None:
         metrics = {"mAP50_95": 0.6, "mAP50": 0.8}
     if per_class is None:
         per_class = {n: {"AP50_95": 0.6, "AP50": 0.8, "AR100": 0.7, "support": 20.0} for n in names}
+    return EvalSnapshot.model_validate(
+        {
+            "run_id": run_id or new_run_id(),
+            "eval_set_hash": h,
+            "step": step,
+            "task": task,
+            "class_names": names,
+            "n_images": n_images,
+            "metrics": dict(metrics),
+            "per_class": {k: dict(v) for k, v in per_class.items()},
+            "slices": {k: dict(v) for k, v in (slices or {}).items()},
+            "ci": {k: tuple(v) for k, v in (ci or {}).items()},
+            "bootstrap": {"n_resamples": 100, "seed": 0, "level": 0.95} if ci else None,
+            "ci_status": "computed" if ci else "off",
+            "params": None if params is None else dict(params),
+            "slice_spec": dict(slice_spec or {}),
+            "confusion_sha256": confusion_sha256,
+            "predictions_sha256": predictions_sha256,
+        }
+    )
+
+
+def add_snapshot(
+    store: LocalRunStore,
+    run_id: str,
+    *,
+    confusion: np.ndarray[Any, Any] | None = None,
+    **kw: Any,
+) -> EvalSnapshot:
+    """Build a snapshot with real confusion and predictions artifacts and store it."""
+    step = kw.get("step", 0)
+    h = kw.get("h", H1)
+    names = list(kw.get("class_names", CLASSES))
     matrix = confusion if confusion is not None else confusion_matrix(len(names))
     rows, cols = np.nonzero(matrix)
     scratch = store.path / f"scratch-{new_run_id()}.parquet"
@@ -110,25 +144,59 @@ def add_snapshot(
     conf = store.put_artifact(run_id, scratch, "confusion", {"n_classes": len(names)})
     scratch.unlink()
     pred = store.put_artifact_bytes(run_id, f"p{step}{h[:4]}".encode(), "predictions", {})
-    snap = EvalSnapshot.model_validate(
-        {
-            "run_id": run_id,
-            "eval_set_hash": h,
-            "step": step,
-            "task": task,
-            "class_names": names,
-            "n_images": n_images,
-            "metrics": dict(metrics),
-            "per_class": {k: dict(v) for k, v in per_class.items()},
-            "slices": {k: dict(v) for k, v in (slices or {}).items()},
-            "ci": {k: tuple(v) for k, v in (ci or {}).items()},
-            "bootstrap": {"n_resamples": 100, "seed": 0, "level": 0.95} if ci else None,
-            "ci_status": "computed" if ci else "off",
-            "params": None if params is None else dict(params),
-            "slice_spec": dict(slice_spec or {}),
-            "confusion_sha256": conf.sha256,
-            "predictions_sha256": pred.sha256,
-        }
+    snap = build_snapshot(
+        run_id, confusion_sha256=conf.sha256, predictions_sha256=pred.sha256, **kw
     )
     store.put_snapshot(snap)
     return snap
+
+
+def write_eval_files(
+    folder: Path, *, n: int = 40, broken: int = 0, shift_gt: bool = False
+) -> tuple[Path, Path, Path]:
+    """Parquet predictions, ground truth and class names for ``cvpilot eval``.
+
+    ``n`` images with one box each (alternating two classes and two cameras); the predictions
+    of the first ``broken`` images sit away from the ground truth, so they are misses plus
+    false positives. ``shift_gt`` moves every ground-truth box, which changes the eval set hash.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    folder.mkdir(parents=True, exist_ok=True)
+    ids = [f"img{i:03d}" for i in range(n)]
+    gt_box = (15.0, 15.0, 55.0, 55.0) if shift_gt else (10.0, 10.0, 50.0, 50.0)
+    far = (120.0, 120.0, 180.0, 180.0)
+    pq.write_table(
+        pa.table(
+            {
+                "image_id": ids,
+                "cls": pa.array([i % 2 for i in range(n)], type=pa.int64()),
+                "x1": [gt_box[0]] * n,
+                "y1": [gt_box[1]] * n,
+                "x2": [gt_box[2]] * n,
+                "y2": [gt_box[3]] * n,
+                "width": [200] * n,
+                "height": [200] * n,
+                "camera": [f"c{i % 2}" for i in range(n)],
+            }
+        ),
+        folder / "g.parquet",
+    )
+    boxes = [far if i < broken else (10.0, 10.0, 50.0, 50.0) for i in range(n)]
+    pq.write_table(
+        pa.table(
+            {
+                "image_id": ids,
+                "cls": [i % 2 for i in range(n)],
+                "score": [0.9] * n,
+                "x1": [b[0] for b in boxes],
+                "y1": [b[1] for b in boxes],
+                "x2": [b[2] for b in boxes],
+                "y2": [b[3] for b in boxes],
+            }
+        ),
+        folder / "p.parquet",
+    )
+    (folder / "c.txt").write_text("cat\ndog\n")
+    return folder / "p.parquet", folder / "g.parquet", folder / "c.txt"
