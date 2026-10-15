@@ -14,7 +14,7 @@ import pytest
 import yaml
 from conftest import CliResult
 from support import make_run, open_project, write_eval_files
-from workflow_lint import lint, lint_trusted_gate, steps_of, unquoted_env_refs
+from workflow_lint import lint, lint_release, lint_trusted_gate, steps_of, unquoted_env_refs
 
 ROOT = Path(__file__).resolve().parents[2]
 ACTION = ROOT / "action.yml"
@@ -106,7 +106,10 @@ def test_every_shipped_workflow_passes_the_workflow_rules() -> None:
     files = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
     assert files
     for path in files:
-        assert lint(load(path)) == [], path.name
+        if path.name == "release.yml":  # the one workflow that may hold an OIDC token
+            assert lint_release(load(path), path.read_text()) == [], path.name
+        else:
+            assert lint(load(path)) == [], path.name
 
 
 def test_no_run_block_anywhere_contains_an_expression() -> None:

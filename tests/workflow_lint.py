@@ -8,6 +8,7 @@ quoted.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -43,20 +44,39 @@ def unquoted_env_refs(script: str) -> list[str]:
     return problems
 
 
-def lint(doc: dict[str, Any], *, composite: bool = False) -> list[str]:
+def _writes(block: Any) -> list[str]:
+    if block == "write-all":
+        return ["write-all"]
+    if isinstance(block, dict):
+        return [name for name, value in block.items() if value == "write"]
+    return []
+
+
+def lint(
+    doc: dict[str, Any],
+    *,
+    composite: bool = False,
+    allow_oidc: frozenset[str] | set[str] = frozenset(),
+) -> list[str]:
+    """``allow_oidc`` names the jobs that may hold ``id-token: write`` (the trusted-publishing job
+    of a release workflow); any other write permission, anywhere, is still refused."""
     problems: list[str] = []
     triggers = doc.get("on", doc.get(True)) or {}
     if "pull_request_target" in (triggers if isinstance(triggers, (dict, list)) else [triggers]):
         problems.append("pull_request_target runs untrusted code with secrets")
     if not composite:
         permissions = doc.get("permissions")
-        job_permissions = [j.get("permissions") for j in (doc.get("jobs") or {}).values()]
+        jobs = doc.get("jobs") or {}
+        job_permissions = [j.get("permissions") for j in jobs.values()]
         if permissions is None and not all(job_permissions):
             problems.append("permissions must be declared (workflow level or on every job)")
-        for block in [permissions, *job_permissions]:
-            if block == "write-all" or (
-                isinstance(block, dict) and any(v == "write" for v in block.values())
-            ):
+        if _writes(permissions):
+            problems.append("write permissions are not minimal")
+        for job_name, job in jobs.items():
+            writes = _writes(job.get("permissions"))
+            if job_name in allow_oidc:
+                writes = [w for w in writes if w != "id-token"]
+            if writes:
                 problems.append("write permissions are not minimal")
     for index, step in enumerate(steps_of(doc)):
         label = step.get("name") or step.get("id") or f"step {index}"
@@ -136,4 +156,90 @@ def lint_trusted_gate(doc: dict[str, Any]) -> list[str]:
                 problems.append(f"the gate step must set {required}")
         if "allow-run-baseline" in with_ and str(with_["allow-run-baseline"]) == "true":
             problems.append("a baseline run id is not an anchor")
+    return problems
+
+
+_RELEASE_TAG = re.compile(r"v\[0-9\]\+\.\[0-9\]\+\.\[0-9\]\+")
+_VERSION_COMMENT = re.compile(r"uses: [\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$")
+
+
+def _job_steps(doc: dict[str, Any], name: str) -> list[dict[str, Any]]:
+    return list((doc.get("jobs") or {}).get(name, {}).get("steps") or [])
+
+
+def _uses(steps: list[dict[str, Any]], prefix: str) -> list[dict[str, Any]]:
+    return [s for s in steps if str(s.get("uses", "")).startswith(prefix)]
+
+
+def lint_release(doc: dict[str, Any], text: str) -> list[str]:
+    """Rules for a workflow that publishes to PyPI with trusted publishing (Phase 4, item 1).
+
+    One build job that can read the repository and nothing else, one publish job that can only
+    mint an OIDC token, runs no repository code, sits in a protected environment and publishes
+    the exact artifact the build job uploaded, on a version tag and nothing else.
+    """
+    problems = lint(doc, allow_oidc={"publish"})
+    triggers = doc.get("on", doc.get(True))
+    if not isinstance(triggers, dict) or set(triggers) != {"push"}:
+        problems.append("trigger only on the push of version tags (no other trigger)")
+    else:
+        push = triggers.get("push") or {}
+        tags = push.get("tags") if isinstance(push, dict) else None
+        if not isinstance(push, dict) or set(push) != {"tags"} or not tags:
+            problems.append("push must filter on tags only (no branches or paths)")
+        elif not all(isinstance(t, str) and _RELEASE_TAG.fullmatch(t) for t in tags):
+            problems.append("the tags filter must be exactly v[0-9]+.[0-9]+.[0-9]+")
+    if doc.get("permissions") != {}:
+        problems.append("top-level permissions must be {} (nothing by default)")
+    jobs = doc.get("jobs") or {}
+    if set(jobs) != {"build", "publish"}:
+        problems.append("the workflow must have exactly the jobs build and publish")
+        return problems
+    build, publish = jobs["build"], jobs["publish"]
+    if build.get("permissions") != {"contents": "read"}:
+        problems.append("build: permissions must be exactly contents: read")
+    if "environment" in build or "id-token" in str(build.get("permissions")):
+        problems.append("build: no environment and no id-token (it holds no publish power)")
+    if publish.get("permissions") != {"id-token": "write"}:
+        problems.append("publish: permissions must be exactly id-token: write")
+    needs = publish.get("needs")
+    if needs not in ("build", ["build"]):
+        problems.append("publish: needs must be build")
+    environment = publish.get("environment")
+    if not (isinstance(environment, str) and environment) and not (
+        isinstance(environment, dict) and environment.get("name")
+    ):
+        problems.append("publish: a protected environment is required")
+    build_steps, publish_steps = _job_steps(doc, "build"), _job_steps(doc, "publish")
+    if _uses(publish_steps, "actions/checkout"):
+        problems.append("publish: must not check out repository code")
+    if _uses(build_steps, "pypa/gh-action-pypi-publish"):
+        problems.append("publish action only in the publish job")
+    publishers = _uses(publish_steps, "pypa/gh-action-pypi-publish")
+    if len(publishers) != 1:
+        problems.append("publish: exactly one trusted-publishing step")
+    for step in publishers:
+        with_ = step.get("with") or {}
+        if any(k in with_ for k in ("password", "user", "username", "repository-url")):
+            problems.append("publish: no static token or credential input (OIDC only)")
+    blob = text + "\n" + json.dumps(doc, default=str)
+    if re.search(r"secrets\.", blob) or re.search(r"(?i)pypi[_-]?(api[_-]?)?token", blob):
+        problems.append("no secret references: trusted publishing needs none")
+    upload = _uses(build_steps, "actions/upload-artifact")
+    download = _uses(publish_steps, "actions/download-artifact")
+    if len(upload) != 1 or len(download) != 1:
+        problems.append("one upload-artifact in build and one download-artifact in publish")
+    elif (upload[0].get("with") or {}).get("name") != (download[0].get("with") or {}).get("name"):
+        problems.append("artifact names must match between build and publish")
+    build_scripts = "\n".join(str(s.get("run", "")) for s in build_steps)
+    publish_scripts = "\n".join(str(s.get("run", "")) for s in publish_steps)
+    if "print_version" not in build_scripts or "TAG" not in build_scripts:
+        problems.append("build: the tag must be checked against the package version")
+    if "sha256sum" not in build_scripts or "sha256sum" not in publish_scripts:
+        problems.append("artifact digests must be logged and re-checked (sha256sum)")
+    if "workflow_dispatch" in text or "pull_request" in text.replace("pull_request_target", ""):
+        problems.append("trigger only on version tags")
+    for line in text.splitlines():
+        if "uses:" in line and not _VERSION_COMMENT.search(line.strip().lstrip("- ")):
+            problems.append(f"pin with a full SHA and a version comment: {line.strip()}")
     return problems

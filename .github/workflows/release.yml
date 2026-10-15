@@ -1,0 +1,87 @@
+# Release pipeline: build on a version tag, then publish that exact build with PyPI trusted
+# publishing (OIDC). The build job can only read the repository and holds no secret and no
+# publish power; the publish job can only mint an OIDC token, runs no repository code and waits
+# in the protected environment "pypi" (required reviewers are set by the maintainer in the
+# repository settings). Publishing needs the maintainer's explicit approval: see
+# docs/engineering/release.md.
+name: release
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+permissions: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      digests: ${{ steps.digests.outputs.digests }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          python-version: "3.12"
+      - name: The tag must equal the package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(python3 scripts/print_version.py)"
+          if [ "$TAG" != "v$version" ]; then
+            echo "tag $TAG does not equal v$version (src/cvpilot/__init__.py)" >&2
+            exit 1
+          fi
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run mypy
+      - run: uv run pytest -q --cov=cvpilot --cov-fail-under=85
+      - run: uv build --out-dir dist
+      - run: uv run twine check --strict dist/*
+      - id: digests
+        name: Log and record the artifact digests
+        run: |
+          cd dist
+          sha256sum -- * | tee /dev/stderr > ../SHA256SUMS
+          {
+            echo "digests<<EOF_DIGESTS"
+            cat ../SHA256SUMS
+            echo "EOF_DIGESTS"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+      - name: The artifact must be the one that was built, for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          EXPECTED_DIGESTS: ${{ needs.build.outputs.digests }}
+        run: |
+          cd dist
+          actual="$(sha256sum -- * | tee /dev/stderr)"
+          if [ "$actual" != "$EXPECTED_DIGESTS" ]; then
+            echo "the downloaded files differ from the files the build job recorded" >&2
+            exit 1
+          fi
+          for f in *.whl *.tar.gz; do
+            case "$f" in
+              cvpilot-"${TAG#v}"-*.whl | cvpilot-"${TAG#v}".tar.gz) ;;
+              *) echo "$f does not carry the version of tag $TAG" >&2; exit 1 ;;
+            esac
+          done
+      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+        with:
+          packages-dir: dist/
