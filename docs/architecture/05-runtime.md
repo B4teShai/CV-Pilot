@@ -6,8 +6,8 @@
 
 | Where | What runs | Threads and subprocesses |
 |---|---|---|
-| Training process (built: `api.py`, `runs/`, `eval/`, hooks, forwarders, store and capture in-process; planned: `ckpt/`, alerts) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training and the hook callbacks; `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; signal handlers for SIGTERM/SIGUSR1 set a flag only. No subprocess except `git` once at `init`. |
-| `cvpilot` CLI (built: `--version`, `doctor`, `runs`, `repro`, `eval`, `baseline`, `compare`, `gate`) | one command per invocation, single-threaded except `eval`, whose bootstrap uses up to 4 worker threads | none; `compare` and `gate` do no resampling (they read the intervals stored in the snapshots), so they use no thread pool |
+| Training process (built: `api.py`, `runs/`, `eval/`, `ckpt/`, hooks, forwarders, store and capture in-process; planned: alerts) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training and the hook callbacks; `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; `cvpilot-spot-poll` daemon thread (built, off by default): asks the instance metadata service for a preemption notice, at most once per second per source, gives up after repeated errors; signal handlers for SIGTERM/SIGUSR1 set a flag only (built). No subprocess except `git` once at `init`. |
+| `cvpilot` CLI (built: `--version`, `doctor`, `runs`, `repro`, `eval`, `baseline`, `compare`, `gate`, `ckpt`) | one command per invocation, single-threaded except `eval`, whose bootstrap uses up to 4 worker threads | none; `compare` and `gate` do no resampling (they read the intervals stored in the snapshots), so they use no thread pool |
 | Server container (planned) | Uvicorn with one FastAPI worker per CPU, websocket broadcaster, alert delivery worker | each worker is a process; alert delivery is an asyncio task; SQLite requires one worker, Postgres allows several |
 | CI runner (built) | `cvpilot gate` as a step, or the composite action `action.yml` that wraps it; the exit code gates the job | same as CLI; the action starts one `bash` |
 
@@ -33,8 +33,8 @@ not raised; forwarders run on their own daemon threads behind bounded queues (`r
 | Data | Default location | Override | Notes |
 |---|---|---|---|
 | Run store (built) | `$HOME/.cvpilot/<project>/` | `CVPILOT_STORE_DIR` or `init(store_dir=...)` | layout in [03-data-model.md](03-data-model.md); one directory per project |
-| Checkpoints | `CheckpointManager(dir=...)`, no default | `CVPILOT_CHECKPOINT_DIR` | a mounted bucket path on SkyPilot |
-| Checkpoint mirror | none | `CheckpointManager(remote=...)` or `CVPILOT_CHECKPOINT_REMOTE` | fsspec URL |
+| Checkpoints (built) | `CheckpointManager(dir=...)`, no default | `CVPILOT_CHECKPOINT_DIR` | a mounted bucket path on SkyPilot; one directory per run, mode 0700 |
+| Checkpoint mirror (built) | none | `CheckpointManager(remote=...)` or `CVPILOT_CHECKPOINT_REMOTE` | `s3://`, `gs://`, `az://` URL without credentials, query or user info; credentials come from the backend's own environment |
 | Compare reports | the `--report` and `--report-json` paths only; nothing is written to the store | `--report`, `--report-json` | static HTML (no script, strict CSP), at most 8 MiB; the prediction-diff gallery is planned |
 | Server database | `/data/cvpilot.sqlite` inside the container | `CVPILOT_SERVER_DATABASE_URL` | `sqlite:///...` or `postgresql://...` |
 | Logs | `stderr` | none | collected by the process supervisor or container runtime |
@@ -55,8 +55,8 @@ variable; default. There is no configuration file.
 | `CVPILOT_STORE_COMMAND_LINE` | `true`, `false` (also `1/0`, `yes/no`, `on/off`) | `true` | `Repro.command_line` capture; `false` stores only the executable name and the argument count | built (`settings.py` parses it; `api.init` passes it to `capture_repro`; tests cover both values) |
 | `CVPILOT_SERVER_URL` | `https://host[:port]` | none (sync disabled) | sync client, `gate --from-server` | planned |
 | `CVPILOT_TOKEN` | per-project token | none | sync client, CLI calls to the server; sent as `Authorization: Bearer` | planned, secret |
-| `CVPILOT_CHECKPOINT_DIR` | directory path | none | `CheckpointManager` default `dir` | planned |
-| `CVPILOT_CHECKPOINT_REMOTE` | fsspec URL | none | `CheckpointManager` default `remote` | planned |
+| `CVPILOT_CHECKPOINT_DIR` | directory path | none | `CheckpointManager` default `dir`, `resume_path`, CLI | built |
+| `CVPILOT_CHECKPOINT_REMOTE` | `s3://`, `gs://` or `az://` URL (no credentials) | none | `CheckpointManager` default `remote` | built |
 | `CVPILOT_CKPT_KEY` | secret, 32 to 1024 bytes (for example `openssl rand -hex 32`) | none (no tags) | HMAC tags on manifests and pointers; verified on restore; never logged or stored | built, secret |
 | `CVPILOT_CKPT_REQUIRE_TRUST` | `any`, `anchored`, `authenticated` | `any` | minimum trust level a restore accepts; `authenticated` needs `CVPILOT_CKPT_KEY`; recommended for any shared or bucket-backed directory | built |
 | `CVPILOT_CKPT_ALLOW_PT` | `true`, `false` (also `1/0`) | `false` | allows the pickle-based `pt` checkpoint format (needs the framework at 2.6 or newer) | built |
@@ -93,10 +93,12 @@ fields are never used for secrets.
 | `cvpilot[lightning]` | Lightning logger and callback hook (`autolog(trainer, ...)`) | `lightning` (brings `torch`) | GPU recommended for training; CPU works for tests |
 | `cvpilot[hf]` | HF `Trainer` callback hook | `transformers`, `torch` | same |
 | `cvpilot[mmdet]` | MMEngine hook and vis backend | `mmengine`, `mmdet`, `torch` | same |
+| `cvpilot[safetensors]` | save and load checkpoints (the default format) | `safetensors` | none |
+| `cvpilot[remote]` | checkpoint mirror to object storage (install the backend too: `s3fs`, `gcsfs` or `adlfs`) | `fsspec` | none |
 | `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker (`init(forward_to=["mlflow"])`) | `mlflow-skinny`, `wandb`, `trackio` | none |
 | `cvpilot[alerts]` | Telegram, Slack and generic webhook channels (SMTP needs no extra) | `httpx` | none |
 | `cvpilot[server]` | `cvpilot server`, websocket live view, htmx UI, share links | `fastapi`, `uvicorn[standard]`, `websockets`, `sqlalchemy`, `asyncpg` (Postgres optional) | 1 vCPU, 512 MB RAM for SQLite mode |
-| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP (confusion capture and verified `resume=` are planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
+| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP; `resume_arguments(path)` for a verified `resume=` target (confusion capture is planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
 
 Notice for `cvpilot[ultralytics]`: `ultralytics` is AGPL-3.0. It is imported only inside
 `hooks/ultralytics.py`, and that module does not import it at all: the hook receives the model
@@ -106,7 +108,7 @@ in the `license_notice` field of the `hook_attached` event that `autolog` logs. 
 stay Apache-2.0.
 
 The eval engine runs on CPU with the core package (`numpy`, `pyarrow`; `pycocotools` only for
-parity tests); checkpoint verification adds `safetensors` and `fsspec`; `torch`
-is needed only to load `kind="last"` checkpoints and arrives with any framework extra.
+parity tests); checkpoints need the optional `safetensors` (`cvpilot[safetensors]`), the mirror `fsspec` (`cvpilot[remote]`); verifying a checkpoint (size, structure, SHA-256, chain) needs neither. The framework
+is needed only for the opt-in `pt` format and is never imported on the safetensors path.
 GPU telemetry requires an NVIDIA driver and `pynvml`; without them the sampler logs
 `nvml_unavailable` once at `INFO` and stays idle.

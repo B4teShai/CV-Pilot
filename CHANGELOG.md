@@ -7,6 +7,77 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Checkpoint manager (`cvpilot.ckpt.CheckpointManager`, ADR-0006): atomic saves (private `O_EXCL`
+  temp file, `fsync`, manifest, rename, re-read and re-hash, digest recorded in the run store, then
+  the `LATEST` pointer), verified restore that walks back and skips and counts anything truncated,
+  corrupt, forged, replaced or symlinked, retention that counts only valid checkpoints and never
+  deletes the newest one, `best` checkpoints by a monitored metric, resume across runs
+  (`parent_run_id`), a directory lock for concurrent savers, and RNG state capture and restore.
+  Tensors go to safetensors files with the non-tensor state as bounded JSON; the pickle-based `pt`
+  format is opt-in. Events `checkpoint_saved`, `checkpoint_verified`, `checkpoint_restored`,
+  `checkpoint_skipped_corrupt`, `checkpoint_untrusted`, `checkpoint_uploaded`,
+  `checkpoint_upload_failed`, `checkpoint_save_failed`, `checkpoint_restore_empty`,
+  `preemption_signal_received`, `preemption_save_incomplete`, `run_preempted`.
+- Preemption: SIGTERM and SIGUSR1 handlers that only set a flag, a save at the next `maybe_save`
+  inside a grace window, the run marked `preempted`, optional AWS and GCP notice polling (off by
+  default, bounded). Tested with real signals in a subprocess.
+- Remote mirror over `fsspec` (extra `cvpilot[remote]`): upload after local verification, resumed
+  `.part` objects, size and SHA-256 read back, manifest last, retries inside one deadline, TLS on,
+  no credentials in locations, logs or the store, restore from the remote on a fresh node.
+- `cvpilot.resume_path(project)`, `cvpilot.ckpt.find_resume_point`, `CheckpointManager.adopt` for
+  framework-written files, `resume_arguments` helpers for the Lightning and Ultralytics hooks, and
+  `cvpilot ckpt list|verify|prune` (`--require-trust`, `--project`, `--json`).
+- Run store: an append-only `checkpoint_manifest` table (the digest of every manifest, the
+  directory's external anchor); `Run.handle`.
+- Public API frozen: `__all__` in `cvpilot` and `cvpilot.ckpt`, a snapshot test of names and
+  signatures, and `cvpilot.deprecation` (decorator, warning, registry, a test that fails when a
+  deprecation is due).
+- Documentation site (MkDocs Material, strict, pinned, no remote assets): user guide, a tutorial
+  whose every command is executed by a test, a CLI reference generated from the Typer app with a
+  drift test, a Python API reference, and the release runbook.
+- Release pipeline: `release.yml` (tag-triggered; a secret-free build job and a separate
+  trusted-publishing job in the protected `pypi` environment that publishes the exact built
+  artifact after re-checking its digests; tag must equal `__version__`), CI jobs `lock`, `docs`,
+  `package` and `audit`, a workflow lint with 23 mutation tests, wheel and sdist content tests,
+  `twine check --strict`, and `scripts/verify_wheel.py` (clean-environment install on 3.10 and
+  3.13). **Nothing has been published.**
+- Chaos tests with real processes: SIGKILL at random moments and at four chosen points inside a
+  save, a full disk, three concurrent savers, a file replaced after it was read, symlink swaps,
+  orphan temp files, clock skew, a forged coherent directory, real signals.
+- `benchmarks/ckpt_save.py`: the save overhead (the 5 % budget of ADR-0006 is **not met**: hashing
+  dominates; see the overview for numbers).
+
+### Security
+
+- Trust model for checkpoints: HMAC-SHA256 tags (`CVPILOT_CKPT_KEY`, environment only, never
+  logged or stored) over a domain label, the run id and the canonical bytes of each manifest and
+  pointer; a trust level on every restore (`authenticated`, `anchored`, `local_chain_only`); a
+  policy `CVPILOT_CKPT_REQUIRE_TRUST` (default `any`: use `authenticated` for any directory that is
+  shared, restored from a bucket or writable by others) under which every checkpoint needs its own
+  proof, nothing is vouched for by a neighbour, a failing store lookup fails closed, and a restore
+  that cannot reach the level raises `checkpoint_untrusted` instead of loading a weaker file.
+- Parsers: the safetensors header is parsed once, strictly (duplicate keys, NaN, fractions,
+  oversized integers, overlapping or gapped spans, wrong byte counts), and the loaded tensors must
+  equal what that parse declared; the `pt` archive is read by an in-house strict zip reader (no
+  hidden bytes, duplicate names, descriptors, zip64 or extra fields) with an opcode allow-list for
+  `data.pkl`, a framework version floor of 2.6, an explicit opt-in and `weights_only=True` only.
+- A restored checkpoint is data: strict bounded JSON state, RNG structures validated before any
+  generator is touched and rolled back on failure, nothing restored selects a module or a class.
+- All paths are opened relative to directory descriptors without following symlinks; files are
+  regular, bounded and read once; new files are `O_EXCL` 0600 then 0444.
+
+### Fixed
+
+- Found by the new tests: 0-d arrays came back one-dimensional through safetensors (now carried
+  by a `$scalar` marker), and a race in creating the lock file returned `ENOENT` on macOS.
+
+### Changed
+
+- No core dependency changed: `safetensors` and `fsspec` are optional extras. `pytest` gains the
+  `packaging` marker; `docs`, `audit` dependency groups and `build`, `twine`, `hatchling` in `dev`.
+
+### Added (earlier in this release)
+
 - Correctness fixes: lifecycle callbacks (finish, mark failed) still run after ten failed logs; the
   Lightning hook finishes after the last stage so `trainer.test()` metrics reach the store, is
   rank-gated in every stage and refuses to be pickled; the YOLO hook logs metrics only for epochs

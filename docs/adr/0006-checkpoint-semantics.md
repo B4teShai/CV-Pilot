@@ -150,7 +150,7 @@ Option C, implemented by `ckpt/` with the following rules.
   remote is slower than the local save interval.
 - Forbidden: loading a checkpoint without a manifest; `torch.load` without
   `weights_only=True`; deleting the only valid checkpoint of a kind.
-- Follow-up: `cvpilot ckpt ls|verify|restore` commands, SkyPilot and SLURM recipes in the
+- Built: `cvpilot ckpt list|verify|prune` (instead of `ls|verify|restore`); follow-up: SkyPilot and SLURM recipes in the
   documentation, `preempted`/`resumed` alert rules.
 
 ## Links

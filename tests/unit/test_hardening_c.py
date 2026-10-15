@@ -23,7 +23,7 @@ from support import (
     open_project,
     write_eval_files,
 )
-from workflow_lint import lint
+from workflow_lint import lint, lint_release
 
 from cvpilot.compare import service
 from cvpilot.compare.engine import compare
@@ -271,13 +271,14 @@ def test_error_lines_never_carry_control_or_bidirectional_characters(
 
 
 def test_every_checkout_in_every_workflow_drops_the_credentials() -> None:
-    docs = [
-        yaml.safe_load(p.read_text())
-        for p in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
-    ]
-    assert docs
-    for doc in docs:
-        assert lint(doc) == []
+    paths = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    assert paths
+    for path in paths:
+        doc = yaml.safe_load(path.read_text())
+        if path.name == "release.yml":  # the one workflow that may hold an OIDC token
+            assert lint_release(doc, path.read_text()) == []
+        else:
+            assert lint(doc) == []
         for job in doc["jobs"].values():
             for step in job["steps"]:
                 if str(step.get("uses", "")).startswith("actions/checkout@"):

@@ -45,6 +45,6 @@ export default {
     arrow(cvpilot, storage, "checkpoints, artifacts"),
 
     c4Legend(40, 800),
-    note("n1", "Arrows point from caller to callee. All external integrations are planned; the CLI and the local run store are built.", 40, 840, 14),
+    note("n1", "Arrows point from caller to callee. Built: the CLI, the local run store, framework hooks, tracker forwarders and checkpoint mirrors to object storage; the server, alert channels and sync are planned.", 40, 840, 14),
   ],
 };

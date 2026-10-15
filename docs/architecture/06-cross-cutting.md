@@ -19,7 +19,7 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 |---|---|---|---|---|
 | `doctor_completed` | INFO | `status`, `package_version`, `python_version` | `cli/` | built |
 | `command_failed` | ERROR | `command`, `exc_info` | `cli/` boundary | built |
-| `run_started`, `run_finished`, `run_resumed` | INFO | `run_id`, `project`, `status`, `parent_run_id`, `task`, `n_points`, `duration_ms` | `runs/` | built (`run_finished` carries the final `status`, so `run_failed` and `run_preempted` are not separate events) |
+| `run_started`, `run_finished`, `run_resumed` | INFO | `run_id`, `project`, `status`, `parent_run_id`, `task`, `n_points`, `duration_ms` | `runs/` | built (`run_finished` carries the final `status`; `run_preempted` is additionally logged by the checkpoint manager with `signal`, `step` and `saved`) |
 | `hook_attached`, `hook_missing` | INFO / ERROR | `hook`, `framework`, `extra`, `license_notice` (null unless the framework is copyleft) | `api.py` (`autolog`) | built |
 | `hook_no_epochs` | WARN | `hook`, `reason` (the framework trained without calling the hook) | `hooks/` (YOLO) | built |
 | `hook_failed`, `hook_disabled` | WARN | `hook`, `callback`, `error_type` (type only, never the text); `hook`, `failures` | `hooks/` (the guard around every callback) | built; `hook_failed` once per hook |
@@ -35,11 +35,15 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `baseline_set` | INFO | `project`, `tag`, `run_id`, `eval_set_hash`, `step`, `replaced` | `compare/` | built |
 | `baseline_refused` | ERROR | `project`, `tag`, `run_id`, `eval_set_hash` | `cli/` boundary, from `BaselineRefusedError` | built |
 | `baseline_integrity_failed` | ERROR | `command` | `cli/` boundary, from `BaselineIntegrityError` | built |
-| `checkpoint_saved`, `checkpoint_verified`, `checkpoint_restored`, `checkpoint_uploaded` | INFO | `run_id`, `step`, `kind`, `size_bytes`, `sha256_prefix`, `is_best`, `uri`, `duration_ms` | `ckpt/`, `remote/` | planned |
-| `checkpoint_skipped_corrupt`, `checkpoint_upload_failed`, `checkpoint_verify_failed`, `preemption_save_incomplete` | WARN | `run_id`, `step`, `kind`, `reason` | `ckpt/` | planned |
-| `checkpoint_save_failed` | ERROR | `run_id`, `step`, `exc_info` | `ckpt/` | planned |
-| `checkpoint_restore_empty` | INFO | `run_id`, `dir`, `remote` | `ckpt/` | planned |
-| `preemption_signal_received` | INFO | `run_id`, `signal`, `grace_seconds` | `ckpt/` | planned |
+| `checkpoint_saved`, `checkpoint_verified`, `checkpoint_uploaded` | INFO | `run_id`, `step`, `kind`, `size_bytes`, `sha256_prefix`, `is_best`, `remote` (scheme and bucket only, never the path), `duration_ms` | `ckpt/` | built |
+| `checkpoint_restored` | INFO | `run_id` (the owning run; `checkpoint_run_id` when it is an ancestor), `step`, `kind`, `size_bytes`, `sha256_prefix`, `skipped`, `trust_level` (`authenticated`, `anchored` or `local_chain_only`) | `ckpt/` | built |
+| `checkpoint_skipped_corrupt` | WARN | `run_id`, `step`, `kind`, `reason` (`size_mismatch`, `digest_mismatch`, `unloadable`, `not_regular_file`, `data_missing`, `pointer_mismatch`, `link_mismatch`, `unanchored`, `chain_mismatch`, `manifest_invalid`, `manifest_unreadable`, `name_mismatch`, `pt_not_allowed`, `unsafe_loader`, `unsafe_archive`, ...) | `ckpt/` | built |
+| `checkpoint_untrusted` | WARN per checkpoint; ERROR when restore fails closed | `reason` (`auth_invalid`, `auth_missing`, `store_mismatch`, `not_anchored`, `anchor_error`), `step`, `kind`; the ERROR adds `required` and `rejected` | `ckpt/`, `cli/` | built |
+| `checkpoint_upload_failed`, `checkpoint_verify_failed`, `preemption_save_incomplete`, `checkpoint_anchor_failed`, `checkpoint_record_failed`, `checkpoint_prune_failed`, `checkpoint_debris_removed`, `checkpoint_download_failed` | WARN | `step`, `kind`, `reason` or `error_type` (the exception class only), `remote` where relevant | `ckpt/` | built |
+| `checkpoint_save_failed` | ERROR | `run_id`, `step`, `kind`, `error_type`, `exc_info` | `ckpt/` | built |
+| `checkpoint_restore_empty` | INFO | `dir`, `skipped` | `ckpt/` | built |
+| `preemption_signal_received` | INFO | `signal`, `grace_seconds` | `ckpt/` | built |
+| `run_preempted` | INFO | `signal`, `step`, `saved` | `ckpt/` | built |
 | `forward_failed` | WARN | `forwarder`, `run_id`, `n_points`, `reason` (`exception`, `open_failed`, `queue_full`, `stalled`, `base_exception`, `step_regressed`, `construct_failed`, `submit_failed`), `error_type` (the exception class only, never its text) | `runs/forwarding.py` | built; logged once per forwarder |
 | `forward_skipped_rank` | INFO | `forwarders` (the names that were not started) | `api.py` (`init`, when `RANK` or `LOCAL_RANK` is not 0) | built |
 | `metrics_dropped` | ERROR | `run_id`, `n_points`, `error_type` (a batch that failed with a data error and was dropped instead of re-queued) | `runs/` | built |
@@ -73,7 +77,7 @@ Contract: one boundary in `cli/app.py`; `0 / 1 / 2 / 130`. Per command family:
 | `eval` (built) | run not found, input tables or files fail validation (including slice cardinality and malformed Parquet), snapshot exists, write error | bad `--slices` syntax, missing file, malformed run id, number out of range | parity is tested, not checked at run time |
 | `compare` (built) | refused (`eval_set_hash`, task, class names or parameters differ, no candidate snapshot), run or baseline missing, snapshot or baseline fails verification | bad `--baseline` syntax or run id, no project | refusal is a data problem, so it is 1, not 2 |
 | `gate` (built) | any violation (exceeded drop, absent or non-finite metric, absent or too small slice, too few images, unmatched threshold), refused comparison, run or baseline missing, any verification failure, any unexpected exception | bad threshold syntax, no threshold, `--min-images` below 1, bad `--baseline` | CI treats any non-zero as blocking; `1` with `gate_failed` is the regression signal; no code path exits 0 without `gate_passed` |
-| `ckpt verify|restore|ls` (planned) | corrupt or missing checkpoint found, nothing to restore | path is not a checkpoint directory | |
+| `ckpt list|verify|prune` (built) | `verify`: a corrupt, truncated, forged or untrusted checkpoint, or nothing valid at all; any command: another process holds the directory lock, a file cannot be read | the path is not a checkpoint directory, an invalid run id, `--require-trust authenticated` without `CVPILOT_CKPT_KEY`, `--keep-*` below 1 | `list` exits 0 for an empty directory; `prune` never deletes the newest valid checkpoint |
 | `sync` (planned) | server unreachable after retries in `--once` mode, auth rejected | `CVPILOT_SERVER_URL` set without `CVPILOT_TOKEN` | |
 | `server` (planned) | bind failure, database migration failure | `[server]` extra missing, invalid database URL | |
 
@@ -109,7 +113,7 @@ browser ↔ server; server ↔ notification channels; CV-Pilot ↔ third-party p
 | Resource exhaustion from hostile eval inputs | `store/tables.py`, `eval/`, `core/` | metadata and decoded-batch size limits (the footer is not trusted), dictionary values checked before expansion, control characters rejected, class-agnostic confusion capped at 300 detections per image with chunked IoU, slice work budget, estimated-memory check and worker scaling, `--max-memory-mb` (`RLIMIT_AS`, Linux only; elsewhere only the input limits apply) | built |
 | Secrets, home paths and ids in logs and error lines | `logging.py`, `cli/` | formatted tracebacks and error lines are scrubbed (home directory, bearer tokens, `name=value` credentials) and made printable with `safe_text` (no control or bidirectional characters); validation messages refer to ids by length and digest | built |
 | Evaluating into a finished run | `eval/` | refused unless `allow_closed` / `--allow-closed` | built |
-| Path traversal in artifact or checkpoint paths | `store/`, `remote/`, server | paths are resolved and checked against the store or checkpoint root before read or write (store: built, with run ids validated as ULIDs and project names by pattern before any path use); the server never accepts file paths from clients, only content and hashes | built (store), planned (checkpoints, server) |
+| Path traversal in artifact or checkpoint paths | `store/`, `remote/`, server | paths are resolved and checked against the store or checkpoint root before read or write (store: built, with run ids validated as ULIDs and project names by pattern before any path use); the server never accepts file paths from clients, only content and hashes | built (store, checkpoints: directory descriptors, run ids as ULIDs, steps as bounded integers, remote locations parsed by a grammar that refuses user info, queries, percent-encoding and dot segments), planned (server) |
 | Malicious or buggy third-party plugin | registries | plugins load only from installed distributions' entry points; no dynamic import from configuration strings; plugin exceptions are caught at the registry boundary and logged with the plugin name | planned |
 | Telegram `/stop` abuse | server | commands accepted only from allow-listed chat ids; `/stop` requires a confirmation reply within 60 s | planned |
 | Share-link enumeration | server | 32-byte random tokens, expiry ≤ 7 days, read-only, revocable | planned |
@@ -222,7 +226,7 @@ Project specifics:
 | Ultralytics hook (`hooks/ultralytics.py`) | `[ultralytics]` extra, lazy import inside the adapter, AGPL-3.0 notice in the adapter docstring, `license_notice`, the `hook_attached` event and [05-runtime.md](05-runtime.md); the package is never imported by this project | AGPL-3.0; never core, never vendored, never imported from `core/` or application code |
 | MLflow, W&B SDK, Trackio, TensorBoard forwarders | extras | Apache-2.0 / MIT upstream |
 | numpy | core, added with `eval/` (ADR-0003) | BSD |
-| faster-coco-eval, safetensors, fsspec | core; added in the change that lands `ckpt/`; `faster-coco-eval` is no longer planned (the engine computes COCO metrics itself) | Apache-2.0 / Apache-2.0 / BSD |
+| safetensors, fsspec | optional extras `[safetensors]` and `[remote]`, imported lazily; **not** core (the core dependency set did not change when `ckpt/` landed); `faster-coco-eval` is no longer planned (the engine computes COCO metrics itself) | Apache-2.0 / BSD |
 | pycocotools | test dependency only (parity tier, pinned 2.0.11), never imported from `src/` | BSD |
 | supervision (diff gallery rendering) | planned with the gallery; not a dependency today (reports use the standard library) | MIT |
 | FastAPI, Uvicorn, SQLAlchemy, asyncpg | `[server]` extra | MIT / BSD / MIT / Apache-2.0 (psycopg is not used: LGPL is outside the allow-list) |
@@ -243,7 +247,7 @@ What a user can inspect:
   checkpoint directory `LATEST` verifies.
 - `cvpilot runs list|show --json` (built): run metadata, repro record, metric counts and
   artifacts; planned: last eval snapshot, baseline tags.
-- `cvpilot ckpt ls|verify` (planned): every manifest with its verification result.
+- `cvpilot ckpt list|verify|prune` (built): every manifest with its verification result and trust level (`--json` for machines); `verify` exits 1 for anything corrupt or untrusted.
 - Direct queries: `runs.sqlite` with any SQLite client; `metrics/*.parquet` with DuckDB or
   pandas; the embedded `cvpilot.schema_version` metadata in each Parquet file.
 - Server (planned): `/healthz` (unauthenticated liveness), `/api/v1/runs`, the live view at

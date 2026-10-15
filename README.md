@@ -5,33 +5,34 @@ the experiment tracker you already use.
 
 ## Status
 
-Built and tested: run capture, the local run store, the eval engine, baselines, compare and gate,
-reports, tracker forwarders, Lightning and Ultralytics hooks and a GitHub Action.
+Version 0.1.0 (release candidate; nothing has been published to any package index). Built and
+tested: run capture, the local run store, the eval engine, baselines, compare and gate, reports,
+tracker forwarders, Lightning and Ultralytics hooks, a GitHub Action, and the checkpoint manager
+(atomic saves, verified restore, retention, preemption handling, object-storage mirror, HMAC
+authentication and a trust policy).
 
-- Python API: `cvpilot.init`, `log`, `log_artifact`, `finish` (and `Run` as a context manager)
-  record a run (environment, git state, dataset hash, metrics) into `~/.cvpilot/<project>/`:
-  SQLite in WAL mode for run rows, batched Parquet files for metric points, a
-  content-addressed directory for artifacts. A process killed with SIGKILL leaves a readable
-  store; the run stays `running` until it is marked `failed`.
-- Eval: `Run.log_eval(preds, gts, step=...)` and `cvpilot eval RUN_ID --preds p.parquet --gts g.parquet --classes names.txt` store an immutable snapshot (COCO-style mAP, per-class AP, confusion, slices, bootstrap intervals); see below.
-- Baselines, compare and gate: `cvpilot baseline set|list|show`, `compare`, `gate`; the gate fails
-  closed on anything missing, non-finite, unverifiable or incomparable; see below.
-- Forwarders and hooks: `init(forward_to=[...])` and `autolog(trainer_or_model, ...)`; see below.
-- CLI: `cvpilot --version`, `doctor`, `runs list`, `runs show RUN_ID`, `repro RUN_ID`, `eval RUN_ID`,
-  `baseline`, `compare`, `gate`, with the exit-code contract of
-  [docs/engineering/errors-and-logging.md](docs/engineering/errors-and-logging.md).
+- Python API (frozen by a snapshot test): `cvpilot.init`, `log`, `log_artifact`, `log_eval`,
+  `finish`, `autolog`, `resume_path` and `CheckpointManager`. `Run` is a context manager.
+- CLI: `cvpilot --version`, `doctor`, `runs list|show`, `repro`, `eval`, `baseline`, `compare`,
+  `gate`, `ckpt list|verify|prune`, with the exit-code contract of
+  [docs/engineering/errors-and-logging.md](docs/engineering/errors-and-logging.md). The full
+  reference is generated from the code: [docs/reference/cli.md](docs/reference/cli.md).
 - Settings: `CVPILOT_ENV`, `CVPILOT_LOG_LEVEL`, `CVPILOT_PROJECT`, `CVPILOT_STORE_DIR`,
-  `CVPILOT_STORE_COMMAND_LINE`, `CVPILOT_FORWARD_TO`; structured JSON logging on `stderr`.
+  `CVPILOT_STORE_COMMAND_LINE`, `CVPILOT_FORWARD_TO`, `CVPILOT_FORWARD_HOSTS`,
+  `CVPILOT_CHECKPOINT_DIR`, `CVPILOT_CHECKPOINT_REMOTE`, `CVPILOT_CKPT_KEY`,
+  `CVPILOT_CKPT_REQUIRE_TRUST`, `CVPILOT_CKPT_ALLOW_PT`; structured JSON logging on `stderr`.
+- Documentation: a MkDocs site (`mkdocs.yml`, `docs/`) with a user guide, a tutorial whose every
+  command is run by a test ([docs/tutorial.md](docs/tutorial.md)) and the architecture set.
 
-Everything under "Planned usage" below is **not implemented**: no checkpoint manager, server or
-alerts. The architecture documents mark each part as built or planned and describe only the
-built parts as behaviour that exists. See [CHANGELOG.md](CHANGELOG.md).
+Not built: the server, alert rules and channels, sync, and hooks for Hugging Face, MMEngine and
+RF-DETR. The architecture documents mark each part as built or planned. See
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Install (from source)
 
 Requires Python 3.10 or newer and [`uv`](https://docs.astral.sh/uv/).
 
-```bash
+```bash notest
 git clone <repository-url> cv-pilot
 cd cv-pilot
 uv sync
@@ -41,11 +42,15 @@ uv run cvpilot doctor
 
 `doctor` prints `ok` on `stdout` and one JSON log line (`doctor_completed`) on `stderr`.
 Exit codes: `0` success, `1` failure, `2` usage or configuration error, `130` interrupted.
+Extras: `cvpilot[safetensors]` (checkpoints), `[remote]` (object-storage mirror), `[lightning]`,
+`[ultralytics]` (AGPL-3.0, see below), `[mlflow]`, `[wandb]`, `[trackio]`.
 
 ## Record and inspect a run
 
-```python
-# train.py
+The commands in this section are run by `tests/docs/test_readme.py`. They assume the virtualenv
+is active (otherwise prefix with `uv run`).
+
+```python file=train.py
 import cvpilot
 
 with cvpilot.init(task="detection", config={"lr": 0.01}, seed=0) as run:
@@ -54,11 +59,19 @@ with cvpilot.init(task="detection", config={"lr": 0.01}, seed=0) as run:
 ```
 
 ```bash
-export CVPILOT_PROJECT=demo CVPILOT_STORE_DIR=$PWD/store   # default store: ~/.cvpilot
-uv run python train.py              # logs run_started and run_finished on stderr
-uv run cvpilot runs list            # RUN_ID  STATUS  STARTED  NAME
-uv run cvpilot runs show <RUN_ID>   # add --json for the full record
-uv run cvpilot repro <RUN_ID>       # prints a bash script: checkout, stored diff, command
+export CVPILOT_PROJECT=demo CVPILOT_STORE_DIR="$PWD/store"   # default store: ~/.cvpilot
+python train.py                     # logs run_started and run_finished on stderr
+cvpilot runs list                   # RUN_ID  STATUS  STARTED  NAME
+RUN=$(cvpilot runs list --json | python -c "import json, sys; print(json.load(sys.stdin)[0]['run_id'])")
+cvpilot runs show "$RUN"            # add --json for the full record
+cvpilot repro "$RUN" | head -n 3    # prints a bash script: checkout, stored diff, command
+```
+
+```text expect
+run_started
+finished
+status: finished
+#!
 ```
 
 Notes:
@@ -73,7 +86,32 @@ Notes:
 - Exit codes of `runs` and `repro`: `1` for a well-formed run id that is not in the store,
   `2` for a missing project, an invalid project or a malformed run id.
 - `benchmarks/log_readback.py` logs 100 000 points and reads them back;
-  `benchmarks/install_size.sh` checks that the core install carries no torch.
+  `benchmarks/install_size.sh` checks that the core install carries no heavy framework;
+  `benchmarks/ckpt_save.py` measures the checkpoint save overhead (the 5 % budget of ADR-0006 is
+  not met: see the overview).
+
+## Checkpoints that survive a kill
+
+```python notest
+from cvpilot.ckpt import CheckpointManager
+
+run = cvpilot.init("fridge-sku", task="detection")
+ckpt = CheckpointManager(run, dir="/checkpoint", keep_last=3, monitor="val/mAP50_95")
+state = ckpt.restore_latest_valid()  # None on a fresh start
+for step in range(start, total_steps):
+    ...
+    ckpt.maybe_save(step, model=model, optimizer=opt, rng=True, metrics={"val/mAP50_95": m})
+    if ckpt.preempted():
+        break  # SIGTERM or SIGUSR1 set a flag; the run is already marked preempted
+```
+
+A save is atomic and verified; a restore skips (and counts) anything truncated, corrupt, forged,
+replaced or symlinked and never loads it; `cvpilot.resume_path("fridge-sku")` returns the newest
+file that verifies. The default policy trusts the checkpoint directory's own digests, which is
+right when only you can write it. **For a directory that is shared, restored from a bucket or
+writable by others, set `CVPILOT_CKPT_KEY` and `CVPILOT_CKPT_REQUIRE_TRUST=authenticated`**
+(see [docs/guide/trust.md](docs/guide/trust.md)). Walkthrough with a preemption, a damaged
+file and a resume: [docs/tutorial.md](docs/tutorial.md); design: ADR-0006.
 
 ## Evaluate predictions
 
@@ -81,7 +119,7 @@ Parquet files: predictions `image_id, cls, score, x1, y1, x2, y2`; ground truth 
 x1, y1, x2, y2` plus optional `iscrowd`, `width`, `height` and metadata columns (a row with a
 null `cls` declares an image without objects); one class name per line (or a JSON list).
 
-```bash
+```bash notest
 uv run cvpilot eval <RUN_ID> --preds p.parquet --gts g.parquet --classes names.txt \
   --slices camera=camera --step 10 --seed 0 --resamples 1000      # add --json for the snapshot
 uv run cvpilot runs show <RUN_ID>                                  # lists the snapshot
@@ -101,7 +139,7 @@ Commands below were run against a store holding four runs of the same synthetic 
 predictions and a run of a different evaluation set. Pins are append-only; `--replace` adds a
 newer pin and keeps the old one.
 
-```bash
+```bash notest
 cvpilot baseline set prod <BASELINE_RUN>        # pins the latest snapshot; --eval-set HASH, --step N
 cvpilot baseline list                           # add --json, --history
 cvpilot gate <RUN> --baseline tag:prod --max-drop mAP50_95=0.5 \
@@ -135,7 +173,7 @@ CSP, every name escaped), `--report-json` the canonical JSON; paths must stay in
 
 ## Forward to a tracker and hook into a framework
 
-```python
+```python notest
 import cvpilot
 
 run = cvpilot.init("fridge-sku", task="detection", forward_to=["mlflow"])  # or CVPILOT_FORWARD_TO
@@ -234,7 +272,7 @@ values.
 `init`, `log`, `log_eval` and `finish` are built; passing `PredictionTable` and `AnnotationTable`
 (from `cvpilot.eval`) instead of raw arrays; the hooks log scalars and leave evaluation to you.
 
-```python
+```python notest
 import cvpilot
 
 run = cvpilot.init(project="fridge-sku", task="detection", config=cfg)
@@ -245,48 +283,11 @@ snapshot = cvpilot.log_eval(preds, gts, step=step, slices={"camera": "camera_id"
 cvpilot.finish()
 ```
 
-## Planned usage
+## Planned
 
-Nothing below runs yet. The examples fix the public interface that the planned packages will
-implement; see [docs/architecture/02-components.md](docs/architecture/02-components.md) for
-signatures and status.
-
-### Planned: resume-safe checkpoints
-
-```python
-from cvpilot.ckpt import CheckpointManager
-
-ckpt = CheckpointManager(
-    run,
-    dir="/checkpoint",
-    remote="s3://ml-ckpt/fridge-sku/",
-    keep_last=3,
-    keep_best=2,
-    monitor="val/mAP50_95",
-    mode="max",
-    every_n_minutes=20,
-)
-state = ckpt.restore_latest_valid()  # None on a fresh start
-for step in range(state["step"] if state else 0, total_steps):
-    ...
-    ckpt.maybe_save(
-        step,
-        model=model,
-        optimizer=opt,
-        scheduler=sched,
-        scaler=scaler,
-        rng=True,
-        dataloader_state=sampler.state_dict(),
-        metrics={"val/mAP50_95": m},
-    )
-```
-
-### Planned: reproduction and checkpoint verification
-
-```bash
-cvpilot repro 01JA...          # built: prints a reproduction script
-cvpilot ckpt verify /checkpoint/01JA...   # planned
-```
+The server, alert rules and channels, sync, and the Hugging Face, MMEngine and RF-DETR hooks are
+not built; [docs/architecture/02-components.md](docs/architecture/02-components.md) fixes their
+interfaces and status.
 
 ## Architecture
 
@@ -298,7 +299,9 @@ cvpilot ckpt verify /checkpoint/01JA...   # planned
   (overview, components, data model, flows, runtime, cross-cutting concerns).
 - [docs/engineering/README.md](docs/engineering/README.md): coding standards, testing,
   errors and logging, dependencies and licensing, workflow.
-- [docs/adr/](docs/adr/): architecture decision records.
+- [docs/adr/](docs/adr/0001-scope-and-license.md): architecture decision records.
+- [docs/engineering/release.md](docs/engineering/release.md): the release runbook (publishing needs
+  the maintainer's explicit approval).
 
 ## License
 

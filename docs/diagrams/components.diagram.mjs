@@ -30,7 +30,7 @@ const repro = component("repro", ...at(1, 0), "repro", "capture at init, script"
 const runs = component("runs", ...at(1, 1), "runs/", "lifecycle, bounded buffer", true);
 const evalPkg = component("eval", ...at(1, 2), "eval/", "evaluate, CIs, slices", true);
 const compare = component("compare", ...at(1, 3), "compare/ + gate", "baselines, deltas, gate", true);
-const ckpt = component("ckpt", ...at(1, 5), "ckpt/", "manager semantics");
+const ckpt = component("ckpt", ...at(1, 5), "ckpt/", "atomic save, verified restore", true);
 const alerts = component("alerts", ...at(1, 6), "alerts/", "rule engine");
 
 // Domain (between columns).
@@ -44,7 +44,7 @@ const forward = component("forward", ...at(3, 1), "forward/", "MLflow, W&B, Trac
 const sync = component("sync", ...at(3, 2), "sync/", "HTTPS, (run_id, seq)");
 const storePkg = component("store", ...at(3, 3), "store/", "SQLite WAL, Parquet, CAS", true);
 const hooks = component("hooks", ...at(3, 4), "hooks/", "Lightning, YOLO callbacks", true);
-const remote = component("remote", ...at(3, 5), "remote/", "fsspec upload");
+const remote = component("remote", ...at(3, 5), "remote/", "fsspec upload, spot notices", true);
 const notify = component("notify", ...at(3, 6), "notify/", "Telegram, Slack, SMTP");
 const server = component("server", ...at(3, 7), "server/", "FastAPI; imports domain only");
 

@@ -124,7 +124,7 @@ A file produced by or registered with a run, stored by content address.
 
 Primary key: `(run_id, sha256)`. Foreign keys: `run_id → RunMeta.run_id`.
 
-### CheckpointManifest (planned)
+### CheckpointManifest (built)
 
 Sidecar record written next to every checkpoint file ([ADR-0006](../adr/0006-checkpoint-semantics.md)).
 
@@ -134,19 +134,31 @@ Sidecar record written next to every checkpoint file ([ADR-0006](../adr/0006-che
 | `step` | `int` | no | |
 | `kind` | `Literal["last","best"]` | no | full training state vs weights + EMA |
 | `path` | `str` | no | local path relative to the checkpoint dir |
-| `uri` | `str` | yes | remote URI after upload |
+| `uri` | `str` | yes | the intended remote location (validated: no credentials); a `step_N.remote.json` marker records that the upload verified |
 | `sha256` | `str` | no | checksum of the checkpoint file |
 | `size_bytes` | `int` | no | |
-| `format` | `Literal["safetensors","torch"]` | no | `torch` files are loaded with `weights_only=True` |
-| `metric_key` | `str` | yes | monitored metric for `best` |
-| `metric_value` | `float` | yes | |
-| `versions` | `json: dict[str, str]` | no | `cvpilot`, `torch`, framework, `python` |
+| `format` | `Literal["safetensors","pt"]` | no | `pt` (named for the file suffix) is opt-in and loaded with `weights_only=True` only; safetensors is the default for both kinds |
+| `metric_key` | `str` | yes | monitored metric for `best` (set together with `metric_value`) |
+| `metric_value` | `float` | yes | finite |
+| `metric_mode` | `Literal["max","min"]` | yes | how `best` is ranked (added field) |
+| `versions` | `json: dict[str, str]` | no | `cvpilot`, `python`, the run's framework (at most 16 short entries) |
 | `git_commit` | `str` | yes | |
 | `dataset_hash` | `str` | no | copy of `Repro.dataset_hash` |
-| `created_at` | `datetime` | no | |
+| `created_at` | `datetime` | no | informational: order is by `step`, never by time (clock skew is tested) |
+| `prev_manifest_sha256` | `str` | no | SHA-256 of the previous manifest file of the same `(run, kind)` (64 zeros for the first) (added field) |
+| `prev_chain_sha256` | `str` | no | the previous manifest's `chain_sha256` (added field) |
+| `chain_sha256` | `str` | no | `sha256(prev_chain, run_id, kind, step, sha256, size_bytes)` (added field) |
+| `auth_tag` | `str` | yes | HMAC-SHA256 over a domain label, the run id and the canonical record, present when `CVPILOT_CKPT_KEY` was set (added field) |
 
-Primary key: `(run_id, step, kind)`. Foreign keys: `run_id → RunMeta.run_id`;
-`(run_id, sha256) → Artifact` (kind `checkpoint`).
+Primary key: `(run_id, step, kind)`. Foreign key: `run_id → RunMeta.run_id`. The manifest file
+is immutable (0444). The run store keeps the digest of each manifest file in the append-only
+`checkpoint_manifest` table (`run_id, kind, step, sha256, size_bytes, manifest_sha256,
+chain_sha256, record, created_at`) as the external anchor; checkpoints are not registered as
+`Artifact` rows (the files are not copied into the content-addressed store), so the `(run_id,
+sha256) → Artifact` link of the first sketch does not exist.
+
+The pointer file (`CheckpointPointer`) holds `run_id`, `kind`, `step`, the manifest's relative
+name, its digest and chain value, a digest over those fields and the optional tag.
 
 ### Baseline (built)
 
@@ -219,8 +231,10 @@ test that will cover it.
    `artifacts/<sha256[:2]>/<sha256>`; identical content is stored once per project.
 6. `EvalSnapshot.confusion_sha256` and `predictions_sha256` reference `Artifact` rows of the
    same `run_id` with kinds `confusion` and `predictions`.
-7. A `CheckpointManifest` row exists only after the checkpoint file has been `fsync`ed and its
-   `sha256` computed; `LATEST`/`BEST` point only at a manifest that exists on disk.
+7. A `CheckpointManifest` row exists only after the checkpoint file has been `fsync`ed, renamed
+   into place and re-read and re-hashed; `LATEST`/`LATEST_BEST` are rewritten last and point at
+   a manifest that exists on disk (a pointer left behind by a kill is tolerated: the walk finds
+   the newer checkpoint through the chain).
 8. For each `(run_id, kind)` the newest verified checkpoint is never deleted; a checkpoint is
    deleted only when a newer one of the same kind has been verified (and uploaded, when a
    remote is configured).
@@ -246,7 +260,7 @@ test that will cover it.
 
 Status of the invariants: built and tested: 1, 2, 3, 5, 6, 9, 10 (`resume_from` checks the parent status; the acyclic and `parent_run_id`
 checks are schema and foreign-key enforced), 12, 14 (`RunMeta.schema_version` and the Parquet
-metadata), 4, 11, 15. Planned with their packages: 7, 8, 13.
+metadata), 4, 11, 15, 7 and 8 (`tests/unit/test_ckpt_directory.py`, `tests/chaos/`). Planned with their packages: 13.
 
 ## On-disk layout
 
@@ -255,7 +269,7 @@ $CVPILOT_STORE_DIR/<project>/              default $HOME/.cvpilot/<project>/
   runs.sqlite                               WAL mode; built: run_meta, repro, artifact,
                                             metric_files, meta, migrations,
                                             eval_snapshot, baseline (additive); planned:
-                                            checkpoint_manifest, outbox
+                                            checkpoint_manifest (built), outbox
   runs.sqlite-wal, runs.sqlite-shm          SQLite WAL files; present while a writer is open
   metrics/<run_id>/<seq:06d>.parquet        MetricPoint batches in write order (built); a batch
                                             is indexed in metric_files only after its atomic
@@ -271,12 +285,16 @@ $CVPILOT_STORE_DIR/<project>/              default $HOME/.cvpilot/<project>/
   (reports are written to the path given to --report and are not stored here)
 
 <checkpoint_dir>/<run_id>/                  CheckpointManager(dir=...)
-  last/step_<step:09d>.pt                   full training state; torch.load(weights_only=True)
+  last/step_<step:09d>.safetensors          full training state: tensors plus the bounded JSON state
+                                            (`.pt` instead when the pt format was opted into)
   last/step_<step:09d>.manifest.json        CheckpointManifest
+  last/step_<step:09d>.remote.json          marker: uploaded and verified on the remote
   best/step_<step:09d>.safetensors          weights + EMA
   best/step_<step:09d>.manifest.json
-  LATEST                                    relative path of the newest verified `last` manifest
-  BEST                                      relative path of the newest verified `best` manifest
+  LATEST                                    the newest `last` manifest: name, digest, chain value
+  LATEST_BEST                               the same for `best` (not `BEST`: it would collide with
+                                            the `best/` directory on case-insensitive filesystems)
+  .lock                                     flock held while saving, pruning or installing
 ```
 
 The outbox table holds `(run_id, seq, payload_json, created_at, acked_at)`; rows are deleted

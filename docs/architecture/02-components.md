@@ -4,8 +4,8 @@
 
 The package follows the four layers of
 [ADR-0004](../adr/0004-layering-and-dependency-rule.md). Built today: `cli/`, `api.py`,
-`runs/`, `repro`, `eval/`, `compare/`, `core/`, `store/`, `capture/`, `forward/`, `hooks/`,
-`registry.py`, `logging.py` and `settings.py`; each section below states what part is built.
+`runs/`, `repro`, `eval/`, `compare/`, `ckpt/`, `core/`, `store/`, `capture/`, `forward/`, `hooks/`,
+`remote/` (checkpoint mirror and preemption notices), `registry.py`, `logging.py` and `settings.py`; each section below states what part is built.
 Every other package is planned and its interface is the contract it will be built to.
 
 | Layer | Packages |
@@ -53,7 +53,7 @@ cvpilot compare <run_id> --baseline (tag:<tag>|<run_id>) [--eval-set HASH] [--st
 cvpilot gate <run_id> --baseline ... [--max-drop K=V]... [--per-class-max-drop K=V]...
              [--slice-max-drop "key=*:V"]... [--min-images N] [--skip-small-slices] [--json]
 cvpilot baseline set <tag> <run_id> [--eval-set HASH] [--step N] [--replace] | list [--history] | show <tag>
-cvpilot ckpt ls <dir> | verify <dir> | restore <dir> [--to PATH]
+cvpilot ckpt list <dir> | verify <dir> | prune <dir> --run ID   # built; [--require-trust any|anchored|authenticated] [--project P] [--json]
 cvpilot repro <run_id>
 cvpilot sync [--project P] [--once]
 cvpilot import (trackio|mlflow|tensorboard) <path> --project P
@@ -61,7 +61,7 @@ cvpilot server [--host H] [--port N]        # requires the [server] extra
 ```
 
 Depends on: application packages (`runs/`, `repro`), `settings.py`, `logging.py`. Status:
-built (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseline set|list|show`, `compare`, `gate`; `eval-file` is a hidden alias); planned (all other commands).
+built (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseline set|list|show`, `compare`, `gate`, `ckpt list|verify|prune`; `eval-file` is a hidden alias); planned (all other commands).
 
 ### `api.py`
 
@@ -113,7 +113,7 @@ One run is active per process (`RunAlreadyActiveError` otherwise); `Run` is a co
 `running`, so a process that dies without `finish` is visibly unfinished.
 
 Depends on: `runs/`, `repro`, `core/schema.py`, `settings.py`, `logging.py`; later `eval/`,
-`ckpt/`. Status: built (`init`, `log`, `log_artifact`, `log_eval`, `finish`, `Run`, `autolog`, `forward_to`); planned (`resume_path`).
+`ckpt/`. Status: built (`init`, `log`, `log_artifact`, `log_eval`, `finish`, `Run`, `autolog`, `forward_to`, `resume_path`).
 
 ## Application layer
 
@@ -286,7 +286,9 @@ JSON and HTML reports); planned: the prediction-diff gallery.
 
 ### `ckpt/`
 
-Responsibility: checkpoint manager semantics from [ADR-0006](../adr/0006-checkpoint-semantics.md).
+Responsibility: checkpoint manager semantics from [ADR-0006](../adr/0006-checkpoint-semantics.md)
+(including its amendment). Status: **built** and covered by unit, golden-style, chaos and
+property-style tests.
 
 ```python notest
 class CheckpointManager:
@@ -294,28 +296,50 @@ class CheckpointManager:
         self,
         run: Run,
         *,
-        dir: str | PathLike[str],
-        remote: str | None = None,
+        dir: str | PathLike[str] | None = None,       # default: CVPILOT_CHECKPOINT_DIR
+        remote: str | None = None,                    # default: CVPILOT_CHECKPOINT_REMOTE
+        remote_store: RemoteStore | None = None,      # inject a store (tests, other backends)
         keep_last: int = 3,
         keep_best: int = 2,
         monitor: str | None = None,
         mode: Literal["max", "min"] = "max",
-        every_n_minutes: float | None = None,
+        every_n_minutes: float | None = None,         # none given: every 10 minutes
         every_n_steps: int | None = None,
-        signals: Sequence[int] = (signal.SIGTERM, signal.SIGUSR1),
+        signals: Sequence[int] | None = None,         # default SIGTERM, SIGUSR1
+        grace_seconds: float = 30.0,
+        format: Literal["safetensors", "pt"] = "safetensors",
+        allow_pt_format: bool | None = None,          # CVPILOT_CKPT_ALLOW_PT; pt needs it
+        require_trust: Literal["any", "anchored", "authenticated"] | None = None,
+        notice_source: NoticeSource | str | None = None,   # "aws", "gcp"; off by default
+        ...                                           # limits, retries, clocks: see the API snapshot
     ) -> None
-    def maybe_save(self, step: int, *, model: Any, optimizer: Any | None = None,
-                   scheduler: Any | None = None, scaler: Any | None = None, rng: bool = True,
-                   dataloader_state: Mapping[str, Any] | None = None,
-                   metrics: Mapping[str, float] | None = None) -> CheckpointManifest | None
-    def save_now(self, step: int, **state: Any) -> CheckpointManifest
-    def restore_latest_valid(self, *, map_location: str = "cpu") -> dict[str, Any] | None
-    def verify(self, manifest: CheckpointManifest) -> bool
+    def maybe_save(self, step, *, model, optimizer=None, scheduler=None, scaler=None,
+                   rng=True, dataloader_state=None, metrics=None, ema=None) -> CheckpointManifest | None
+    def save_now(self, step, *, kind="last", **state) -> CheckpointManifest
+    def adopt(self, path, step) -> CheckpointManifest          # a framework-written file, as pt
+    def restore(self, kind="last", *, map_location="cpu", run_ids=None) -> Restored | None
+    def restore_latest_valid(self, *, map_location="cpu") -> dict[str, Any] | None
+    def verify(self, manifest) -> bool
+    def list(self) -> list[Entry]
     def preempted(self) -> bool
+    def close(self) -> None
 ```
 
-Depends on: `core/hashing.py`, `core/schema.py`; `remote/` through the `remotes` registry;
-`torch` and `safetensors` imported inside the functions that need them. Status: planned.
+Modules: `directory.py` (`RunCheckpoints`: one run's directory, atomic save, the trust rules, the
+walk back, retention), `fsops.py` (directory-descriptor file operations, no symlinks, bounded,
+`O_EXCL`), `serializers.py` (safetensors with a strict one-pass header parser, opt-in `pt` with a
+strict archive reader), `state.py` and `rng.py` (what a checkpoint holds and how it is validated
+on restore), `auth.py` (HMAC tags), `preempt.py` (flag, signal guard, notice poller),
+`remote.py` (`Mirror`: upload, verify, resume, fetch), `resume.py` (`resume_path`,
+`find_resume_point`). `store/checkpoints.py` keeps the digest of every manifest as the external
+anchor. Deviations from the first sketch: the `.pt` format is named `pt` and is opt-in, `last`
+checkpoints are safetensors files with the non-tensor state as bounded JSON, the pointers are
+`LATEST` and `LATEST_BEST`, `restore` returns a `Restored` (state, manifest, run, skipped,
+trust level) and `restore_latest_valid` only its state, and `ckpt restore` does not exist (the
+command is `ckpt verify`, `list` and `prune`).
+
+Depends on: `core/`, the `remotes`, `spot_notices` and `stores` registries (through `runs/`),
+`logging.py`, `settings.py`; the framework only for `pt`.
 
 ### `alerts/`
 
@@ -373,8 +397,9 @@ class MetricSink(Protocol):
 
 Phase 1 built `RunMeta`, `Repro`, `MetricPoint`, `Artifact`, `MetricStats`, the `RunStore`
 port that `runs/` uses and `MetricSink` with `log` and `log_artifact`; `EvalSnapshot`,
-`CheckpointManifest`, `Baseline`, `RunEvent` and `MetricSink.log_eval/checkpoint_saved` are
-planned. `Repro` redacts `command_line` and `config` on construction
+`CheckpointManifest` and `CheckpointPointer` (built with `ckpt/`), `Baseline` and the `RunStore`
+methods `put_manifest`/`get_manifest_digest` are built; `RunEvent` and `MetricSink.log_eval/checkpoint_saved` are
+planned (the manager records through the run handle instead). `Repro` redacts `command_line` and `config` on construction
 (`core/redact.py`, [06-cross-cutting.md](06-cross-cutting.md)). `core/ulid.py` generates
 monotonic ULIDs, `core/errors.py` holds the specific exceptions the CLI boundary reports.
 
@@ -486,7 +511,7 @@ class Hook(Protocol):
 | `hooks/hf_trainer.py` | `TrainerCallback`: `on_log`, `on_evaluate`, `on_save` | scalars, eval, checkpoints | planned |
 | `hooks/mmengine.py` | MMEngine hook plus `VisBackend` | scalars, COCO metrics, checkpoints | planned |
 | `hooks/rfdetr.py`, `hooks/torch_loop.py` | context manager plus explicit `log_eval` | explicit | planned |
-| `hooks/ultralytics.py` (`cvpilot[ultralytics]`, AGPL-3.0 notice) | `add_callback("on_fit_epoch_end" / "on_train_end")` on the model; reads `trainer.metrics`, the loss items and `validator.metrics.box.maps` with `validator.names` | losses, mAP, per-class AP (`val/AP/<class>`), step = epoch | built; the confusion matrix, `on_model_save` and best/last are planned with `ckpt/` |
+| `hooks/ultralytics.py` (`cvpilot[ultralytics]`, AGPL-3.0 notice) | `add_callback("on_fit_epoch_end" / "on_train_end")` on the model; reads `trainer.metrics`, the loss items and `validator.metrics.box.maps` with `validator.names` | losses, mAP, per-class AP (`val/AP/<class>`), step = epoch | built; `resume_arguments(path)` gives the verified `resume=` target (`hooks/lightning.py` has the same for `ckpt_path`); the confusion matrix and automatic adoption of framework checkpoints are planned |
 
 `api.autolog(target, project=..., forward_to=..., task=...)` finds the hook whose `matches`
 accepts the object (from the `hooks` registry, which imports no framework), checks its
@@ -564,9 +589,13 @@ with the token in a header, retries with exponential backoff (1 s to 60 s, jitte
 
 ### `remote/`
 
-fsspec upload and download for checkpoints and artifact export, with size and checksum
-verification after transfer. Registered under `remotes` keyed by URL scheme. Depends on:
-`fsspec` and the backend package (`s3fs`, `gcsfs`) imported lazily. Status: planned.
+Infrastructure adapters. `fsspec_store.py`: `RemoteStore` over fsspec for checkpoint upload and
+download, registered under `remotes` for the schemes `s3`, `gs`, `az` and `memory`; TLS on, bounded
+timeouts, the backend's retries turned off (the caller owns them), no credentials, validated keys,
+backend exceptions replaced by an `OSError` that names only the type. `spot.py`: AWS and GCP
+preemption notices, registered under `spot_notices` (fixed metadata hosts, no redirects, bounded
+answers). Depends on: `fsspec` and the backend package (`s3fs`, `gcsfs`, `adlfs`) imported lazily.
+Status: built for checkpoints (artifact export is planned).
 
 ### `notify/`
 

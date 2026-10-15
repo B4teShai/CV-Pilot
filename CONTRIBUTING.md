@@ -10,7 +10,11 @@ uv sync
 uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
 ```
 
-All four commands must pass before you open a pull request.
+All four commands must pass before you open a pull request. `uv sync` also installs the
+documentation tools: `NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict` builds the site, and
+after changing a command or its help text run `python scripts/gen_cli_reference.py` (a test fails
+when `docs/reference/cli.md` is stale). Every command in `docs/tutorial.md` and in the README
+quickstart is executed by a test.
 
 ## Before you start
 

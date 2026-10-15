@@ -44,7 +44,14 @@ bundled third-party material lives in `NOTICE`.
 
 ## Supply-chain hygiene
 
-- Lockfile committed; CI installs with `uv sync --locked`.
+- Lockfile committed; CI installs with `uv sync --locked`, a `lock` job runs `uv lock --check`, and an
+  `audit` job runs `pip-audit` (pinned, in the `audit` dependency group) against the lock.
+- Documentation tools (`mkdocs`, `mkdocs-material`) live in the `docs` dependency group, pinned to
+  exact versions, and are never core dependencies or extras; `build` and `twine` are dev-only.
+- `safetensors` and `fsspec` are optional extras (`[safetensors]`, `[remote]`), not core; the
+  wheel's `Requires-Dist` is checked by `tests/release/test_packaging.py`.
+- Releases are built by a secret-free job and published by a separate trusted-publishing job
+  (`docs/engineering/release.md`); actions in every workflow are pinned to verified full SHAs.
 - Direct dependencies carry a lower bound; upper bounds only when a known break exists.
 - GitHub Actions are pinned to a full commit SHA (with the tag in a trailing comment); a test
   (`tests/unit/test_action.py`) fails on any tag-pinned third-party action, any `${{ ... }}`

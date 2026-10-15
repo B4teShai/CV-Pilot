@@ -36,17 +36,20 @@ const manifest = entity("manifest", ...at(2, 0), W, "CheckpointManifest", [
   "step: int              PK",
   "kind: last | best      PK",
   "path: str",
-  "uri: str?",
-  "sha256: str            FK",
+  "uri: str?  (intended)",
+  "sha256: str",
   "size_bytes: int",
-  "format: safetensors | torch",
-  "metric_key: str?",
-  "metric_value: float?",
+  "format: safetensors | pt",
+  "metric_key/value/mode?",
   "versions: json",
   "git_commit: str?",
   "dataset_hash: str",
   "created_at: datetime",
-], COLORS.planned);
+  "prev_manifest_sha256",
+  "prev_chain_sha256",
+  "chain_sha256",
+  "auth_tag: str? (HMAC)",
+], COLORS.built);
 
 const metric = entity("metric", ...at(0, 1), W, "MetricPoint", [
   "run_id: str            PK FK",
@@ -102,7 +105,6 @@ export default {
     arrow(repro.box, run.box, "0..1 → 1"),
     arrow(baseline.box, run.box, "0..* → 1"),
     arrow(manifest.box, run.box, "0..* → 1"),
-    arrow(manifest.box, artifact.box, "1 → 1 (sha256)"),
     arrow(metric.box, run.box, "0..* → 1"),
     arrow(artifact.box, run.box, "0..* → 1"),
     arrow(snapshot.box, run.box, "0..* → 1"),
@@ -110,5 +112,6 @@ export default {
     legend(40, 1260, [[COLORS.built, "built (table in runs.sqlite; MetricPoint also in Parquet)"], [COLORS.planned, "planned"]]),
     note("n1", "PK = primary key, FK = foreign key, ? = nullable. Arrows point from the referencing entity to the referenced one, labelled with cardinality.", 40, 1300, 14),
     note("n2", "RunMeta.parent_run_id references RunMeta.run_id (resumed run → preempted parent). Baseline pins the EvalSnapshot (run_id, eval_set_hash, step) and its digest; rows are append-only, digested and chained. EvalSnapshot FKs reference Artifact.sha256.", 40, 1324, 14),
+    note("n3", "CheckpointManifest rows (checkpoint_manifest) hold the digest of each manifest file, append-only; the files live in the checkpoint directory.", 40, 1348, 14),
   ],
 };

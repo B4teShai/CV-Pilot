@@ -25,7 +25,7 @@ const ci = container("ci", ...at(5, 0), "cvpilot gate", "exit 0 / 1 / 2", true);
 
 // Training machine.
 const trainer = container("trainer", ...at(0, 1, 2), "trainer process", "framework + hooks + api in-process; sync thread");
-const ckptDir = store("ckptdir", ...at(0, 2), "/checkpoint", "last/, best/, LATEST");
+const ckptDir = store("ckptdir", ...at(0, 2), "/checkpoint", "last/, best/, LATEST", true);
 const runStore = store("runstore", ...at(1, 2), "local run store", "~/.cvpilot/<proj>/", true);
 
 // Server host.
@@ -66,6 +66,6 @@ export default {
 
     c4Legend(40, 1060),
     statusLegend(40, 1100),
-    note("n1", "Built: the CLI, gate, the local run store, hooks and forwarder threads (in the trainer process). Sync, checkpoints and the server are planned. Client-side alert rules deliver straight to the channels when no server is configured (arrow omitted).", 400, 1102, 14),
+    note("n1", "Built: the CLI, gate, the local run store, hooks, the checkpoint manager and forwarder threads (in the trainer process). Checkpoints are built; sync and the server are planned. Client-side alert rules deliver straight to the channels when no server is configured (arrow omitted).", 400, 1102, 14),
   ],
 };

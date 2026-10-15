@@ -21,7 +21,7 @@ const objstore = external("objstore", ...at(2, 0), "Object storage", "S3 / GCS v
 // Package containers.
 const cli = container("cli", ...at(0, 1), "cvpilot CLI", "Typer: eval, baseline, gate", true);
 const api = container("api", ...at(1, 1), "Python API", "init, log, autolog", true);
-const ckpt = container("ckpt", ...at(2, 1), "checkpoint manager", "atomic save, restore");
+const ckpt = container("ckpt", ...at(2, 1), "checkpoint manager", "atomic save, verified restore", true);
 const compare = container("compare", ...at(0, 2), "compare + gate", "deltas, fail-closed gate, reports", true);
 const evalEngine = container("eval", ...at(1, 2), "eval engine", "mAP, per-class, slices", true);
 const sync = container("sync", ...at(2, 2), "sync client", "offline-first outbox");
@@ -71,6 +71,6 @@ export default {
 
     c4Legend(40, 1000),
     statusLegend(40, 1040),
-    note("n1", "Blue containers are planned; green is built and tested today. Checkpoints, sync, alerts and the server are planned; hooks live in the trainer process and are built.", 400, 1042, 14),
+    note("n1", "Blue containers are planned; green is built and tested today. Sync, alerts and the server are planned; hooks and the checkpoint manager live in the trainer process and are built.", 400, 1042, 14),
   ],
 };

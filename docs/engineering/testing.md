@@ -13,6 +13,8 @@ target.
 | Golden | `tests/golden/` | A documented input produces a byte-identical or field-identical output (format round-trips, reports, manifests) | every push |
 | Parity | `tests/parity/` | A metric or transformation matches a reference implementation within a stated tolerance | every push while fast (the pycocotools suite takes about 15 s; marker `parity`) |
 | Chaos | `tests/chaos/` | The system survives interrupted writes, truncated files, killed processes | nightly or on touch |
+| Docs | `tests/docs/` | The documentation builds strictly with no remote assets, every command of the tutorial runs and prints what the page says, the generated CLI reference matches the code | every push (the `docs` job also builds the site) |
+| Release | `tests/release/` | The wheel and sdist contain exactly what they should (license, NOTICE, `py.typed`, only the documented core dependencies, nothing from the repository), `twine check --strict` passes, the wheel installs and runs in clean environments | every push (the `package` job) |
 | Smoke | `tests/smoke/` | A real tracker or framework library works with the adapter | manual, `pytest -m real_libs`; off by default (`addopts` deselects the `real_libs` marker), skips when the library is absent, needs no network |
 | Benchmark | `benchmarks/` | A performance budget is met on a named reference input | manual, before release |
 
