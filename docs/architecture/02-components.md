@@ -11,7 +11,7 @@ Every other package is planned and its interface is the contract it will be buil
 | Layer | Packages |
 |---|---|
 | Interface | `cli/` (built), `api.py` (built: `init`, `log`, `log_artifact`, `log_eval`, `finish`) |
-| Application | `runs/` (built), `repro` (built), `eval/` (built), `compare/` (baselines built; compare and `gate` follow), `ckpt/`, `alerts/` |
+| Application | `runs/` (built), `repro` (built), `eval/` (built), `compare/` (baselines, compare, gate built), `ckpt/`, `alerts/` |
 | Domain | `core/schema.py`, `core/hashing.py` (built); `core/ulid.py`, `core/redact.py`, `core/jsonable.py`, `core/errors.py` (built); `core/metrics.py`, `core/confusion.py` (built) |
 | Infrastructure | `store/`, `capture/` (built); `hooks/`, `forward/`, `sync/`, `remote/`, `notify/`, `server/` |
 | Cross-cutting | `logging.py`, `settings.py`, `registry.py` (built) |
@@ -31,7 +31,7 @@ Public interface (built):
 
 ```python
 def main() -> NoReturn            # entry point `cvpilot`; exit 0/1/2/130
-# commands: --version, doctor, runs list|show, repro, eval, baseline set|list|show
+# commands: --version, doctor, runs list|show, repro, eval, baseline set|list|show, compare, gate
 ```
 
 `runs list|show` and `repro` accept `--project` (default `CVPILOT_PROJECT`; missing gives exit
@@ -49,9 +49,9 @@ Planned commands (each documents its exit codes in `--help` and in [04-flows.md]
 cvpilot runs ls [--project P] [--status S] [--json]
 cvpilot runs show <run_id> [--json]
 cvpilot eval <run_id> --preds preds.parquet --gts gts.parquet --classes names.txt [--slices key=column]... [--step N] [--seed N] [--resamples N] [--json]
-cvpilot compare <run_id> --baseline (tag:<tag>|<run_id>) [--eval-set NAME] --report cmp.html
+cvpilot compare <run_id> --baseline (tag:<tag>|<run_id>) [--eval-set HASH] [--step N] [--json]
 cvpilot gate <run_id> --baseline ... [--max-drop K=V]... [--per-class-max-drop K=V]...
-             [--slice-max-drop "key=*:V"]... [--min-images N]
+             [--slice-max-drop "key=*:V"]... [--min-images N] [--skip-small-slices] [--json]
 cvpilot baseline set <tag> <run_id> [--eval-set HASH] [--step N] [--replace] | list [--history] | show <tag>
 cvpilot ckpt ls <dir> | verify <dir> | restore <dir> [--to PATH]
 cvpilot repro <run_id>
@@ -61,7 +61,7 @@ cvpilot server [--host H] [--port N]        # requires the [server] extra
 ```
 
 Depends on: application packages (`runs/`, `repro`), `settings.py`, `logging.py`. Status:
-built (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseline set|list|show`; `eval-file` is a hidden alias); planned (all other commands).
+built (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseline set|list|show`, `compare`, `gate`; `eval-file` is a hidden alias); planned (all other commands).
 
 ### `api.py`
 
@@ -202,26 +202,57 @@ registries. Status: built.
 
 ### `compare/` and `gate`
 
-Responsibility: load two snapshots, refuse when `eval_set_hash` differs, compute headline,
-per-class and per-slice deltas with bootstrap CIs, render the HTML report with the
-prediction-diff gallery, evaluate thresholds, return the exit code.
+Responsibility: pin baselines, load two verified snapshots, refuse when they are not
+comparable, compute headline, per-class, slice and confusion deltas, evaluate thresholds and
+return the exit code. Semantics and trade-offs: [ADR-0007](../adr/0007-compare-and-gate-semantics.md).
 
 ```python
 @dataclass(frozen=True)
 class Thresholds:
-    max_drop: Mapping[str, float]              # {"mAP50_95": 0.5}
+    max_drop: Mapping[str, float]              # {"mAP50_95": 0.5}, points on the 0..100 scale
     per_class_max_drop: Mapping[str, float]    # {"AP50_95": 2.0}
-    slice_max_drop: Mapping[str, float]        # {"camera=*": 1.5}
+    slice_max_drop: Mapping[str, float]        # {"camera=*": 1.5} or {"camera=cam03": 1.5}
     min_images: int = 30
+    skip_small_slices: bool = False            # explicit opt-in; the default fails small slices
 
-def compare(candidate: EvalSnapshot, baseline: EvalSnapshot, *, seed: int = 0) -> Comparison
-def render_report(cmp: Comparison, out: Path, *, max_gallery_images: int = 200) -> Path
-def gate(cmp: Comparison, thresholds: Thresholds) -> GateResult   # .passed, .violations
+def compare(candidate: EvalSnapshot, baseline: EvalSnapshot, *,
+            confusion: ConfusionDelta | None = None) -> Comparison
+def gate(cmp: Comparison, thresholds: Thresholds) -> GateResult   # .passed, .violations, .skipped
+def resolve(project, run_id, baseline_ref, *, eval_set=None, step=None, with_confusion=False,
+            store_dir=None) -> Resolved                   # verified snapshots
+def set_baseline(project, tag, run_id, *, eval_set=None, step=None, replace=False, store_dir=None) -> Baseline
 ```
 
-`compare()` raises `EvalSetMismatchError` when the hashes differ; the CLI logs
-`compare_refused` and exits 1. Depends on: `core/metrics.py`, `core/schema.py`; `stores`
-registry. Status: planned.
+`compare()` raises `CompareRefusedError` (`EvalSetMismatchError` for a different
+`eval_set_hash`) unless `eval_set_hash`, `task`, `class_names` (order included) and the
+evaluation parameters are equal; snapshots without recorded parameters are refused because
+they cannot be checked. The CLI logs `compare_refused` with `reason` and both hashes and exits
+1; no result or report exists. Deltas are `(candidate - baseline) * 100` points, negative
+being a regression. Headline deltas carry the stored bootstrap intervals and whether they
+overlap (`overlap`, `separated`, `unknown`); `compare` does no resampling, so it is
+deterministic and its cost does not depend on the image count. Per-class deltas are sorted
+worst first with the support of both sides; unusable rows (`missing`, `not_finite`) come before
+the measured ones, classes without ground truth (`not_applicable`) last. Slice deltas flag
+absent slices and slices built from another column (`slice_spec`). The confusion delta
+(`compare/confusion.py`) reads both confusion artifacts through `open_artifact` (digest verified),
+bounds size, rows and values, and reports the changed cells largest first plus the change in
+missed ground truth (`[true, background]`) and spurious detections (`[background, pred]`).
+
+`gate()` fails closed (module docstring of `compare/gate.py`): an absent or non-finite
+metric, an absent, mismatched or too small slice, an evaluation set below `min_images`, a
+per-class threshold that gated no class and a slice threshold that matched nothing are all
+violations. At least one threshold is required. `resolve()` never reads a stored comparison or
+report: snapshots come from `get_snapshot` (file digest and run chain verified), a tag from
+`get_baseline` (record, baseline chain and pinned snapshot digest verified). Text output
+(`compare/render_text.py`) passes every name through `safe_text` and starts each line with
+`gate:` or two spaces so a class name cannot become a CI workflow command.
+
+Deviations from the first sketch: `compare()` has no `seed` (no resampling, see above);
+`render_report` and the gallery are described under Reports below; `baseline rm` does not
+exist (pins are append-only); the report is written only to the path given and is not
+registered as an artifact, so `gate` never writes to the store. Depends on: `core/`, the
+`stores` and `tables` registries. Status: built (baselines, compare, gate, JSON output);
+reports: see Reports.
 
 ### `ckpt/`
 

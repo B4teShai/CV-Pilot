@@ -25,8 +25,10 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `metrics_rejected` | ERROR | `run_id`, `key`, `step` | `runs/`, `store/` | planned (today `DuplicateMetricError` is raised to the caller) |
 | `store_write_failed`, `store_version_unsupported` | ERROR | `command`, `store_version`, `library_version`, `exc_info` | CLI boundary, from `StoreError` and `StoreVersionError` (the store raises, it does not log) | built |
 | `eval_completed` | INFO | `run_id`, `step`, `eval_set_hash`, `n_images`, `n_classes`, `n_predictions`, `task`, `duration_ms` | `eval/` | built |
-| `compare_completed`, `compare_refused` | INFO / ERROR | `candidate_run_id`, `baseline_run_id`, `candidate_eval_set_hash`, `baseline_eval_set_hash`, `seed` | `compare/` | planned |
-| `gate_passed`, `gate_failed`, `slice_skipped` | INFO / ERROR / WARN | `run_id`, `baseline_tag`, `n_violations`, `worst_metric`, `worst_delta`, `slice`, `n_images` | `gate` | planned |
+| `compare_completed` | INFO | `candidate_run_id`, `baseline_run_id`, `candidate_eval_set_hash`, `baseline_eval_set_hash`, `candidate_step`, `baseline_step` | `compare/` | built |
+| `compare_refused` | ERROR | `reason` (`eval_set_hash`, `task`, `class_names`, `params`, `params_missing`, `no_candidate_snapshot`, `no_baseline_snapshot`), `candidate_run_id`, `baseline_run_id`, `candidate_eval_set_hash`, `baseline_eval_set_hash` | `cli/` boundary, from `CompareRefusedError` | built |
+| `gate_passed`, `gate_failed` | INFO / ERROR | `run_id`, `baseline_tag` (null for a run-id baseline), `n_violations`, and for a failure `worst_metric`, `worst_kind`, `worst_delta` (points, null when unverifiable) | `compare/` | built |
+| `slice_skipped` | WARN | `run_id`, `slice` | `compare/`, only with `--skip-small-slices` | built |
 | `baseline_set` | INFO | `project`, `tag`, `run_id`, `eval_set_hash`, `step`, `replaced` | `compare/` | built |
 | `baseline_refused` | ERROR | `project`, `tag`, `run_id`, `eval_set_hash` | `cli/` boundary, from `BaselineRefusedError` | built |
 | `baseline_integrity_failed` | ERROR | `command` | `cli/` boundary, from `BaselineIntegrityError` | built |
@@ -63,8 +65,8 @@ Contract: one boundary in `cli/app.py`; `0 / 1 / 2 / 130`. Per command family:
 | `baseline set|list|show` (built) | refused (no such snapshot or eval set, ambiguous eval set, tag already pinned without `--replace`), unknown tag, run not found, snapshot or baseline fails integrity verification | unknown option, missing `--project`, malformed tag, run id or eval set, step out of range | a pin is append-only; `list` of a project without a store is empty and exit 0 |
 | `import` (planned) | importer parse error | unknown option, missing `--project` with no `CVPILOT_PROJECT` | |
 | `eval` (built) | run not found, input tables or files fail validation (including slice cardinality and malformed Parquet), snapshot exists, write error | bad `--slices` syntax, missing file, malformed run id, number out of range | parity is tested, not checked at run time |
-| `compare` (planned) | refused (`eval_set_hash` mismatch), report cannot be written | bad `--baseline` syntax | refusal is a data problem, so it is 1, not 2 |
-| `gate` (planned) | any violation, refused comparison, run or baseline missing | bad threshold syntax | CI treats any non-zero as blocking; `1` with `gate_failed` is the regression signal |
+| `compare` (built) | refused (`eval_set_hash`, task, class names or parameters differ, no candidate snapshot), run or baseline missing, snapshot or baseline fails verification | bad `--baseline` syntax or run id, no project | refusal is a data problem, so it is 1, not 2 |
+| `gate` (built) | any violation (exceeded drop, absent or non-finite metric, absent or too small slice, too few images, unmatched threshold), refused comparison, run or baseline missing, any verification failure, any unexpected exception | bad threshold syntax, no threshold, `--min-images` below 1, bad `--baseline` | CI treats any non-zero as blocking; `1` with `gate_failed` is the regression signal; no code path exits 0 without `gate_passed` |
 | `ckpt verify|restore|ls` (planned) | corrupt or missing checkpoint found, nothing to restore | path is not a checkpoint directory | |
 | `sync` (planned) | server unreachable after retries in `--once` mode, auth rejected | `CVPILOT_SERVER_URL` set without `CVPILOT_TOKEN` | |
 | `server` (planned) | bind failure, database migration failure | `[server]` extra missing, invalid database URL | |

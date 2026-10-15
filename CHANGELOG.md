@@ -7,6 +7,14 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- `cvpilot compare RUN --baseline tag:NAME|RUN_ID` and `cvpilot gate RUN --baseline ... --max-drop
+  NAME=POINTS --per-class-max-drop NAME=POINTS --slice-max-drop "KEY=*:POINTS" --min-images N`.
+  Deltas and limits are points on the 0..100 scale (a drop is `(baseline - candidate) * 100`;
+  improvements never fail). The gate fails closed: absent or non-finite metrics, absent,
+  mismatched or too small slices, too few images, thresholds that gated nothing, snapshots or
+  baselines that fail verification, and a different `eval_set_hash`, task, class names or
+  evaluation parameters (`compare_refused`, exit 1) all fail. Events `compare_completed`,
+  `compare_refused`, `gate_passed`, `gate_failed`, `slice_skipped`. ADR-0007.
 - Baselines: `cvpilot baseline set|list|show` pin a verified snapshot under a tag. The `baseline`
   table is append-only (`--replace` adds a newer pin and keeps the history), each row carries a
   digest and a hash chain, and every read re-verifies the record, the chain and the pinned

@@ -11,6 +11,7 @@ import typer
 from cvpilot import __version__
 from cvpilot.cli.baseline_cmds import baseline_app
 from cvpilot.cli.eval_cmds import eval_command
+from cvpilot.cli.gate_cmds import compare_command, gate_command
 from cvpilot.cli.runs_cmds import repro_command, runs_app
 from cvpilot.core.errors import CvpilotError
 from cvpilot.logging import clear_request_context, configure_logging, get_logger, scrub
@@ -46,6 +47,8 @@ app.add_typer(runs_app, name="runs")
 app.add_typer(baseline_app, name="baseline")
 app.command("repro")(repro_command)
 app.command("eval")(eval_command)
+app.command("compare")(compare_command)
+app.command("gate")(gate_command)
 app.command("eval-file", hidden=True)(eval_command)
 
 

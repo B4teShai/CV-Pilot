@@ -4,9 +4,8 @@ Exit codes follow [errors-and-logging.md](../engineering/errors-and-logging.md):
 `1` the command ran and failed (including a gate that fails or a refused comparison), `2`
 usage or configuration error, `130` interrupted. Log event names are the constant
 `message` values of [06-cross-cutting.md](06-cross-cutting.md). Flow B is planned. In Flow A the
-run-capture steps (`run_started`, `log` to store, `metrics_flushed`, `run_finished`) and the
-eval steps 3 and 4 (`log_eval`, `eval_completed`) are built; hooks, compare and gate are
-planned, see the status note under Flow A.
+run-capture steps, the eval steps 3 and 4 and the compare and gate steps 5 to 8 are built; hooks
+and forwarders are described in the status note under Flow A.
 
 ## Flow A: hook → log → eval → gate
 
@@ -39,13 +38,14 @@ Sequence:
    slices and headline metrics, writes `predictions.parquet` and `confusion.parquet` to the
    CAS and the `EvalSnapshot` row; `eval_completed` is logged with `eval_set_hash`, `step`
    and `n_images`.
-5. In CI, `cvpilot gate <run_id> --baseline tag:prod ...` resolves the baseline, loads the
-   candidate snapshot (latest step for the baseline's `eval_set_hash`) and the baseline
-   snapshot.
-6. If the hashes differ the comparison is refused (invariant 4).
-7. Otherwise `compare/` computes deltas with bootstrap CIs over images (seeded) and `gate`
-   evaluates the thresholds; the report is rendered when `--report` is given.
-8. The command prints a one-line verdict and the violations table to `stdout` and exits.
+5. In CI, `cvpilot gate <run_id> --baseline tag:prod ...` resolves the baseline (record, chain
+   and pinned snapshot digest verified), loads the baseline snapshot and the candidate snapshot
+   (latest step for the baseline's `eval_set_hash`), each verified against its digest and chain.
+6. If the evaluation sets, tasks, class names or evaluation parameters differ the comparison is
+   refused (invariant 4) and nothing else runs.
+7. Otherwise `compare/` computes deltas (the bootstrap intervals are those stored in the
+   snapshots) and `gate` evaluates the thresholds; the report is rendered when requested.
+8. The command prints a one-line verdict and the violations to `stdout` and exits.
 
 Failure paths:
 
@@ -55,13 +55,16 @@ Failure paths:
 | Duplicate `(key, step)` in a batch | batch rejected, exception to the caller; training continues only if the caller catches it | n/a | `metrics_rejected` |
 | Forwarder error (tracker down) | skipped for this batch, retried next batch; training unaffected | n/a | `forward_failed` (WARN) |
 | Store write error (disk full, permissions) | `log()` raises `StoreError`; training loop decides | n/a | `store_write_failed` (ERROR) |
-| `gate` run or baseline not found | one line on `stderr` | 1 | `command_failed` |
-| Unknown option, bad threshold syntax (`--max-drop mAP50_95`) | Typer usage error | 2 | none (usage errors are not logged) |
-| `eval_set_hash` mismatch | refused, no report | 1 | `compare_refused` |
-| Fewer images than `--min-images` in a slice | slice excluded from gating, listed in the report | 0 or 1 by the other thresholds | `slice_skipped` (WARN) |
-| Any threshold exceeded | violations printed | 1 | `gate_failed` |
-| All thresholds hold | verdict printed | 0 | `gate_passed` |
-| Ctrl-C during bootstrap | partial report discarded | 130 | none |
+| `gate` run, baseline tag or run not found, or the project has no store | one line on `stderr` | 1 | `command_failed` |
+| Unknown option, bad threshold syntax (`--max-drop mAP50_95`), no threshold given, `--min-images 0` | Typer usage error | 2 | none (usage errors are not logged) |
+| `eval_set_hash`, task, class names or evaluation parameters differ, or the candidate has no snapshot for the baseline's set | refused, no verdict and no report | 1 | `compare_refused` (with `reason`) |
+| A snapshot, the baseline row or the baseline chain fails verification | one line on `stderr`, no verdict | 1 | `snapshot_integrity_failed` or `baseline_integrity_failed` |
+| Metric absent or not finite, slice absent or built from another column, evaluation set smaller than `--min-images`, per-class or slice threshold that gated nothing | violation listed | 1 | `gate_failed` |
+| Slice smaller than `--min-images` | violation `slice_too_small`; with `--skip-small-slices` it is listed as skipped and a threshold whose slices were all skipped still fails | 1 (0 with the flag, when the other checks hold) | `gate_failed`; `slice_skipped` (WARN) with the flag |
+| Any threshold exceeded (a drop above the limit, in points on the 0..100 scale) | violations printed, worst first | 1 | `gate_failed` |
+| All thresholds hold (improvements never fail) | verdict printed | 0 | `gate_passed` |
+| Unexpected exception anywhere in the command | one line on `stderr` | 1 | `command_failed` |
+| Ctrl-C while the command runs | partial output discarded | 130 | none |
 
 Logged events (in order of a successful flow): `run_started`, `hook_attached`,
 `metrics_flushed`, `eval_completed`, `compare_completed`, `gate_passed` or `gate_failed`,
@@ -79,9 +82,10 @@ the tables, hashes the evaluation set, refuses an existing `(run, hash, step)`, 
 `--checkpoint-sha256` and `--git-commit` record provenance. Failure paths of eval: a closed run, invalid tables, a limit exceeded, a slice cardinality
 above 256, malformed Parquet or an existing snapshot give `EvalInputError`,
 `SliceCardinalityError` or `SnapshotExistsError`, exit 1 with one `error:` line and one
-`command_failed` event, and nothing is stored. Hooks,
-`compare/`, `gate`, forwarders, the outbox and alert rules are not built,
-and the duplicate-batch failure is raised to the caller without a `metrics_rejected` event.
+`command_failed` event, and nothing is stored. Steps 5 to 8 are built: `cvpilot baseline`,
+`cvpilot compare` and `cvpilot gate` (ADR-0007) read only verified snapshots and never trust a
+stored comparison. Hooks, forwarders, the outbox and alert rules are not built, and the
+duplicate-batch failure is raised to the caller without a `metrics_rejected` event.
 `cvpilot runs show` and `cvpilot repro` read the result.
 
 ## Flow B: atomic checkpoint → preemption → restore_latest_valid

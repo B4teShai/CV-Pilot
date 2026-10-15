@@ -208,9 +208,10 @@ test that will cover it.
    instead of a set of every point, and is enforced twice: at `log()` and by the store. Built.
    The remaining invariants carry their status in the next list.
 3. `EvalSnapshot` is unique on `(run_id, eval_set_hash, step)` and immutable (a repeat raises `SnapshotExistsError`; triggers refuse UPDATE and DELETE). Built.
-4. `compare` and `gate` require `candidate.eval_set_hash == baseline.eval_set_hash`; when they
-   differ the command logs `compare_refused` with both hashes and exits 1 without producing a
-   report.
+4. `compare` and `gate` require `candidate.eval_set_hash == baseline.eval_set_hash`, equal
+   `task`, equal `class_names` and equal `params`; when anything differs, or `params` is missing,
+   the command logs `compare_refused` with the reason and both hashes and exits 1 without
+   producing a result or report. Built.
 5. `Artifact.sha256` equals the SHA-256 of the stored bytes; the CAS path is
    `artifacts/<sha256[:2]>/<sha256>`; identical content is stored once per project.
 6. `EvalSnapshot.confusion_sha256` and `predictions_sha256` reference `Artifact` rows of the
@@ -242,7 +243,7 @@ test that will cover it.
 
 Status of the invariants: built and tested: 1, 2, 3, 5, 6, 9, 10 (`resume_from` checks the parent status; the acyclic and `parent_run_id`
 checks are schema and foreign-key enforced), 12, 14 (`RunMeta.schema_version` and the Parquet
-metadata), 11, 15. Planned with their packages: 4 (with `compare`), 7, 8, 13.
+metadata), 4, 11, 15. Planned with their packages: 7, 8, 13.
 
 ## On-disk layout
 
