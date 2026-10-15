@@ -42,6 +42,7 @@ from cvpilot.core.schema import (
     ACTIVE_STATUSES,
     Artifact,
     ArtifactKind,
+    Baseline,
     EvalSnapshot,
     MetricPoint,
     MetricStats,
@@ -52,6 +53,7 @@ from cvpilot.core.schema import (
     is_terminal,
 )
 from cvpilot.store import additive as _additive
+from cvpilot.store import baselines as _baselines
 from cvpilot.store import migrations as _migrations
 from cvpilot.store import snapshots as _snapshots
 from cvpilot.store.paths import require_run_id, require_sha256, resolve_project_dir
@@ -787,6 +789,47 @@ class LocalRunStore:
     def list_snapshots(self, run_id: str) -> list[EvalSnapshot]:
         """All verified snapshots of a run ordered by eval set hash then step."""
         return _snapshots.list_snapshots(self, run_id)
+
+    def snapshot_digest(self, run_id: str, eval_set_hash: str, step: int) -> str:
+        """SHA-256 of the snapshot file at ``step``, after verifying the file and the chain.
+
+        Raises:
+            SnapshotNotFoundError, SnapshotIntegrityError, StoreError: see ``get_snapshot``.
+        """
+        _snapshots.get_snapshot(self, run_id, eval_set_hash, step)
+        digest: str = self._query(
+            "SELECT snapshot_sha256 FROM eval_snapshot WHERE run_id=? AND eval_set_hash=? "
+            "AND step=?",
+            (run_id, eval_set_hash, step),
+        )[0][0]
+        return digest
+
+    # -- baselines (see store/baselines.py) ------------------------------
+
+    def put_baseline(self, baseline: Baseline, *, replace: bool = False) -> None:
+        """Pin a snapshot under a tag; an existing tag needs ``replace`` and stays in the history.
+
+        Raises:
+            RunNotFoundError: unknown run.
+            BaselineRefusedError: the run is of another project, has no such snapshot, or the
+                snapshot digest differs from the stored one.
+            BaselineExistsError: the tag is pinned and ``replace`` is false.
+            StoreError: too many rows or the write failed.
+        """
+        _baselines.put_baseline(self, baseline, replace=replace)
+
+    def get_baseline(self, tag: str) -> Baseline:
+        """The newest pin of ``tag``, verified (record, chain and the pinned snapshot digest).
+
+        Raises:
+            BaselineNotFoundError: the tag is unknown.
+            BaselineIntegrityError: a row, the chain or the pinned snapshot does not verify.
+        """
+        return _baselines.get_baseline(self, tag)
+
+    def list_baselines(self, *, history: bool = False) -> list[Baseline]:
+        """Verified pins: newest per tag, or with ``history`` every row in pin order."""
+        return _baselines.list_baselines(self, history=history)
 
 
 def open_store(project: str, root: Path | None = None, *, create: bool = True) -> LocalRunStore:

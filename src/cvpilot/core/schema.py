@@ -44,6 +44,8 @@ ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "resumed"})
 TERMINAL_STATUSES: frozenset[str] = frozenset({"finished", "failed", "preempted"})
 
 PROJECT_PATTERN = r"[a-z0-9][a-z0-9_-]{0,63}"
+BASELINE_TAG_PATTERN = r"[a-z0-9][a-z0-9_-]{0,31}"
+_TAG = re.compile(BASELINE_TAG_PATTERN)
 _PROJECT = re.compile(PROJECT_PATTERN)
 _FRAMEWORK = re.compile(r"[A-Za-z0-9_.-]+==[^\s=]+")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -445,6 +447,60 @@ class EvalSnapshot(_Model):
         return self
 
 
+def is_valid_tag(value: object) -> bool:
+    """True for a baseline tag (``[a-z0-9][a-z0-9_-]{0,31}``); never starts with ``-``."""
+    return isinstance(value, str) and _TAG.fullmatch(value) is not None
+
+
+class Baseline(_Model):
+    """A named pin of one snapshot, used by ``compare`` and ``gate`` (invariant 11).
+
+    ``snapshot_sha256`` is the digest of the pinned snapshot file at pin time; every read
+    compares it with the stored snapshot, so a snapshot rewritten after pinning is detected.
+    """
+
+    project: str
+    tag: str
+    run_id: str
+    eval_set_hash: str
+    step: StrictInt = Field(ge=0, le=MAX_STEP)
+    snapshot_sha256: str
+    pinned_at: AwareDatetime
+
+    @field_validator("project")
+    @classmethod
+    def _project(cls, value: str) -> str:
+        if not is_valid_project(value):
+            raise ValueError(f"must match {PROJECT_PATTERN}")
+        return value
+
+    @field_validator("tag")
+    @classmethod
+    def _tag_pattern(cls, value: str) -> str:
+        if not is_valid_tag(value):
+            raise ValueError(f"must match {BASELINE_TAG_PATTERN}")
+        return value
+
+    @field_validator("run_id")
+    @classmethod
+    def _ulid(cls, value: str) -> str:
+        if not is_valid_ulid(value):
+            raise ValueError("must be a valid ULID")
+        return value
+
+    @field_validator("eval_set_hash", "snapshot_sha256")
+    @classmethod
+    def _sha(cls, value: str) -> str:
+        if not _SHA256.fullmatch(value):
+            raise ValueError("must be 64 lower-case hex characters")
+        return value
+
+    @field_validator("pinned_at")
+    @classmethod
+    def _to_utc(cls, value: datetime) -> datetime:
+        return _utc(value)
+
+
 class MetricSink(Protocol):
     """What framework hooks talk to; implemented by ``runs``.
 
@@ -496,6 +552,10 @@ class RunStore(Protocol):
     ) -> EvalSnapshot: ...
     def list_snapshots(self, run_id: str) -> list[EvalSnapshot]: ...
     def has_snapshot(self, run_id: str, eval_set_hash: str, step: int) -> bool: ...
+    def snapshot_digest(self, run_id: str, eval_set_hash: str, step: int) -> str: ...
+    def put_baseline(self, baseline: Baseline, *, replace: bool = False) -> None: ...
+    def get_baseline(self, tag: str) -> Baseline: ...
+    def list_baselines(self, *, history: bool = False) -> list[Baseline]: ...
     def artifact_path(self, sha256: str) -> Path: ...
     def open_artifact(self, sha256: str) -> BinaryIO: ...
     def close(self) -> None: ...

@@ -102,3 +102,88 @@ class SnapshotIntegrityError(StoreError):
     """A stored snapshot, artifact or the snapshot hash chain does not match its digest."""
 
     event = "snapshot_integrity_failed"
+
+
+class BaselineRefusedError(CvpilotError, ValueError):
+    """A baseline cannot be pinned (no such snapshot, wrong project, tag taken)."""
+
+    event = "baseline_refused"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        project: str | None = None,
+        tag: str | None = None,
+        run_id: str | None = None,
+        eval_set_hash: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self._fields = {
+            "project": project,
+            "tag": tag,
+            "run_id": run_id,
+            "eval_set_hash": eval_set_hash,
+        }
+
+    def log_fields(self) -> dict[str, Any]:
+        return {k: v for k, v in self._fields.items() if v is not None}
+
+
+class BaselineExistsError(BaselineRefusedError):
+    """The tag is already pinned; replacing it needs an explicit ``replace``."""
+
+
+class BaselineNotFoundError(CvpilotError, LookupError):
+    """No baseline carries this tag (an unknown tag never passes a gate)."""
+
+
+class BaselineIntegrityError(SnapshotIntegrityError):
+    """A baseline row, the baseline hash chain or the pinned snapshot does not verify."""
+
+    event = "baseline_integrity_failed"
+
+
+class CompareRefusedError(CvpilotError, ValueError):
+    """Two snapshots are not comparable; the comparison produces no result."""
+
+    event = "compare_refused"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        candidate_run_id: str | None = None,
+        baseline_run_id: str | None = None,
+        candidate_eval_set_hash: str | None = None,
+        baseline_eval_set_hash: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self._fields = {
+            "reason": reason,
+            "candidate_run_id": candidate_run_id,
+            "baseline_run_id": baseline_run_id,
+            "candidate_eval_set_hash": candidate_eval_set_hash,
+            "baseline_eval_set_hash": baseline_eval_set_hash,
+        }
+
+    def log_fields(self) -> dict[str, Any]:
+        return {k: v for k, v in self._fields.items() if v is not None}
+
+
+class EvalSetMismatchError(CompareRefusedError):
+    """The evaluation sets differ (``eval_set_hash``), or the candidate has none to compare."""
+
+
+class MissingExtraError(CvpilotError, ImportError):
+    """An optional extra needed by a hook or forwarder is not installed."""
+
+    event = "hook_missing"
+
+
+class HookNotFoundError(CvpilotError, LookupError):
+    """No hook matches the object passed to ``autolog``."""
+
+    event = "hook_missing"

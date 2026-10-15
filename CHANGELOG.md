@@ -7,6 +7,10 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Baselines: `cvpilot baseline set|list|show` pin a verified snapshot under a tag. The `baseline`
+  table is append-only (`--replace` adds a newer pin and keeps the history), each row carries a
+  digest and a hash chain, and every read re-verifies the record, the chain and the pinned
+  snapshot digest. Events `baseline_set`, `baseline_refused`, `baseline_integrity_failed`.
 - Eval engine: `cvpilot.log_eval` / `Run.log_eval` and `cvpilot eval RUN_ID --preds P --gts G
   --classes C` (alias `eval-file`). COCO-protocol detection metrics (101-point AP, small/medium/large ranges,
   per-class AP/AR, confusion with background), top-1 classification, slices on image metadata

@@ -9,6 +9,7 @@ from typing import Annotated, NoReturn
 import typer
 
 from cvpilot import __version__
+from cvpilot.cli.baseline_cmds import baseline_app
 from cvpilot.cli.eval_cmds import eval_command
 from cvpilot.cli.runs_cmds import repro_command, runs_app
 from cvpilot.core.errors import CvpilotError
@@ -42,6 +43,7 @@ def _root(
 
 
 app.add_typer(runs_app, name="runs")
+app.add_typer(baseline_app, name="baseline")
 app.command("repro")(repro_command)
 app.command("eval")(eval_command)
 app.command("eval-file", hidden=True)(eval_command)

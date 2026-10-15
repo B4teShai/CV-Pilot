@@ -9,7 +9,7 @@ job, prediction-diff reports that show which images changed, checkpoints that ar
 integrity-checked and resumable after preemption, and alerts from a small optional server.
 Scalars are forwarded to MLflow, W&B or Trackio; run data stays in local files the user owns.
 
-Built today: the CLI (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`), settings,
+Built today: the CLI (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseline`), settings,
 logging, the run schema, run capture (`init`, `log`, `log_artifact`, `finish`, crash and
 resume handling), the local run store and the eval engine (`log_eval`: COCO-style detection
 metrics, top-1 classification, slices, bootstrap intervals, immutable snapshots). Everything else

@@ -27,7 +27,9 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `eval_completed` | INFO | `run_id`, `step`, `eval_set_hash`, `n_images`, `n_classes`, `n_predictions`, `task`, `duration_ms` | `eval/` | built |
 | `compare_completed`, `compare_refused` | INFO / ERROR | `candidate_run_id`, `baseline_run_id`, `candidate_eval_set_hash`, `baseline_eval_set_hash`, `seed` | `compare/` | planned |
 | `gate_passed`, `gate_failed`, `slice_skipped` | INFO / ERROR / WARN | `run_id`, `baseline_tag`, `n_violations`, `worst_metric`, `worst_delta`, `slice`, `n_images` | `gate` | planned |
-| `baseline_refused` | ERROR | `project`, `tag`, `run_id`, `eval_set_hash` | `cli/` | planned |
+| `baseline_set` | INFO | `project`, `tag`, `run_id`, `eval_set_hash`, `step`, `replaced` | `compare/` | built |
+| `baseline_refused` | ERROR | `project`, `tag`, `run_id`, `eval_set_hash` | `cli/` boundary, from `BaselineRefusedError` | built |
+| `baseline_integrity_failed` | ERROR | `command` | `cli/` boundary, from `BaselineIntegrityError` | built |
 | `checkpoint_saved`, `checkpoint_verified`, `checkpoint_restored`, `checkpoint_uploaded` | INFO | `run_id`, `step`, `kind`, `size_bytes`, `sha256_prefix`, `is_best`, `uri`, `duration_ms` | `ckpt/`, `remote/` | planned |
 | `checkpoint_skipped_corrupt`, `checkpoint_upload_failed`, `checkpoint_verify_failed`, `preemption_save_incomplete` | WARN | `run_id`, `step`, `kind`, `reason` | `ckpt/` | planned |
 | `checkpoint_save_failed` | ERROR | `run_id`, `step`, `exc_info` | `ckpt/` | planned |
@@ -58,7 +60,8 @@ Contract: one boundary in `cli/app.py`; `0 / 1 / 2 / 130`. Per command family:
 |---|---|---|---|
 | `--version`, `doctor` (built) | an unexpected exception | invalid `CVPILOT_*` value | |
 | `runs list`, `runs show`, `repro` (built) | run not found, store unreadable or newer than the library (`store_version_unsupported`) | unknown option, missing `--project` with no `CVPILOT_PROJECT`, invalid project or malformed run id, invalid `CVPILOT_*` | a well-formed but unknown run id is exit 1; expected failures print one `error:` line on `stderr` plus one event |
-| `baseline`, `import` (planned) | baseline refused, importer parse error | unknown option, missing `--project` with no `CVPILOT_PROJECT` | |
+| `baseline set|list|show` (built) | refused (no such snapshot or eval set, ambiguous eval set, tag already pinned without `--replace`), unknown tag, run not found, snapshot or baseline fails integrity verification | unknown option, missing `--project`, malformed tag, run id or eval set, step out of range | a pin is append-only; `list` of a project without a store is empty and exit 0 |
+| `import` (planned) | importer parse error | unknown option, missing `--project` with no `CVPILOT_PROJECT` | |
 | `eval` (built) | run not found, input tables or files fail validation (including slice cardinality and malformed Parquet), snapshot exists, write error | bad `--slices` syntax, missing file, malformed run id, number out of range | parity is tested, not checked at run time |
 | `compare` (planned) | refused (`eval_set_hash` mismatch), report cannot be written | bad `--baseline` syntax | refusal is a data problem, so it is 1, not 2 |
 | `gate` (planned) | any violation, refused comparison, run or baseline missing | bad threshold syntax | CI treats any non-zero as blocking; `1` with `gate_failed` is the regression signal |

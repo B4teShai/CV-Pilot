@@ -11,7 +11,7 @@ Every other package is planned and its interface is the contract it will be buil
 | Layer | Packages |
 |---|---|
 | Interface | `cli/` (built), `api.py` (built: `init`, `log`, `log_artifact`, `log_eval`, `finish`) |
-| Application | `runs/` (built), `repro` (built), `eval/` (built), `compare/` (with `gate`), `ckpt/`, `alerts/` |
+| Application | `runs/` (built), `repro` (built), `eval/` (built), `compare/` (baselines built; compare and `gate` follow), `ckpt/`, `alerts/` |
 | Domain | `core/schema.py`, `core/hashing.py` (built); `core/ulid.py`, `core/redact.py`, `core/jsonable.py`, `core/errors.py` (built); `core/metrics.py`, `core/confusion.py` (built) |
 | Infrastructure | `store/`, `capture/` (built); `hooks/`, `forward/`, `sync/`, `remote/`, `notify/`, `server/` |
 | Cross-cutting | `logging.py`, `settings.py`, `registry.py` (built) |
@@ -31,7 +31,7 @@ Public interface (built):
 
 ```python
 def main() -> NoReturn            # entry point `cvpilot`; exit 0/1/2/130
-# commands: --version, doctor, runs list|show, repro, eval
+# commands: --version, doctor, runs list|show, repro, eval, baseline set|list|show
 ```
 
 `runs list|show` and `repro` accept `--project` (default `CVPILOT_PROJECT`; missing gives exit
@@ -52,7 +52,7 @@ cvpilot eval <run_id> --preds preds.parquet --gts gts.parquet --classes names.tx
 cvpilot compare <run_id> --baseline (tag:<tag>|<run_id>) [--eval-set NAME] --report cmp.html
 cvpilot gate <run_id> --baseline ... [--max-drop K=V]... [--per-class-max-drop K=V]...
              [--slice-max-drop "key=*:V"]... [--min-images N]
-cvpilot baseline set <tag> <run_id> --eval-set NAME | ls | rm <tag>
+cvpilot baseline set <tag> <run_id> [--eval-set HASH] [--step N] [--replace] | list [--history] | show <tag>
 cvpilot ckpt ls <dir> | verify <dir> | restore <dir> [--to PATH]
 cvpilot repro <run_id>
 cvpilot sync [--project P] [--once]
@@ -61,7 +61,7 @@ cvpilot server [--host H] [--port N]        # requires the [server] extra
 ```
 
 Depends on: application packages (`runs/`, `repro`), `settings.py`, `logging.py`. Status:
-built (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`; `eval-file` is a hidden alias); planned (all other commands).
+built (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseline set|list|show`; `eval-file` is a hidden alias); planned (all other commands).
 
 ### `api.py`
 
@@ -368,7 +368,10 @@ class RunStore(Protocol):
     def put_snapshot(self, snapshot: EvalSnapshot) -> None
     def put_artifact(self, run_id: str, path: Path, kind: ArtifactKind, meta: Mapping[str, Any]) -> Artifact
     def put_manifest(self, manifest: CheckpointManifest) -> None
-    def put_baseline(self, baseline: Baseline) -> None
+    def put_baseline(self, baseline: Baseline, *, replace: bool = False) -> None   # append-only, digested, chained
+    def get_baseline(self, tag: str) -> Baseline                  # verified on every read
+    def list_baselines(self, *, history: bool = False) -> list[Baseline]
+    def snapshot_digest(self, run_id: str, eval_set_hash: str, step: int) -> str
     def get_snapshot(self, run_id: str, eval_set_hash: str, step: int | None = None) -> EvalSnapshot
     def query(self, sql: str, params: Mapping[str, Any] = {}) -> pa.Table      # DuckDB over runs.sqlite + metrics/*.parquet
     def outbox_pull(self, limit: int) -> list[OutboxItem]
@@ -378,12 +381,12 @@ class RunStore(Protocol):
 Built (`store/local.py`, adapter `local` of the `stores` registry): `put_run`, `get_run`,
 `get_repro`, `list_runs`, `set_status`, `append_points`, `read_points`, `metric_stats`,
 `compact_metrics`, `put_artifact`, `put_artifact_bytes`, `list_artifacts`, `artifact_path`,
-`put_snapshot`, `get_snapshot`, `list_snapshots`, `has_snapshot`, migrations (`store/migrations/0001_initial.py`), validated paths (`store/paths.py`). The
+`put_snapshot`, `get_snapshot`, `list_snapshots`, `has_snapshot`, `snapshot_digest`, `put_baseline`, `get_baseline`, `list_baselines`, migrations (`store/migrations/0001_initial.py`), validated paths (`store/paths.py`). The
 `RunStore` protocol lives in `core/schema.py` so `runs/` can type against it without
 importing `store/`. The `eval_snapshot` table is additive (`store/additive.py`, created idempotently
 at open, schema version unchanged; the database refuses UPDATE and DELETE on it). Parquet
 reading for evaluation lives in `store/tables.py` (adapter `parquet` of the `tables` registry,
-protocol `TableIO` in `core/schema.py`). Planned: `put_manifest`, `put_baseline`, `query`
+protocol `TableIO` in `core/schema.py`). Planned: `put_manifest`, `query`
 (DuckDB), `outbox_*`.
 
 Depends on: `core/schema.py`; sqlite3 and pyarrow (imported inside functions). Status: built

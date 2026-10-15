@@ -4,8 +4,8 @@
 
 All entities are Pydantic models in `core/schema.py` and rows in the local run store of
 [ADR-0005](../adr/0005-run-store.md). Built: `RunMeta`, `Repro`, `MetricPoint`, `Artifact`
-(models, store tables and tests), `EvalSnapshot`. Planned: `CheckpointManifest`, `Baseline`
-(each section says so). Types are Python types; `json` means a JSON column validated against
+(models, store tables and tests), `EvalSnapshot`, `Baseline`. Planned: `CheckpointManifest`
+(its section says so). Types are Python types; `json` means a JSON column validated against
 the model on read. Timestamps are timezone-aware, normalised to UTC and stored as ISO 8601.
 
 ## Entities
@@ -147,20 +147,37 @@ Sidecar record written next to every checkpoint file ([ADR-0006](../adr/0006-che
 Primary key: `(run_id, step, kind)`. Foreign keys: `run_id → RunMeta.run_id`;
 `(run_id, sha256) → Artifact` (kind `checkpoint`).
 
-### Baseline (planned)
+### Baseline (built)
 
-A named pin of one run's snapshot on one evaluation set, used by `compare` and `gate`.
+A named pin of one run's snapshot on one evaluation set, used by `compare` and `gate`. The table
+is append-only: pinning a tag that exists needs `--replace` and adds a newer row, so the history
+stays and a replacement is always visible. The current pin of a tag is its newest row.
 
 | Field | Type | Nullable | Meaning |
 |---|---|---|---|
-| `project` | `str` | no | |
-| `tag` | `str` | no | `prod`, `staging`, free text `[a-z0-9-_]{1,32}` |
+| `project` | `str` | no | must equal the project of the run |
+| `tag` | `str` | no | `[a-z0-9][a-z0-9_-]{0,31}` (never starts with `-`, so it cannot be read as an option); `prod`, `staging`, free text |
 | `run_id` | `str` | no | |
 | `eval_set_hash` | `str` | no | which snapshot of the run is pinned |
+| `step` | `int` | no | the pinned step (the latest of the pair unless `--step` is given) |
+| `snapshot_sha256` | `str` | no | SHA-256 of the pinned snapshot file when it was pinned |
 | `pinned_at` | `datetime` | no | |
 
-Primary key: `(project, tag)`. Foreign keys: `run_id → RunMeta.run_id`;
-`(run_id, eval_set_hash) → EvalSnapshot` (the latest step of that pair).
+Key: `seq` (autoincrement, the order of the chain); lookups use `(tag, seq)`. Foreign keys:
+`run_id → RunMeta.run_id`; `(run_id, eval_set_hash, step) → EvalSnapshot`.
+
+Integrity (`store/baselines.py`): the row stores the canonical JSON of the record, its SHA-256
+(`record_sha256`) and `chain_sha256 = sha256(previous chain, seq, tag, record_sha256)` over all
+rows in `seq` order. Every read re-hashes the record, compares it with the row's columns, walks
+the whole chain from the first row (an edited, removed, inserted or reordered row breaks it) and
+checks that the pinned snapshot still exists with the digest recorded at pin time; any mismatch
+raises `BaselineIntegrityError` (exit 1, event `baseline_integrity_failed`). Pinning reads the
+snapshot through `get_snapshot` first, so a baseline never points at a snapshot that fails its
+own verification, and the insert re-checks the digest inside the same `BEGIN IMMEDIATE`
+transaction. `UPDATE` and `DELETE` triggers are defence in depth. Not covered, as for snapshots:
+someone who can write the database and the snapshot files can recompute every digest, and
+deleting the newest row or dropping the table is invisible without an external anchor; either
+makes the tag unknown, and an unknown tag fails every gate. At most 10 000 rows per project.
 
 ## Relations
 
@@ -209,8 +226,9 @@ test that will cover it.
 10. `parent_run_id` is non-null if and only if the run was created by `resume_from`; the
     parent's status is `preempted` or `failed`; `parent_run_id ≠ run_id`; the parent chain
     is acyclic.
-11. `Baseline.run_id` has at least one `EvalSnapshot` with `Baseline.eval_set_hash`; pinning
-    refuses otherwise with exit 1 and `baseline_refused`.
+11. `Baseline.run_id` has an `EvalSnapshot` with `Baseline.eval_set_hash` and `Baseline.step`;
+    pinning refuses otherwise with exit 1 and `baseline_refused`, as it does for a tag that is
+    already pinned (without `--replace`) and for a snapshot that fails verification. Built.
 12. `Repro.dataset_hash` starts with `dcp:` when `dataset_uri` contains a DataCopilot
     `manifest.json`, otherwise with `merkle:`; the string after the prefix is non-empty.
 13. Sync events are idempotent on `(run_id, seq)`: `seq` increases by 1 per event within a
@@ -224,7 +242,7 @@ test that will cover it.
 
 Status of the invariants: built and tested: 1, 2, 3, 5, 6, 9, 10 (`resume_from` checks the parent status; the acyclic and `parent_run_id`
 checks are schema and foreign-key enforced), 12, 14 (`RunMeta.schema_version` and the Parquet
-metadata), 15. Planned with their packages: 4, 7, 8, 11, 13.
+metadata), 11, 15. Planned with their packages: 4 (with `compare`), 7, 8, 13.
 
 ## On-disk layout
 
@@ -232,8 +250,8 @@ metadata), 15. Planned with their packages: 4, 7, 8, 11, 13.
 $CVPILOT_STORE_DIR/<project>/              default $HOME/.cvpilot/<project>/
   runs.sqlite                               WAL mode; built: run_meta, repro, artifact,
                                             metric_files, meta, migrations,
-                                            eval_snapshot (additive); planned:
-                                            checkpoint_manifest, baseline, outbox
+                                            eval_snapshot, baseline (additive); planned:
+                                            checkpoint_manifest, outbox
   runs.sqlite-wal, runs.sqlite-shm          SQLite WAL files; present while a writer is open
   metrics/<run_id>/<seq:06d>.parquet        MetricPoint batches in write order (built); a batch
                                             is indexed in metric_files only after its atomic
