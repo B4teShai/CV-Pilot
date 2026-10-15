@@ -16,6 +16,12 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Fixed
 
+- The preemption path caught only a short list of exception types, so a model whose `state_dict`
+  raised `RuntimeError` escaped into the training loop and the run was never marked `preempted`.
+  It now catches everything, marks the run right after the local checkpoint verifies, uploads with
+  only the remaining grace budget (`Mirror.budget`) and prunes last; `preemption_upload_deferred`
+  reports a cut-short upload.
+
 - The Lightning and Ultralytics `resume_arguments` helpers accepted any absolute path. They now
   accept only a `pt` checkpoint that `resume_path` returned in this process (as a path or a
   `ResumePoint`) and refuse safetensors files with an explanation, since no framework can resume

@@ -13,6 +13,7 @@ Logs and errors name the scheme and bucket at most: never the path, never backen
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import hashlib
 import re
@@ -92,6 +93,18 @@ class Mirror:
         self._sleep, self._clock = sleep, clock
         self._fetched = 0
         self._max_total = max_total_bytes
+        self._cut_off: float | None = None
+
+    @contextlib.contextmanager
+    def budget(self, seconds: float) -> Iterator[None]:
+        """For the next calls, refuse to start a remote operation after ``seconds`` have passed
+        (``TimeoutError``): the preemption path has a grace window the upload must not outlast."""
+        previous = self._cut_off
+        self._cut_off = self._clock() + max(seconds, 0.0)
+        try:
+            yield
+        finally:
+            self._cut_off = previous
 
     def begin_restore(self) -> None:
         """Start a restore: the byte budget of fetches begins again."""
@@ -103,6 +116,8 @@ class Mirror:
         return f"{self.location.scheme}://{self.location.bucket}".rstrip("/")
 
     def _call(self, fn: Callable[[], T], started: float) -> T:
+        if self._cut_off is not None and self._clock() > self._cut_off:
+            raise TimeoutError("the time budget for remote operations is spent")
         return retrying(
             fn,
             retries=self._retries,

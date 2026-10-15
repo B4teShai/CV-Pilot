@@ -96,6 +96,7 @@ EXEMPT = {
     "RunCheckpoints.hold_lease": "liveness",
     "RunCheckpoints.lease_state": "liveness",
     "RunCheckpoints.last_activity": "liveness",
+    "Mirror.budget": "a time limit for remote calls",
     "Mirror.begin_restore": "resets a budget",
     "Mirror.label": "scheme and bucket",
     "Mirror.list_runs": "a bounded listing of run ids; candidates are fetched through the gate",

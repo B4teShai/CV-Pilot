@@ -426,17 +426,18 @@ class CheckpointManager:
         state: Mapping[str, Any],
         *,
         metric: tuple[str, float] | None = None,
+        finalize: bool = True,
     ) -> CheckpointManifest:
         started = time.perf_counter()
         try:
             data: bytes | Iterable[bytes] = self._serializer.dumps(self._build_state(kind, state))
-        except (CheckpointError, OSError, ValueError, TypeError) as exc:
+        except Exception as exc:  # noqa: BLE001  # logged and re-raised; callers decide
             self._emit(
                 "error", "checkpoint_save_failed", step=step, kind=kind,
                 error_type=type(exc).__name__, exc_info=exc,
             )  # fmt: skip
             raise
-        return self._publish(kind, step, data, self._format, metric, started)
+        return self._publish(kind, step, data, self._format, metric, started, finalize=finalize)
 
     def _publish(
         self,
@@ -446,6 +447,8 @@ class CheckpointManager:
         format: CheckpointFormat,  # noqa: A002
         metric: tuple[str, float] | None,
         started: float,
+        *,
+        finalize: bool = True,
     ) -> CheckpointManifest:
         try:
             dataset_hash, git_commit = self._handle.repro_facts()
@@ -464,7 +467,7 @@ class CheckpointManager:
                 verify=self._verify,
                 before_publish=self._record,
             )
-        except (CheckpointError, OSError, ValueError, TypeError) as exc:
+        except Exception as exc:  # noqa: BLE001  # logged and re-raised; callers decide
             self._emit(
                 "error",
                 "checkpoint_save_failed",
@@ -495,8 +498,9 @@ class CheckpointManager:
         self._last_time = self._clock()
         if kind == "last":
             self._last_step = step
-        self._mirror_pending()
-        self._retain(kind)
+        if finalize:  # the preemption path defers both until the run is marked
+            self._mirror_pending()
+            self._retain(kind)
         return manifest
 
     def _intended_uri(self, kind: str, step: int, format: str) -> str | None:  # noqa: A002
@@ -731,8 +735,8 @@ class CheckpointManager:
             reason = "step_already_saved"
         else:
             try:
-                manifest = self._save("last", step, state)
-            except (CheckpointError, OSError, ValueError, TypeError) as exc:
+                manifest = self._save("last", step, state, finalize=False)
+            except Exception as exc:  # noqa: BLE001  # nothing may escape into the training loop
                 reason = type(exc).__name__
         if manifest is None and reason != "step_already_saved":
             self._emit("warning", "preemption_save_incomplete", step=step, reason=reason)
@@ -740,11 +744,36 @@ class CheckpointManager:
         self._emit(
             "info", "run_preempted", signal=self.flag.source, step=step, saved=manifest is not None
         )
-        try:
+        try:  # marked as soon as the local checkpoint is safe: the window is short
             self._run.finish("preempted")
         except RunClosedError:
             pass
+        except Exception as exc:  # noqa: BLE001  # nothing may escape into the training loop
+            self._emit("warning", "run_finish_failed", error_type=type(exc).__name__)
+        if manifest is not None:
+            self._finish_preemption()
         return manifest
+
+    def _finish_preemption(self) -> None:
+        """Upload and prune with whatever is left of the grace window, never past it."""
+        remaining = self.grace_seconds - (self._clock() - self.flag.since)
+        if self._mirror is not None:
+            if remaining <= 0:
+                self._emit("warning", "preemption_upload_deferred", reason="grace_expired")
+                return
+            try:
+                with self._mirror.budget(remaining):
+                    self._mirror_pending()
+            except Exception as exc:  # noqa: BLE001  # nothing may escape into the training loop
+                self._emit("warning", "preemption_upload_deferred", reason=type(exc).__name__)
+                return
+            if self.grace_seconds - (self._clock() - self.flag.since) <= 0:
+                self._emit("warning", "preemption_upload_deferred", reason="grace_expired")
+                return
+        try:
+            self._retain("last")
+        except Exception as exc:  # noqa: BLE001  # nothing may escape into the training loop
+            self._emit("warning", "checkpoint_prune_failed", error_type=type(exc).__name__)
 
     # -- restoring --------------------------------------------------------------------------
 

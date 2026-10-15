@@ -134,8 +134,11 @@ is deleted until the newest checkpoint is confirmed uploaded and verified there.
 stores two attributes and sets a flag: no lock, no logging, no I/O, nothing that can raise into
 your loop. The next `maybe_save` saves inside the grace window (`grace_seconds`, default 30),
 logs `preemption_signal_received` and `run_preempted`, and marks the run `preempted`. Past the
-window it logs `preemption_save_incomplete` and the previous checkpoint is the resume point. A
-failing save on this path never raises.
+window it logs `preemption_save_incomplete` and the previous checkpoint is the resume point. Any
+failure on this path (not only checkpoint errors: a `state_dict` that raises `RuntimeError`, a store
+that cannot be written) is logged and never reaches your loop. The run is marked `preempted` as soon
+as the local checkpoint is verified; the upload then gets only what is left of the grace window
+(`preemption_upload_deferred` when it is cut short or the window is spent) and retention runs last.
 
 Platform notices are optional and off by default: `notice_source="aws"` or `"gcp"` polls the
 instance metadata service (fixed host, short timeout, bounded errors) from a daemon thread.
