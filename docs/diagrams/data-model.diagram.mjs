@@ -22,12 +22,14 @@ const repro = entity("repro", ...at(0, 0), W, "Repro", [
 ], COLORS.built);
 
 const baseline = entity("baseline", ...at(1, 0), W, "Baseline", [
-  "project: str           PK",
-  "tag: str               PK",
+  "project: str",
+  "tag: str               newest row wins",
   "run_id: str            FK",
-  "eval_set_hash: str",
+  "eval_set_hash: str     FK",
+  "step: int              FK",
+  "snapshot_sha256: str",
   "pinned_at: datetime",
-], COLORS.planned);
+], COLORS.built);
 
 const manifest = entity("manifest", ...at(2, 0), W, "CheckpointManifest", [
   "run_id: str            PK FK",
@@ -107,6 +109,6 @@ export default {
 
     legend(40, 1260, [[COLORS.built, "built (table in runs.sqlite; MetricPoint also in Parquet)"], [COLORS.planned, "planned"]]),
     note("n1", "PK = primary key, FK = foreign key, ? = nullable. Arrows point from the referencing entity to the referenced one, labelled with cardinality.", 40, 1300, 14),
-    note("n2", "RunMeta.parent_run_id references RunMeta.run_id (resumed run → preempted parent). Baseline pins the EvalSnapshot (run_id, eval_set_hash). EvalSnapshot FKs reference Artifact.sha256.", 40, 1324, 14),
+    note("n2", "RunMeta.parent_run_id references RunMeta.run_id (resumed run → preempted parent). Baseline pins the EvalSnapshot (run_id, eval_set_hash, step) and its digest; rows are append-only, digested and chained. EvalSnapshot FKs reference Artifact.sha256.", 40, 1324, 14),
   ],
 };

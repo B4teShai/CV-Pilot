@@ -21,7 +21,7 @@ const ciNode = nodeBox("n_ci", 5, 0, 1, 1, "CI runner");
 const scheduler = external("scheduler", ...at(0, 0), "Scheduler / cloud", "SIGTERM, spot notice");
 const nvml = external("nvml", ...at(1, 0), "GPU (NVML)", "util, memory, temp");
 const reviewer = actor("reviewer", g(4, 0).x + 10, g(4, 0).y - 60, "Reviewer\nbrowser", 200);
-const ci = container("ci", ...at(5, 0), "cvpilot gate", "exit 0 / 1 / 2");
+const ci = container("ci", ...at(5, 0), "cvpilot gate", "exit 0 / 1 / 2", true);
 
 // Training machine.
 const trainer = container("trainer", ...at(0, 1, 2), "trainer process", "framework + hooks + api in-process; sync thread");
@@ -34,7 +34,7 @@ const server = container("server", ...at(4, 2), "cvpilot server", "Docker: FastA
 const serverDb = store("serverdb", ...at(3, 3), "server DB", "SQLite file or Postgres");
 
 // Developer machine.
-const cli = container("cli", ...at(5, 2), "cvpilot CLI", "runs, repro, doctor", true);
+const cli = container("cli", ...at(5, 2), "cvpilot CLI", "runs, eval, gate", true);
 const devStore = store("devstore", ...at(5, 3), "local run store", "~/.cvpilot/<proj>/", true);
 
 // Externals below.  (Column 2 is left empty so the sync arrow label has room.)
@@ -66,6 +66,6 @@ export default {
 
     c4Legend(40, 1060),
     statusLegend(40, 1100),
-    note("n1", "Built: the CLI and the local run store (written by the in-process API). Hooks, sync, checkpoints and the server are planned. Client-side alert rules deliver straight to the channels when no server is configured (arrow omitted).", 400, 1102, 14),
+    note("n1", "Built: the CLI, gate, the local run store, hooks and forwarder threads (in the trainer process). Sync, checkpoints and the server are planned. Client-side alert rules deliver straight to the channels when no server is configured (arrow omitted).", 400, 1102, 14),
   ],
 };

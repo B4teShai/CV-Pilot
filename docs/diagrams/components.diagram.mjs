@@ -22,14 +22,14 @@ const lanes = [
 ];
 
 // Interface.
-const api = component("api", ...at(0, 1), "api.py", "init, log, log_eval, finish", true);
+const api = component("api", ...at(0, 1), "api.py", "log, log_eval, autolog", true);
 const cli = component("cli", ...at(0, 3), "cli/", "Typer app, error boundary", true);
 
 // Application.
 const repro = component("repro", ...at(1, 0), "repro", "capture at init, script", true);
 const runs = component("runs", ...at(1, 1), "runs/", "lifecycle, bounded buffer", true);
 const evalPkg = component("eval", ...at(1, 2), "eval/", "evaluate, CIs, slices", true);
-const compare = component("compare", ...at(1, 3), "compare/ + gate", "deltas, thresholds");
+const compare = component("compare", ...at(1, 3), "compare/ + gate", "baselines, deltas, gate", true);
 const ckpt = component("ckpt", ...at(1, 5), "ckpt/", "manager semantics");
 const alerts = component("alerts", ...at(1, 6), "alerts/", "rule engine");
 
@@ -40,10 +40,10 @@ const hashing = component("hashing", ...at(2, 5.5), "core/hashing.py", "dataset 
 
 // Infrastructure.
 const capture = component("capture", ...at(3, 0), "capture/", "env, git, GPU", true);
-const forward = component("forward", ...at(3, 1), "forward/", "MLflow, W&B, Trackio");
+const forward = component("forward", ...at(3, 1), "forward/", "MLflow, W&B, Trackio", true);
 const sync = component("sync", ...at(3, 2), "sync/", "HTTPS, (run_id, seq)");
 const storePkg = component("store", ...at(3, 3), "store/", "SQLite WAL, Parquet, CAS", true);
-const hooks = component("hooks", ...at(3, 4), "hooks/", "framework adapters");
+const hooks = component("hooks", ...at(3, 4), "hooks/", "Lightning, YOLO callbacks", true);
 const remote = component("remote", ...at(3, 5), "remote/", "fsspec upload");
 const notify = component("notify", ...at(3, 6), "notify/", "Telegram, Slack, SMTP");
 const server = component("server", ...at(3, 7), "server/", "FastAPI; imports domain only");
@@ -55,8 +55,8 @@ const logging = component("logging", SIDE_X + 15, LANE_Y[0] + 40, SIDE_BOX_W, BO
 const settings = component("settings", SIDE_X + 15, LANE_Y[0] + 40 + BOX_H + 16, SIDE_BOX_W, BOX_H, "settings.py", "CVPILOT_* from env", true);
 const ENTRY_H = 40 + 6 * (BOX_H + 16) + 4;
 const entry = lane("le", SIDE_X, LANE_Y[2], SIDE_W, ENTRY_H, "Entry-point groups");
-const epHooks = component("ep_hooks", SIDE_X + 15, LANE_Y[2] + 40, SIDE_BOX_W, BOX_H, "cvpilot.hooks", "registry: hooks/");
-const epForward = component("ep_forward", SIDE_X + 15, LANE_Y[2] + 40 + (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.forwarders", "registry: forward/");
+const epHooks = component("ep_hooks", SIDE_X + 15, LANE_Y[2] + 40, SIDE_BOX_W, BOX_H, "cvpilot.hooks", "registry: hooks/", true);
+const epForward = component("ep_forward", SIDE_X + 15, LANE_Y[2] + 40 + (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.forwarders", "registry: forward/", true);
 const epChannels = component("ep_channels", SIDE_X + 15, LANE_Y[2] + 40 + 2 * (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.channels", "registry: notify/");
 const epStores = component("ep_stores", SIDE_X + 15, LANE_Y[2] + 40 + 3 * (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.stores", "registry: store/", true);
 const epCapturers = component("ep_capturers", SIDE_X + 15, LANE_Y[2] + 40 + 4 * (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.capturers", "registry: capture/", true);
@@ -100,6 +100,6 @@ export default {
 
     statusLegend(40, LEGEND_Y),
     note("n1", "Solid arrow = direct import. Dashed arrow = adapter resolved through a registry by name at run time. Same-lane calls (runs/ -> alerts/, ckpt/ -> runs/) and infrastructure -> domain imports are not drawn.", 40, LEGEND_Y + 36, 14),
-    note("n2", "hooks/ is entered by the training framework and talks to runs/ only through the MetricSink protocol in core/schema.py.", 40, LEGEND_Y + 60, 14),
+    note("n2", "hooks/ is entered by the training framework and talks to runs/ only through the MetricSink protocol in core/schema.py; runs/ hands flushed batches to forward/ through bounded queues, one worker thread per forwarder.", 40, LEGEND_Y + 60, 14),
   ],
 };

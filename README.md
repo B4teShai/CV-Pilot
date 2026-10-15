@@ -5,7 +5,8 @@ the experiment tracker you already use.
 
 ## Status
 
-Built and tested: run capture, the local run store and the eval engine.
+Built and tested: run capture, the local run store, the eval engine, baselines, compare and gate,
+reports, tracker forwarders, Lightning and Ultralytics hooks and a GitHub Action.
 
 - Python API: `cvpilot.init`, `log`, `log_artifact`, `finish` (and `Run` as a context manager)
   record a run (environment, git state, dataset hash, metrics) into `~/.cvpilot/<project>/`:
@@ -13,15 +14,18 @@ Built and tested: run capture, the local run store and the eval engine.
   content-addressed directory for artifacts. A process killed with SIGKILL leaves a readable
   store; the run stays `running` until it is marked `failed`.
 - Eval: `Run.log_eval(preds, gts, step=...)` and `cvpilot eval RUN_ID --preds p.parquet --gts g.parquet --classes names.txt` store an immutable snapshot (COCO-style mAP, per-class AP, confusion, slices, bootstrap intervals); see below.
-- CLI: `cvpilot --version`, `doctor`, `runs list`, `runs show RUN_ID`, `repro RUN_ID`, `eval RUN_ID`, with the
-  exit-code contract of [docs/engineering/errors-and-logging.md](docs/engineering/errors-and-logging.md).
+- Baselines, compare and gate: `cvpilot baseline set|list|show`, `compare`, `gate`; the gate fails
+  closed on anything missing, non-finite, unverifiable or incomparable; see below.
+- Forwarders and hooks: `init(forward_to=[...])` and `autolog(trainer_or_model, ...)`; see below.
+- CLI: `cvpilot --version`, `doctor`, `runs list`, `runs show RUN_ID`, `repro RUN_ID`, `eval RUN_ID`,
+  `baseline`, `compare`, `gate`, with the exit-code contract of
+  [docs/engineering/errors-and-logging.md](docs/engineering/errors-and-logging.md).
 - Settings: `CVPILOT_ENV`, `CVPILOT_LOG_LEVEL`, `CVPILOT_PROJECT`, `CVPILOT_STORE_DIR`,
-  `CVPILOT_STORE_COMMAND_LINE`; structured JSON logging on `stderr`.
+  `CVPILOT_STORE_COMMAND_LINE`, `CVPILOT_FORWARD_TO`; structured JSON logging on `stderr`.
 
-Everything under "Planned usage" below is **not implemented**: no hooks,
-`compare`, `gate`, checkpoint manager, forwarders, server or alerts. The architecture
-documents mark each part as built or planned and describe only the built parts as behaviour
-that exists. See [CHANGELOG.md](CHANGELOG.md).
+Everything under "Planned usage" below is **not implemented**: no checkpoint manager, server or
+alerts. The architecture documents mark each part as built or planned and describe only the
+built parts as behaviour that exists. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Install (from source)
 
@@ -90,6 +94,67 @@ finished run), an unknown run, a snapshot whose digest does not match, or an exi
 of range). `--max-memory-mb` caps the address space on Linux. Optional `--checkpoint-sha256` and
 `--git-commit` are stored with the snapshot. Values are fractions in [0, 1].
 
+## Baselines, compare and gate
+
+Commands below were run against a store holding four runs of the same synthetic 40-image set
+(`tests/support.py: write_eval_files`): a baseline, an equal run, a run with 10 broken
+predictions and a run of a different evaluation set. Pins are append-only; `--replace` adds a
+newer pin and keeps the old one.
+
+```bash
+cvpilot baseline set prod <BASELINE_RUN>        # pins the latest snapshot; --eval-set HASH, --step N
+cvpilot baseline list                           # add --json, --history
+cvpilot gate <RUN> --baseline tag:prod --max-drop mAP50_95=0.5 \
+  --per-class-max-drop AP50_95=2.0 --slice-max-drop "camera=*:1.5" --min-images 20
+cvpilot compare <RUN> --baseline tag:prod --report cmp.html --report-json cmp.json
+```
+
+```text
+$ cvpilot gate <regressed run> --baseline tag:prod --max-drop mAP50_95=0.5 --per-class-max-drop AP50_95=2.0 --min-images 20
+gate: FAIL (3 violations, worst: [class_drop] cat) run 01M4... step 0 vs baseline tag:prod
+  - [class_drop] cat: AP50_95 of class dropped 43.56 points (limit 2)
+  - [headline_drop] mAP50_95: mAP50_95 dropped 43.56 points (limit 0.5)
+exit=1
+$ cvpilot gate <equal run> ... --slice-max-drop "camera=*:1.5" --min-images 20
+gate: PASS (5 checks, 0 slices skipped) run 01M4... step 0 vs baseline tag:prod
+exit=0
+$ cvpilot gate <run of another evaluation set> --baseline tag:prod ...
+error: run 01M4... has no snapshot for eval set 65d37ab51abe        # event compare_refused
+exit=1
+```
+
+Limits are in points on the 0..100 scale (`--max-drop mAP50_95=0.5` is 0.005 of the fraction in
+the snapshot); a drop equal to the limit passes and improvements never fail. The gate fails
+closed (exit 1) on an absent or non-finite metric, an absent or too small slice, fewer than
+`--min-images` images (default 30), a threshold that gated nothing, a snapshot or baseline that
+fails its integrity check, an unknown tag, and a different `eval_set_hash`, task, class names or
+evaluation parameters; with no threshold at all it is a usage error (exit 2).
+`--skip-small-slices` is the one explicit opt-in. `--report` writes static HTML (no script, strict
+CSP, every name escaped), `--report-json` the canonical JSON. Semantics: ADR-0007.
+`python benchmarks/compare_throughput.py` times it on 5 000 images.
+
+## Forward to a tracker and hook into a framework
+
+```python
+import cvpilot
+
+run = cvpilot.init("fridge-sku", task="detection", forward_to=["mlflow"])  # or CVPILOT_FORWARD_TO
+# Lightning: pip install "cvpilot[lightning]"; the Trainer gets a logger and a callback
+run = cvpilot.autolog(trainer, project="fridge-sku", task="detection")
+# Ultralytics: pip install "cvpilot[ultralytics]"; see the license note below
+run = cvpilot.autolog(yolo_model, project="fridge-sku", task="detection")
+```
+
+Forwarders (`cvpilot[mlflow]`, `[wandb]`, `[trackio]`) run on their own threads behind bounded
+queues: a tracker that is down, slow or hung is counted and logged once and never raises into or
+blocks training (`finish` waits at most 5 s). Tokens stay in the tracker SDK's own environment
+variables; CV-Pilot refuses credentials in URLs, plain http outside `CVPILOT_ENV=dev` and
+disabled TLS verification. Hook callbacks never raise into the framework. The `ultralytics`
+package is AGPL-3.0: using `cvpilot[ultralytics]` makes your combined work subject to AGPL-3.0;
+CV-Pilot never imports it. These integrations are tested with fake trainers and injected fake
+SDK modules; smoke tests against the real libraries exist behind `pytest -m real_libs` and were
+not run in this environment.
+
 ## GitHub Action
 
 `action.yml` is a composite action around `cvpilot gate`. It expects `cvpilot` to be installed in
@@ -124,51 +189,12 @@ jobs:
 rejects any `${{ ... }}` expression inside a `run:` script, an unpinned third-party action,
 write permissions, unquoted variables, and runs the real script with hostile input values.
 
-## Planned usage
-
-Nothing in this section runs yet. The examples fix the public interface that the planned
-packages will implement; see [docs/architecture/02-components.md](docs/architecture/02-components.md)
-for signatures and status.
-
-### Planned: automatic capture from a training framework
-
-Hooks are extras: `cvpilot[ultralytics]`, `cvpilot[lightning]`, `cvpilot[hf]`,
-`cvpilot[mmdet]`; forwarders `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]`;
-`cvpilot[alerts]` and `cvpilot[server]`. The `ultralytics` package is AGPL-3.0: it is
-imported only inside the Ultralytics hook, and using `cvpilot[ultralytics]` makes your
-combined work subject to AGPL-3.0. Every other extra and the core stay Apache-2.0.
-
-```python
-from ultralytics import YOLO
-import cvpilot
-
-model = YOLO("yolo11s.pt")
-cvpilot.autolog(model, project="fridge-sku", forward_to=["mlflow"])
-model.train(data="fridge.yaml", epochs=100, imgsz=1024)
-```
-
-```python
-import lightning as L
-import cvpilot
-from cvpilot.hooks.lightning import CVPilotCallback, CVPilotLogger
-
-trainer = L.Trainer(
-    logger=CVPilotLogger(project="fridge-sku"),
-    callbacks=[
-        CVPilotCallback(
-            eval_task="detection",
-            class_names=CLASSES,
-            slices={"camera": "meta.camera_id"},
-        )
-    ],
-)
-trainer.fit(model, dm, ckpt_path=cvpilot.resume_path("fridge-sku"))  # None on a fresh start
-```
+## More usage
 
 ### Evaluation snapshots in a plain training loop
 
 `init`, `log`, `log_eval` and `finish` are built; passing `PredictionTable` and `AnnotationTable`
-(from `cvpilot.eval`) instead of raw arrays is what the planned hooks will do for you.
+(from `cvpilot.eval`) instead of raw arrays; the hooks log scalars and leave evaluation to you.
 
 ```python
 import cvpilot
@@ -180,6 +206,12 @@ for step, batch in enumerate(loader):
 snapshot = cvpilot.log_eval(preds, gts, step=step, slices={"camera": "camera_id"})
 cvpilot.finish()
 ```
+
+## Planned usage
+
+Nothing below runs yet. The examples fix the public interface that the planned packages will
+implement; see [docs/architecture/02-components.md](docs/architecture/02-components.md) for
+signatures and status.
 
 ### Planned: resume-safe checkpoints
 
@@ -211,20 +243,12 @@ for step in range(state["step"] if state else 0, total_steps):
     )
 ```
 
-### Planned: compare and gate in CI
+### Planned: reproduction and checkpoint verification
 
 ```bash
-cvpilot baseline set prod 01J9... --eval-set fridge_val_v7
-cvpilot compare 01JA... --baseline tag:prod --report cmp.html
-cvpilot gate 01JA... --baseline tag:prod \
-  --max-drop mAP50_95=0.5 --per-class-max-drop AP50_95=2.0 \
-  --slice-max-drop "camera=*:1.5" --min-images 30
-cvpilot repro 01JA...          # prints a reproduction script
-cvpilot ckpt verify /checkpoint/01JA...
+cvpilot repro 01JA...          # built: prints a reproduction script
+cvpilot ckpt verify /checkpoint/01JA...   # planned
 ```
-
-`gate` exits `0` when every threshold holds, `1` when any threshold is exceeded or the
-comparison is refused (different `eval_set_hash`), `2` on a usage error.
 
 ## Architecture
 

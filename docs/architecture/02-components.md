@@ -4,7 +4,7 @@
 
 The package follows the four layers of
 [ADR-0004](../adr/0004-layering-and-dependency-rule.md). Built today: `cli/`, `api.py`,
-`runs/`, `repro`, `core/` (schema, hashing, ULIDs, redaction, errors), `store/`, `capture/`,
+`runs/`, `repro`, `eval/`, `compare/`, `core/`, `store/`, `capture/`, `forward/`, `hooks/`,
 `registry.py`, `logging.py` and `settings.py`; each section below states what part is built.
 Every other package is planned and its interface is the contract it will be built to.
 

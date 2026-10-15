@@ -9,12 +9,14 @@ job, prediction-diff reports that show which images changed, checkpoints that ar
 integrity-checked and resumable after preemption, and alerts from a small optional server.
 Scalars are forwarded to MLflow, W&B or Trackio; run data stays in local files the user owns.
 
-Built today: the CLI (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseline`), settings,
-logging, the run schema, run capture (`init`, `log`, `log_artifact`, `finish`, crash and
-resume handling), the local run store and the eval engine (`log_eval`: COCO-style detection
-metrics, top-1 classification, slices, bootstrap intervals, immutable snapshots). Everything else
-in this document set (hooks, compare, gate, checkpoints, forwarders, sync, alerts, server) is
-planned and marked as such.
+Built today: the CLI (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseline`,
+`compare`, `gate`), settings, logging, the run schema, run capture (`init`, `log`, `log_artifact`,
+`finish`, crash and resume handling, `autolog`), the local run store, the eval engine (`log_eval`:
+COCO-style detection metrics, top-1 classification, slices, bootstrap intervals, immutable
+snapshots), append-only baselines, compare and the fail-closed gate with HTML and JSON reports,
+forwarders to MLflow, W&B and Trackio, the Lightning and Ultralytics hooks, and a composite
+GitHub Action. Everything else in this document set (checkpoints, sync, alerts, server, the
+other hooks, TensorBoard, the prediction-diff gallery) is planned and marked as such.
 
 ## Users
 
@@ -69,6 +71,7 @@ result is recorded here; until then the row is a commitment, not a claim.
 | Logging overhead in the training loop | `cvpilot.log()` of 50 scalars ≤ 0.2 ms p95; end-to-end throughput loss < 2 % | Lightning toy detector on coco8, 20 epochs, CPU | `benchmarks/overhead.py` (planned); run-store part measured by `benchmarks/log_readback.py`: p95 0.17 ms per `log()` of 50 scalars, 100 000 points in 0.5 s, macOS arm64, Python 3.13 |
 | Eval parity | per-class AP and mAP within 1e-4 of pycocotools | synthetic corpus (no COCO val2017 fixture exists): 300 randomized sets (1 to 24 images, 1 to 6 classes, crowd boxes, tied scores), 40 sets through `evaluate`, 40 with unpadded integer ids and identical or quantised scores, 40 with 8 to 20 classes, 25 weighted-bootstrap-versus-duplicated-image comparisons, and 13 hand-built edge cases (no detections, no ground truth, both empty, crowd-only, crowd-heavy with ties, identical scores, single class and image, empty images, a class without ground truth, 160 detections in one group with a forced multi-chunk matcher, duplicated ground-truth boxes, boundary areas, IoU exactly equal to twelve thresholds) | `tests/parity/test_coco_parity.py` (built; default suite, about 40 s). Measured against pycocotools 2.0.11: maximum absolute difference 0 on the 12 summary metrics and on per-class AP, AP50 and AR100 (test tolerance 1e-12) |
 | Eval throughput | ≤ 10 s for 5 000 images and 100 000 detections on 4 CPU cores; bootstrap with 1 000 resamples ≤ 5 s extra | same fixture scaled | `benchmarks/eval_throughput.py` (built). Measured on macOS arm64, 12 cores, Python 3.10, 5 000 images, 50 classes, 30 028 boxes, 100 000 detections: evaluation 0.67 s; 1 000 bootstrap resamples +2.1 s with 4 threads (+5.0 s with 1); 10 slices +0.07 s; `cvpilot eval` end to end 3.4 s |
+| Compare and gate cost | `cvpilot gate` end to end including HTML and JSON reports ≤ 3 s and ≤ 300 MB RSS on a 5 000-image snapshot (set in this phase) | 5 000 images, 50 classes, 10 slices, 100 000 detections, two snapshots | `benchmarks/compare_throughput.py` (built). Measured on macOS arm64, Python 3.10, median of 5: pin baseline 0.005 s; resolving and verifying both snapshots and confusion artifacts 0.006 s; compare plus gate under 1 ms; both reports 0.003 s (HTML 22 KB, JSON 41 KB); `cvpilot gate` in a child process 0.27 s (max 0.29 s), child peak RSS 81 MB. Snapshots hold aggregates, so the cost does not grow with the image count; the 5 000-image evaluation that creates them is measured by the eval rows |
 | Eval memory ceiling | ≤ 2 GB RSS for the input above | same | same script, peak RSS. Measured: 140 MB in process (122 MB after evaluation), 198 MB for the CLI child |
 | Client memory ceiling | ≤ 200 MB RSS added to the training process; metric buffer bounded at 10 000 points | Lightning toy detector | `benchmarks/overhead.py` |
 | Determinism | same store contents and seed produce byte-identical `EvalSnapshot` JSON and `compare` report (bootstrap seeded, seed stored in the report) | any two runs of the parity fixture | `tests/unit/test_eval_engine.py`, `test_eval_bootstrap.py`, `test_eval_record.py`, `test_cli_eval.py` (built for snapshots: identical bytes for identical input and seed, also across bootstrap worker counts); `tests/golden/test_report_golden.py` (planned for `compare`) |

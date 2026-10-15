@@ -13,6 +13,7 @@ target.
 | Golden | `tests/golden/` | A documented input produces a byte-identical or field-identical output (format round-trips, reports, manifests) | every push |
 | Parity | `tests/parity/` | A metric or transformation matches a reference implementation within a stated tolerance | every push while fast (the pycocotools suite takes about 15 s; marker `parity`) |
 | Chaos | `tests/chaos/` | The system survives interrupted writes, truncated files, killed processes | nightly or on touch |
+| Smoke | `tests/smoke/` | A real tracker or framework library works with the adapter | manual, `pytest -m real_libs`; off by default (`addopts` deselects the `real_libs` marker), skips when the library is absent, needs no network |
 | Benchmark | `benchmarks/` | A performance budget is met on a named reference input | manual, before release |
 
 A tier directory is created the moment the first test of that tier exists; empty

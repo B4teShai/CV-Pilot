@@ -7,6 +7,8 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- `benchmarks/compare_throughput.py`: `cvpilot gate` with both reports on a 5 000-image snapshot
+  takes 0.27 s end to end in a child process (81 MB peak), against a budget of 3 s and 300 MB.
 - GitHub Action: `action.yml`, a composite action around `cvpilot gate`. Inputs reach the script only
   through `env:` and are quoted, options are passed as `--name=value` and the run id after `--`; no
   third-party action. `tests/unit/test_action.py` parses the YAML, rejects any `${{ ... }}` in a

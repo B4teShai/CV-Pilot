@@ -19,13 +19,13 @@ const frameworks = external("frameworks", ...at(1, 0), "Training frameworks", "c
 const objstore = external("objstore", ...at(2, 0), "Object storage", "S3 / GCS via fsspec");
 
 // Package containers.
-const cli = container("cli", ...at(0, 1), "cvpilot CLI", "Typer: runs, repro, eval, doctor", true);
-const api = container("api", ...at(1, 1), "Python API", "init, log, log_eval, finish", true);
+const cli = container("cli", ...at(0, 1), "cvpilot CLI", "Typer: eval, baseline, gate", true);
+const api = container("api", ...at(1, 1), "Python API", "init, log, autolog", true);
 const ckpt = container("ckpt", ...at(2, 1), "checkpoint manager", "atomic save, restore");
-const compare = container("compare", ...at(0, 2), "compare + gate", "deltas, CIs, HTML diff");
+const compare = container("compare", ...at(0, 2), "compare + gate", "deltas, fail-closed gate, reports", true);
 const evalEngine = container("eval", ...at(1, 2), "eval engine", "mAP, per-class, slices", true);
 const sync = container("sync", ...at(2, 2), "sync client", "offline-first outbox");
-const forward = container("forward", ...at(0, 3), "forwarders", "MLflow, W&B, Trackio");
+const forward = container("forward", ...at(0, 3), "forwarders", "MLflow, W&B, Trackio", true);
 const core = container("core", ...at(1, 3), "core library", "schema, hashing, store port", true);
 const alertsClient = container("alertsc", ...at(2, 3), "client alert rules", "nan_loss, no_progress");
 const runStore = store("runstore", ...at(1, 4), "local run store", "~/.cvpilot/<proj>/", true);
@@ -71,6 +71,6 @@ export default {
 
     c4Legend(40, 1000),
     statusLegend(40, 1040),
-    note("n1", "Blue containers are planned; green is built and tested today. Hooks, gate, checkpoints, sync, alerts and the server are planned.", 400, 1042, 14),
+    note("n1", "Blue containers are planned; green is built and tested today. Checkpoints, sync, alerts and the server are planned; hooks live in the trainer process and are built.", 400, 1042, 14),
   ],
 };
