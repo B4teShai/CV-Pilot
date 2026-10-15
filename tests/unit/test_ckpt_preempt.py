@@ -175,8 +175,9 @@ def test_poller_reports_a_stop_request_and_a_crash() -> None:
         preempt.PreemptionFlag(), interval=1.0, sleep=lambda s: None,
         report=lambda event, **fields: crashing.append((event, fields)),
     )  # fmt: skip
-    bad.start()
-    assert wait_for(lambda: any(e == "preemption_poller_stopped" for e, _ in crashing))
+    with pytest.raises(SystemExit):  # run the thread body here so no thread dies unseen in pytest
+        bad._run()
+    assert crashing[-1][0] == "preemption_poller_stopped"
     assert crashing[-1][1]["reason"] == "crashed"
 
 
