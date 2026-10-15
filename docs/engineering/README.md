@@ -13,7 +13,7 @@ binding for every contribution; the review checklist refers to them by section.
 
 Quick start for a contributor:
 
-```bash
+```bash notest
 uv sync
 uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
 ```

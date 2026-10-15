@@ -1375,6 +1375,7 @@ dev = [
     { name = "pyyaml" },
     { name = "ruff" },
     { name = "safetensors" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "twine" },
 ]
 docs = [
@@ -1412,6 +1413,7 @@ dev = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.6" },
     { name = "safetensors", specifier = ">=0.4" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
     { name = "twine", specifier = "==7.0.0" },
 ]
 docs = [

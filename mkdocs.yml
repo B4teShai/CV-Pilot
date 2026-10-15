@@ -1,0 +1,72 @@
+site_name: CV-Pilot
+site_description: Regression gates, remote monitoring and resume-safe checkpoints for vision models.
+docs_dir: docs
+site_dir: site
+strict: true
+use_directory_urls: true
+theme:
+  name: material
+  language: en
+  font: false # no Google Fonts request: the built site loads nothing from a third party
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+extra:
+  generator: false # no "made with" link in the footer
+plugins:
+  - search
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: false
+  - pymdownx.superfences
+exclude_docs: |
+  diagrams/*.excalidraw
+  diagrams/*.mjs
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+nav:
+  - Home: index.md
+  - User guide:
+      - Install: guide/install.md
+      - Concepts: guide/concepts.md
+      - Checkpoints and resume: guide/checkpoints.md
+      - Gating in CI: guide/gating-ci.md
+      - Trust model: guide/trust.md
+  - Tutorial: tutorial.md
+  - Reference:
+      - Command line: reference/cli.md
+      - Python API: reference/api.md
+  - Architecture:
+      - Overview: architecture/README.md
+      - Context and scope: architecture/01-overview.md
+      - Components: architecture/02-components.md
+      - Data model: architecture/03-data-model.md
+      - Flows: architecture/04-flows.md
+      - Runtime and configuration: architecture/05-runtime.md
+      - Cross-cutting concerns: architecture/06-cross-cutting.md
+  - Decisions:
+      - ADR template: adr/0000-template.md
+      - ADR-0001 Scope and license: adr/0001-scope-and-license.md
+      - ADR-0002 Logging: adr/0002-logging.md
+      - ADR-0003 Repo and tooling: adr/0003-repo-and-tooling.md
+      - ADR-0004 Layering: adr/0004-layering-and-dependency-rule.md
+      - ADR-0005 Run store: adr/0005-run-store.md
+      - ADR-0006 Checkpoint semantics: adr/0006-checkpoint-semantics.md
+      - ADR-0007 Compare and gate: adr/0007-compare-and-gate-semantics.md
+      - ADR-0008 Forwarders: adr/0008-forwarders.md
+  - Engineering:
+      - Overview: engineering/README.md
+      - Standards: engineering/standards.md
+      - Testing: engineering/testing.md
+      - Errors and logging: engineering/errors-and-logging.md
+      - Dependencies and licensing: engineering/dependencies-and-licensing.md
+      - Workflow: engineering/workflow.md
+      - Release runbook: engineering/release.md

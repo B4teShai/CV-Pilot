@@ -29,7 +29,7 @@ Responsibility: Typer application, option parsing, the single error boundary, ex
 
 Public interface (built):
 
-```python
+```python notest
 def main() -> NoReturn            # entry point `cvpilot`; exit 0/1/2/130
 # commands: --version, doctor, runs list|show, repro, eval, baseline set|list|show, compare, gate
 ```
@@ -68,7 +68,7 @@ built (`--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`, `baseli
 Responsibility: the public Python API; holds the active run for the process; converts user
 inputs into domain objects; delegates to `runs/`, `eval/`, `ckpt/`, `alerts/`.
 
-```python
+```python notest
 def init(
     project: str | None = None,          # default: CVPILOT_PROJECT
     *,
@@ -123,7 +123,7 @@ Responsibility: run lifecycle use cases; the `MetricSink` implementation handed 
 status transitions; hand-off of every record to the store, the forwarders, the outbox and
 the client-side alert rules.
 
-```python
+```python notest
 def start_run(meta: RunMeta, repro: Repro, *, store_dir=None, git_diff: bytes | None = None) -> RunHandle
 def log_points(run: RunHandle, points: Mapping[str, float], *, step: int, epoch: int | None = None) -> None
 def finish_run(run: RunHandle, status: Literal["finished", "failed", "preempted"]) -> None
@@ -158,7 +158,7 @@ Responsibility: compute an `EvalSnapshot` from predictions and ground truth; per
 confusion with background, slices, size ranges (small, medium, large AP and AR); bootstrap confidence intervals over images;
 record the result in a run.
 
-```python
+```python notest
 def evaluate(
     preds: PredictionTable, gts: AnnotationTable, *,
     task: Literal["detection", "classification"], class_names: Sequence[str],
@@ -210,7 +210,7 @@ Responsibility: pin baselines, load two verified snapshots, refuse when they are
 comparable, compute headline, per-class, slice and confusion deltas, evaluate thresholds and
 return the exit code. Semantics and trade-offs: [ADR-0007](../adr/0007-compare-and-gate-semantics.md).
 
-```python
+```python notest
 @dataclass(frozen=True)
 class Thresholds:
     max_drop: Mapping[str, float]              # {"mAP50_95": 0.5}, points on the 0..100 scale
@@ -288,7 +288,7 @@ JSON and HTML reports); planned: the prediction-diff gallery.
 
 Responsibility: checkpoint manager semantics from [ADR-0006](../adr/0006-checkpoint-semantics.md).
 
-```python
+```python notest
 class CheckpointManager:
     def __init__(
         self,
@@ -323,7 +323,7 @@ Responsibility: rule engine over the stream of metric points, snapshots and stat
 dedupes and rate-limits; hands `Alert` objects to channels. Runs inside the training process
 and inside the server.
 
-```python
+```python notest
 class Rule(Protocol):
     name: str
     def feed(self, event: RunEvent) -> Alert | None: ...
@@ -340,7 +340,7 @@ Depends on: `core/schema.py`; `notify/` through the `channels` registry. Status:
 
 Responsibility: assemble the `Repro` record at `init` and print a reproduction script.
 
-```python
+```python notest
 def capture_repro(run_id, dataset_uri: str | None, config, seed, *, store_command_line: bool = True,
                   argv=None, cwd=None) -> Captured        # Repro + diff bytes + host
 def script(view: RunView) -> str                          # bash: checkout, diff, env notes, command
@@ -359,7 +359,7 @@ Responsibility: the Pydantic models `RunMeta`, `Repro`, `MetricPoint`, `EvalSnap
 `RunEvent` union consumed by alert rules; validators for the invariants in
 [03-data-model.md](03-data-model.md).
 
-```python
+```python notest
 class MetricSink(Protocol):
     def log(self, points: Mapping[str, float], *, step: int, epoch: int | None = None) -> None: ...
     def log_eval(
@@ -382,7 +382,7 @@ Depends on: pydantic, stdlib. Status: built (subset above); planned (rest).
 
 ### `core/hashing.py`
 
-```python
+```python notest
 def sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str
 def dataset_hash(dataset_uri: str) -> str      # "dcp:<version>" or "merkle:<hex>"
 def merkle_hash(root: Path) -> str
@@ -397,7 +397,7 @@ Depends on: stdlib. Status: built (`sha256_file`, `dataset_hash`, `merkle_hash`,
 
 Pure functions on NumPy arrays; no I/O, no framework types.
 
-```python
+```python notest
 def match_detections(pred_image, pred_boxes, pred_scores, pred_cls, gt_image, gt_boxes, gt_cls, *,
                      n_images, n_classes, iou_thresholds, iscrowd=None, max_dets=100) -> MatchResult
 def accumulate(match, *, image_weights=None, areas=None, max_dets=None) -> Curves  # [T, R, K, A, M]
@@ -420,7 +420,7 @@ Responsibility: the local run store of [ADR-0005](../adr/0005-run-store.md): SQL
 rows, Parquet for metric points, content-addressed artifacts, DuckDB queries, migrations,
 outbox table for `sync/`.
 
-```python
+```python notest
 class RunStore(Protocol):
     def open(project: str, root: Path | None = None) -> "RunStore": ...
     def put_run(self, meta: RunMeta, repro: Repro) -> None
@@ -469,7 +469,7 @@ planned: the NVML sampler thread (every 10 s).
 
 Framework adapters. Each adapter implements (`Hook` in `core/schema.py`):
 
-```python
+```python notest
 class Hook(Protocol):
     name: str  # "lightning", "ultralytics"; planned: "hf", "mmengine", "rfdetr", "torch"
     requires: tuple[str, ...]  # distributions that must be installed; "a|b" means either
@@ -515,7 +515,7 @@ gate rejects the literal name in Python source. Depends on: `core/schema.py`, `l
 
 ### `forward/`
 
-```python
+```python notest
 class Forwarder(Protocol):  # core/schema.py
     name: str  # "mlflow", "wandb", "trackio" (TensorBoard is planned)
     requires: tuple[str, ...]  # "a|b" means either distribution
@@ -572,7 +572,7 @@ verification after transfer. Registered under `remotes` keyed by URL scheme. Dep
 
 Channel adapters: Telegram Bot API, Slack incoming webhook, generic webhook, SMTP.
 
-```python
+```python notest
 class Channel(Protocol):
     name: str
     requires: tuple[str, ...]

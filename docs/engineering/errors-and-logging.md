@@ -50,7 +50,7 @@ implementation is `src/cvpilot/logging.py`; the contract test is
 
 Usage:
 
-```python
+```python notest
 from cvpilot.logging import get_logger
 
 log = get_logger(__name__)

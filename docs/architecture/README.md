@@ -12,7 +12,7 @@ deployment and cross-cutting concerns. Decisions that shaped it are recorded as 
 | [04-flows.md](04-flows.md) | How the key operations run end to end, including failure paths and exit codes | `flow-a`, `flow-b` |
 | [05-runtime.md](05-runtime.md) | Where code runs, what it reads and writes, where config and secrets live | `runtime` |
 | [06-cross-cutting.md](06-cross-cutting.md) | Logging, configuration, errors, security, licensing, observability | — |
-| [../adr/](../adr/) | Why it is this way | — |
+| [ADRs](../adr/0001-scope-and-license.md) (all in `../adr/`) | Why it is this way | — |
 
 ## How to read the diagrams
 

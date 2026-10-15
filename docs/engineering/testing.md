@@ -48,7 +48,7 @@ directories are not committed.
 
 ## What CI runs
 
-```bash
+```bash notest
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
