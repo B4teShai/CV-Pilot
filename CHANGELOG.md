@@ -26,6 +26,10 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   checkpoints no longer turns the older ones into `link_mismatch` corruption: manifests record the
   step of their predecessor (`prev_step`), so a gap is told apart from a replaced predecessor.
 
+- A resumed run seeds its "best so far" from this run and every run it resumed (checkpoints that
+  pass the gate, same monitored metric and mode), so it no longer saves a worse `best` just because
+  its own directory is empty.
+
 ### Security
 
 - No valid checkpoint with a known floor is never a fresh start: restore, `resume_path` and

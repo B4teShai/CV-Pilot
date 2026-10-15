@@ -623,12 +623,35 @@ class CheckpointManager:
             started,
         )  # fmt: skip
 
+    def _lineage_best(self) -> float | None:
+        """The best monitored value among this run and the runs it resumed, read from checkpoints
+        that pass the gate. Another metric or another mode is not comparable and is ignored."""
+        found: list[float] = []
+        for run_id in [self._handle.run_id, *self._handle.ancestors()]:
+            try:
+                newest = next(iter(self._dir_for(run_id).iter_valid("best")), None)
+            except CheckpointError as exc:
+                self._emit(
+                    "warning", "best_seed_failed", checkpoint_run_id=run_id,
+                    error_type=type(exc).__name__,
+                )  # fmt: skip
+                continue
+            manifest = None if newest is None else newest.manifest
+            if (
+                manifest is not None
+                and manifest.metric_value is not None
+                and manifest.metric_key == self.monitor
+                and manifest.metric_mode in (None, self.mode)
+            ):
+                found.append(manifest.metric_value)
+        if not found:
+            return None
+        return max(found) if self.mode == "max" else min(found)
+
     def _improves(self, value: float) -> bool:
         if not self._best_loaded:
             self._best_loaded = True
-            newest = next(iter(self._own.iter_valid("best")), None)
-            if newest is not None and newest.manifest.metric_value is not None:
-                self._best_value = newest.manifest.metric_value
+            self._best_value = self._lineage_best()
         if self._best_value is None:
             return True
         return value > self._best_value if self.mode == "max" else value < self._best_value

@@ -117,6 +117,10 @@ search explicitly. Discovery cannot tell whose job a run prefix belongs to: use 
 job, and `CVPILOT_CKPT_KEY` with `authenticated` so that only checkpoints written with your key are
 accepted.
 
+A resumed run compares a new monitored value with the best of its whole lineage (this run and the
+runs it resumed, for the same metric and mode), so a `best` checkpoint is only written when it beats
+what the ancestors already hold.
+
 ## Retention
 
 `keep_last` and `keep_best` (defaults 3 and 2) apply after every save and count only checkpoints
