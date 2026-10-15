@@ -16,8 +16,8 @@ pinned baseline.
 Preconditions:
 
 - A run was started by `cvpilot.init()` or `cvpilot.autolog()`; the hook for the framework
-  is installed (`cvpilot[ultralytics]`, `cvpilot[lightning]`, `cvpilot[hf]` or
-  `cvpilot[mmdet]`).
+  is installed (`cvpilot[ultralytics]` or `cvpilot[lightning]`; the Hugging Face and MMEngine
+  hooks are planned and have no extra yet).
 - The validation set is available as `PredictionTable` and `AnnotationTable` at the end of
   a validation epoch, with `class_names` and optional slice metadata columns.
 - For the gate: a baseline is pinned (`cvpilot baseline set prod <run_id> --eval-set ...`)

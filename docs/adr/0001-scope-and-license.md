@@ -85,7 +85,8 @@ Rules reviewers can check:
    [ADR-0005](0005-run-store.md)). A server is optional and never required for the CLI or
    the Python API to work.
 4. Every framework hook, including Ultralytics, is an extra of this package
-   (`cvpilot[ultralytics]`, `cvpilot[lightning]`, `cvpilot[hf]`, `cvpilot[mmdet]`). The
+   (`cvpilot[ultralytics]`, `cvpilot[lightning]`; the Hugging Face and MMEngine hooks will get
+   theirs when they exist: an extra that installs nothing is not published). The
    `ultralytics` package (AGPL-3.0) is declared only in the `[ultralytics]` extra and is
    imported only inside `hooks/ultralytics.py`, never at module top level and never from
    `core/` or an application package. `cvpilot autolog --help`, the hook's docstring and

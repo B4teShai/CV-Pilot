@@ -91,14 +91,16 @@ fields are never used for secrets.
 | Extra | Unlocks | Dependencies added | Hardware |
 |---|---|---|---|
 | `cvpilot[lightning]` | Lightning logger and callback hook (`autolog(trainer, ...)`) | `lightning` (brings `torch`) | GPU recommended for training; CPU works for tests |
-| `cvpilot[hf]` | HF `Trainer` callback hook | `transformers`, `torch` | same |
-| `cvpilot[mmdet]` | MMEngine hook and vis backend | `mmengine`, `mmdet`, `torch` | same |
 | `cvpilot[safetensors]` | save and load checkpoints (the default format) | `safetensors` | none |
-| `cvpilot[remote]` | checkpoint mirror to object storage (install the backend too: `s3fs`, `gcsfs` or `adlfs`) | `fsspec` | none |
+| `cvpilot[remote-s3]`, `cvpilot[remote-gcs]`, `cvpilot[remote-azure]` | checkpoint mirror to object storage for that scheme | `fsspec` and `s3fs`, `gcsfs` or `adlfs` | none |
+| `cvpilot[remote]` | the `fsspec` library only, for a backend you install yourself | `fsspec` | none |
 | `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker (`init(forward_to=["mlflow"])`) | `mlflow-skinny`, `wandb`, `trackio` | none |
-| `cvpilot[alerts]` | Telegram, Slack and generic webhook channels (SMTP needs no extra) | `httpx` | none |
-| `cvpilot[server]` | `cvpilot server`, websocket live view, htmx UI, share links | `fastapi`, `uvicorn[standard]`, `websockets`, `sqlalchemy`, `asyncpg` (Postgres optional) | 1 vCPU, 512 MB RAM for SQLite mode |
 | `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP; `resume_arguments(point)` for the `resume=` target of a verified `pt` file (confusion capture is planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
+
+Planned, and deliberately not published as extras until they install something: the Hugging Face
+and MMEngine hooks, the alert channels (`httpx`) and the server (`fastapi`, `uvicorn`, `sqlalchemy`,
+`asyncpg`). A test fails if a published extra is empty or if the documentation tells you to install
+an extra that does not exist.
 
 Notice for `cvpilot[ultralytics]`: `ultralytics` is AGPL-3.0. It is imported only inside
 `hooks/ultralytics.py`, and that module does not import it at all: the hook receives the model

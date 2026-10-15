@@ -30,7 +30,7 @@ def framework_file(value: Any) -> Path:
     resume point (anything with ``.path`` and ``.manifest.format``) that ``resume_path`` returned.
 
     The safetensors files ``CheckpointManager`` writes by default are its own format, not one
-    Lightning or Ultralytics can resume from: restore them with ``CheckpointManager.restore``.
+    a training framework can resume from: restore them with ``CheckpointManager.restore``.
 
     Raises:
         ValueError: a name like ``last``, a relative or unverified path, or a safetensors file.
@@ -56,8 +56,8 @@ def framework_file(value: Any) -> Path:
         fmt = found
     if fmt != "pt":
         raise ValueError(
-            f"a {fmt} checkpoint is CheckpointManager's own format and not a file Lightning or "
-            "Ultralytics can resume from; restore it with CheckpointManager.restore() into your "
+            f"a {fmt} checkpoint is CheckpointManager's own format and not a file a training "
+            "framework can resume from; restore it with CheckpointManager.restore() into your "
             "model, or keep framework-written files with format='pt' (opt-in) or adopt()"
         )
     return path

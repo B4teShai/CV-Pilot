@@ -16,6 +16,12 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Fixed
 
+- Four published extras (`server`, `hf`, `mmdet`, `alerts`) installed nothing and the docs told
+  you to install them; they are gone from the metadata and described as planned. New extras
+  `remote-s3`, `remote-gcs` and `remote-azure` bring `fsspec` together with `s3fs`, `gcsfs` or
+  `adlfs`, and the missing-backend error names the extra for the scheme in use. Tests fail on an
+  empty extra or a documented extra that does not exist.
+
 - Signal handlers and the notice poller are installed all or nothing: an unknown `notice_source`, an
   invalid interval or a poller that cannot start no longer leaves handlers installed and the
   liveness lease held. A handler that was already installed for the same signal is chained after

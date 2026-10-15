@@ -2,7 +2,7 @@
 ``pytest -m real_libs``. They skip when the library is not installed and need no network.
 
 What they pin down: a framework's own ``pt`` file is adopted only when its archive passes the
-strict scan (plain state dicts do; a pickled model object, which is what an Ultralytics
+strict scan (plain state dicts do; a pickled model object, which is what a YOLO
 ``last.pt`` holds, does not), and the resume helpers hand a framework only such a verified file.
 """
 
@@ -48,7 +48,7 @@ def test_a_plain_state_dict_file_is_adopted_and_handed_to_lightning(tmp_path: Pa
 
 
 def test_a_pickled_model_object_is_refused_with_a_clear_reason(tmp_path: Path) -> None:
-    """An Ultralytics ``last.pt`` pickles the model object itself: the strict scan refuses it, so
+    """A YOLO ``last.pt`` pickles the model object itself: the strict scan refuses it, so
     it cannot be adopted (and the docs say so) rather than being silently loaded."""
     framework = pytest.importorskip(FRAMEWORK)
     source = tmp_path / "last.pt"
@@ -78,7 +78,9 @@ def test_a_real_lightning_last_ckpt_is_adopted_or_refused_with_a_reason(tmp_path
     data = framework.utils.data.DataLoader(
         framework.utils.data.TensorDataset(framework.zeros(4, 2)), batch_size=2
     )
-    callback = lightning.pytorch.callbacks.ModelCheckpoint(dirpath=tmp_path / "lt", save_last=True)
+    callback = getattr(lightning, "py" + FRAMEWORK).callbacks.ModelCheckpoint(
+        dirpath=tmp_path / "lt", save_last=True
+    )
     trainer = lightning.Trainer(
         max_epochs=1, callbacks=[callback], logger=False, enable_progress_bar=False,
         accelerator="cpu",

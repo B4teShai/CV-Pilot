@@ -41,17 +41,16 @@ Changelog = "https://github.com/B4teShai/CV-Pilot/blob/main/CHANGELOG.md"
 Issues = "https://github.com/B4teShai/CV-Pilot/issues"
 
 [project.optional-dependencies]
-server = []
 ultralytics = ["ultralytics>=8.2"]
 lightning = ["lightning>=2.2"]
-hf = []
-mmdet = []
 mlflow = ["mlflow-skinny>=2.14"]
 wandb = ["wandb>=0.17"]
 trackio = ["trackio>=0.2"]
-alerts = []
 safetensors = ["safetensors>=0.4"]
-remote = ["fsspec>=2024.2"]
+remote = ["fsspec>=2024.2"]  # the library only: add the backend of your scheme, or use remote-*
+remote-s3 = ["fsspec>=2024.2", "s3fs>=2024.2"]
+remote-gcs = ["fsspec>=2024.2", "gcsfs>=2024.2"]
+remote-azure = ["fsspec>=2024.2", "adlfs>=2024.2"]
 
 [project.scripts]
 cvpilot = "cvpilot.cli.app:main"

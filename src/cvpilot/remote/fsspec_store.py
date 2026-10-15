@@ -25,6 +25,7 @@ MAX_LIST_ENTRIES = 10_000
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._=-]{0,127}"
 _KEY = re.compile(rf"{_SEGMENT}(?:/{_SEGMENT}){{0,7}}")
 _BACKEND = {"s3": "s3fs", "gs": "gcsfs", "az": "adlfs", "memory": "fsspec"}
+_EXTRA = {"s3": "remote-s3", "gs": "remote-gcs", "az": "remote-azure", "memory": "remote"}
 
 
 def fsspec_options(scheme: str, timeout: float) -> dict[str, Any]:
@@ -150,8 +151,9 @@ def open_remote(location: RemoteLocation, *, timeout: float = 10.0) -> FsspecSto
         fsspec = importlib.import_module("fsspec")
         fs = fsspec.filesystem("gcs" if location.scheme == "gs" else location.scheme, **options)
     except ImportError:
+        scheme = location.scheme
         raise MissingExtraError(
-            f"remote checkpoints need fsspec and {_BACKEND[location.scheme]}: "
-            'pip install "cvpilot[remote]"'
+            f"remote checkpoints on {scheme}:// need fsspec and {_BACKEND[scheme]}: "
+            f'pip install "cvpilot[{_EXTRA[scheme]}]"'
         ) from None
     return FsspecStore(fs, location.key())

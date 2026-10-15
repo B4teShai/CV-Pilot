@@ -10,7 +10,7 @@ bundled third-party material lives in `NOTICE`.
 - The core distribution installs on CPU-only machines in seconds and never pulls in
   PyTorch, CUDA, a web framework or a database server. Core runtime dependencies are listed
   in [ADR-0003](../adr/0003-repo-and-tooling.md) and checked by CI.
-- Everything heavier is an optional extra (`pip install "cvpilot[name]"`). Extras are
+- Everything heavier is an optional extra (`pip install "cvpilot[<extra>]"`). Extras are
   imported lazily, inside the function that needs them, and the import error names the
   extra to install.
 - A feature that is only available with an extra says so in its `--help` text and in

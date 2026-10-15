@@ -25,7 +25,8 @@ install.
 | Extra | Adds | Notes |
 |---|---|---|
 | `cvpilot[safetensors]` | the `safetensors` library | needed to save and load checkpoints (the default format) |
-| `cvpilot[remote]` | `fsspec` | mirror checkpoints to object storage; add the backend (`s3fs`, `gcsfs`, `adlfs`) |
+| `cvpilot[remote-s3]`, `[remote-gcs]`, `[remote-azure]` | `fsspec` and `s3fs`, `gcsfs` or `adlfs` | mirror checkpoints to that kind of object storage |
+| `cvpilot[remote]` | `fsspec` only | for a backend you install yourself |
 | `cvpilot[lightning]` | Lightning | logger and callback for `Trainer` |
 | `cvpilot[ultralytics]` | Ultralytics | callbacks for YOLO models; **AGPL-3.0**, see below |
 | `cvpilot[mlflow]`, `[wandb]`, `[trackio]` | the tracker SDK | forward scalars to a tracker |
