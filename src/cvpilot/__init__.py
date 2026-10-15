@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.0.1.dev0"
+__version__ = "0.1.0"
 
 _API = {"init", "log", "log_artifact", "log_eval", "finish", "autolog", "Run", "resume_path"}
 

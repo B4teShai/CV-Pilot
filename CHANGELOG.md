@@ -5,6 +5,11 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+## [0.1.0] - release candidate (not published)
+
+Nothing has been uploaded to any package index; publishing needs the maintainer's explicit
+approval (docs/engineering/release.md).
+
 ### Added
 
 - Checkpoint manager (`cvpilot.ckpt.CheckpointManager`, ADR-0006): atomic saves (private `O_EXCL`
