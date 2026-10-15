@@ -51,7 +51,8 @@ Failure paths:
 
 | Failure | Behaviour | Exit | Event |
 |---|---|---|---|
-| Hook extra not installed | `autolog` raises `MissingExtraError` naming the extra or plugin | 1 (Python API raises; CLI not involved) | `hook_missing` |
+| Hook extra not installed | `autolog` raises `MissingExtraError` naming the extra; no object matches: `HookNotFoundError`; no run is started in either case | 1 (Python API raises; CLI not involved) | `hook_missing` |
+| A callback fails inside the framework (store full, odd value) | caught by the hook's guard, counted, the first logged once; the hook is disabled after 10 failures in a row; the framework never sees an exception | n/a | `hook_failed`, `hook_disabled` (WARN) |
 | Duplicate `(key, step)` in a batch | batch rejected, exception to the caller; training continues only if the caller catches it | n/a | `metrics_rejected` |
 | Forwarder error (tracker down, slow or hung) | counted; the first failure per forwarder is logged once; the next batch is offered again (not after `open` failed or a stall); a full queue drops the batch; `log` and the training loop are never blocked or raised into | n/a | `forward_failed` (WARN, once), `forward_summary` (WARN, at finish) |
 | Store write error (disk full, permissions) | `log()` raises `StoreError`; training loop decides | n/a | `store_write_failed` (ERROR) |
@@ -84,7 +85,7 @@ above 256, malformed Parquet or an existing snapshot give `EvalInputError`,
 `SliceCardinalityError` or `SnapshotExistsError`, exit 1 with one `error:` line and one
 `command_failed` event, and nothing is stored. Steps 5 to 8 are built: `cvpilot baseline`,
 `cvpilot compare` and `cvpilot gate` (ADR-0007) read only verified snapshots and never trust a
-stored comparison. Forwarders are built (ADR-0008); hooks, the outbox and alert rules are not built, and the
+stored comparison. Forwarders (ADR-0008) and the Lightning and Ultralytics hooks (steps 1 and 2, scalars only; `autolog`) are built; the outbox and alert rules are not built, and the
 duplicate-batch failure is raised to the caller without a `metrics_rejected` event.
 `cvpilot runs show` and `cvpilot repro` read the result.
 

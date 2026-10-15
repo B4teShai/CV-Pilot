@@ -21,8 +21,8 @@ dependencies = [
 
 [project.optional-dependencies]
 server = []
-ultralytics = []
-lightning = []
+ultralytics = ["ultralytics>=8.2"]
+lightning = ["lightning>=2.2"]
 hf = []
 mmdet = []
 mlflow = ["mlflow-skinny>=2.14"]
@@ -38,6 +38,10 @@ local = "cvpilot.store.local:open_store"
 
 [project.entry-points."cvpilot.tables"]
 parquet = "cvpilot.store.tables:open_tables"
+
+[project.entry-points."cvpilot.hooks"]
+lightning = "cvpilot.hooks.lightning:LightningHook"
+ultralytics = "cvpilot.hooks.ultralytics:YoloHook"
 
 [project.entry-points."cvpilot.forwarders"]
 mlflow = "cvpilot.forward.mlflow:MlflowForwarder"

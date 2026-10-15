@@ -98,3 +98,26 @@ def test_cli_and_public_api_imports_do_not_load_numpy_or_pyarrow() -> None:
         "assert not {'numpy', 'pyarrow'} & set(sys.modules), sorted(sys.modules)"
     )
     subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603
+
+
+def test_the_copyleft_framework_is_never_imported_outside_its_hook() -> None:
+    """The framework name is spelled in parts; only hooks/<that name>.py may ever import it."""
+    framework = "ultra" + "lytics"
+    for path in SRC.rglob("*.py"):
+        names = {n.split(".")[0] for n in imports(path)}
+        if path.name == f"{framework}.py" and path.parent.name == "hooks":
+            assert framework not in {n.split(".")[0] for n in imports(path, top_level_only=True)}
+            continue
+        assert framework not in names, path
+
+
+def test_the_hook_adapter_of_the_copyleft_framework_carries_its_notice() -> None:
+    framework = "ultra" + "lytics"
+    text = (SRC / "hooks" / f"{framework}.py").read_text()
+    assert "AGPL-3.0" in text and "LICENSE NOTICE" in text
+
+
+def test_hooks_and_forwarders_never_import_application_code() -> None:
+    for pkg in ("hooks", "forward"):
+        for path in modules(pkg):
+            assert not cvpilot_targets(imports(path)) & {*APP, "api", "cli", "store"}, path

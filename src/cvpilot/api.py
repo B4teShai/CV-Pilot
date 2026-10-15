@@ -17,10 +17,16 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
 from cvpilot import runs
-from cvpilot.core.errors import NoActiveRunError, RunAlreadyActiveError
+from cvpilot.core.errors import (
+    CvpilotError,
+    HookNotFoundError,
+    NoActiveRunError,
+    RunAlreadyActiveError,
+)
 from cvpilot.core.hashing import new_run_id
 from cvpilot.core.schema import SCHEMA_VERSION, Artifact, ArtifactKind, EvalSnapshot, RunMeta, Task
 from cvpilot.logging import ensure_configured, get_logger
+from cvpilot.registry import check_requires, hooks
 from cvpilot.repro import capture_repro
 from cvpilot.settings import load_settings, parse_forwarders
 
@@ -214,6 +220,71 @@ def init(
             atexit.register(_flush_active_at_exit)
             _atexit_registered = True
         return _active
+
+
+def _framework_version(requires: Sequence[str]) -> str | None:
+    import importlib.metadata
+
+    for requirement in requires:
+        for dist in requirement.split("|"):
+            try:
+                return f"{dist}=={importlib.metadata.version(dist)}"
+            except importlib.metadata.PackageNotFoundError:
+                continue
+    return None
+
+
+def autolog(
+    target: object,
+    *,
+    project: str | None = None,
+    forward_to: Sequence[str] | None = None,
+    **init_kwargs: Any,
+) -> Run:
+    """Start a run and attach the hook that matches ``target`` (a Lightning ``Trainer`` or a
+    YOLO model) so its scalars are logged without changing the training loop.
+
+    ``init_kwargs`` are passed to :func:`init` (``task`` is required). The hook's callbacks never
+    raise into or block the framework. The YOLO framework's hook is an AGPL-3.0 extra: the notice is
+    in the ``hook_attached`` event and in docs/architecture/05-runtime.md.
+
+    Raises:
+        HookNotFoundError: no installed hook matches ``type(target)``.
+        MissingExtraError: the framework's distribution is not installed.
+        Anything :func:`init` raises. If attaching fails the new run is marked ``failed``.
+    """
+    ensure_configured("cvpilot-client", load_settings())
+    log = get_logger("cvpilot.api")
+    factory = hooks.find(lambda candidate: candidate().matches(target))
+    if factory is None:
+        log.error("hook_missing", framework=type(target).__module__.split(".")[0])
+        raise HookNotFoundError(
+            f"no hook matches an object of type {type(target).__name__}; "
+            f"known hooks: {', '.join(hooks.names()) or 'none'}"
+        )
+    hook = factory()
+    try:
+        check_requires(hook.name, hook)
+    except CvpilotError:
+        log.error("hook_missing", hook=hook.name, extra=hook.name)
+        raise
+    framework = _framework_version(hook.requires)
+    if framework is not None:
+        init_kwargs.setdefault("framework", framework)
+    run = init(project, forward_to=forward_to, **init_kwargs)
+    try:
+        hook.attach(target, run)
+    except BaseException:
+        run.finish("failed")
+        raise
+    log.info(
+        "hook_attached",
+        hook=hook.name,
+        framework=framework or hook.name,
+        extra=hook.name,
+        license_notice=hook.license_notice,
+    )
+    return run
 
 
 def _require_active() -> Run:

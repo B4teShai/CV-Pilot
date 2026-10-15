@@ -361,7 +361,7 @@ def test_check_endpoint_never_puts_the_url_in_its_message() -> None:
 
 
 def test_requirement_alternatives_are_accepted() -> None:
-    from cvpilot.runs.forwarding import check_requires
+    from cvpilot.registry import check_requires
 
     class Either:
         requires = ("definitely-missing|pydantic",)

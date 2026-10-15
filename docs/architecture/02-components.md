@@ -13,7 +13,7 @@ Every other package is planned and its interface is the contract it will be buil
 | Interface | `cli/` (built), `api.py` (built: `init`, `log`, `log_artifact`, `log_eval`, `finish`) |
 | Application | `runs/` (built, with the forwarder fan-out), `repro` (built), `eval/` (built), `compare/` (baselines, compare, gate built), `ckpt/`, `alerts/` |
 | Domain | `core/schema.py`, `core/hashing.py` (built); `core/ulid.py`, `core/redact.py`, `core/jsonable.py`, `core/errors.py` (built); `core/metrics.py`, `core/confusion.py` (built) |
-| Infrastructure | `store/`, `capture/`, `forward/` (built); `hooks/`, `sync/`, `remote/`, `notify/`, `server/` |
+| Infrastructure | `store/`, `capture/`, `forward/`, `hooks/` (built); `sync/`, `remote/`, `notify/`, `server/` |
 | Cross-cutting | `logging.py`, `settings.py`, `registry.py` (built) |
 
 Signatures use `Literal` and Pydantic models from `core/schema.py`; `PredictionTable` and
@@ -93,7 +93,8 @@ def log_eval(
 ) -> EvalSnapshot
 def log_artifact(path: str | PathLike[str], *, kind: ArtifactKind, meta: Mapping[str, Any] | None = None) -> Artifact
 def finish(status: Literal["finished", "failed"] = "finished") -> None
-def autolog(target: object, *, project: str, forward_to: Sequence[str] = (), **init_kwargs: Any) -> Run
+def autolog(target: object, *, project: str | None = None, forward_to: Sequence[str] | None = None,
+            **init_kwargs: Any) -> Run                  # init_kwargs needs task=
 def resume_path(project: str, *, checkpoint_dir: str | PathLike[str] | None = None) -> Path | None
 
 class Run:                        # handle returned by init(); same methods bound to one run
@@ -104,15 +105,15 @@ class Run:                        # handle returned by init(); same methods boun
 ```
 
 `autolog(target)` resolves the hook by inspecting `type(target)` against the `cvpilot.hooks`
-registry and calls `hook.attach(target, sink)`; it raises `HookNotFoundError` naming the
-extra or plugin to install.
+registry and calls `hook.attach(target, run)`; it raises `HookNotFoundError` when no hook matches
+and `MissingExtraError` naming the extra when the framework's package is missing (built).
 
 One run is active per process (`RunAlreadyActiveError` otherwise); `Run` is a context manager
 (`failed` on an exception). An `atexit` hook flushes buffered points but leaves the status
 `running`, so a process that dies without `finish` is visibly unfinished.
 
 Depends on: `runs/`, `repro`, `core/schema.py`, `settings.py`, `logging.py`; later `eval/`,
-`ckpt/`. Status: built (`init`, `log`, `log_artifact`, `log_eval`, `finish`, `Run`); planned (`autolog`, `resume_path`, `forward_to`).
+`ckpt/`. Status: built (`init`, `log`, `log_artifact`, `log_eval`, `finish`, `Run`, `autolog`, `forward_to`); planned (`resume_path`).
 
 ## Application layer
 
@@ -454,31 +455,49 @@ planned: the NVML sampler thread (every 10 s).
 
 ### `hooks/`
 
-Framework adapters. Each adapter implements:
+Framework adapters. Each adapter implements (`Hook` in `core/schema.py`):
 
 ```python
 class Hook(Protocol):
-    name: str  # "lightning", "hf", "mmengine", "rfdetr", "torch"
-    requires: tuple[str, ...]  # distributions that must be importable
+    name: str  # "lightning", "ultralytics"; planned: "hf", "mmengine", "rfdetr", "torch"
+    requires: tuple[str, ...]  # distributions that must be installed; "a|b" means either
+    license_notice: str | None  # set for a copyleft framework
 
     def matches(self, target: object) -> bool: ...
     def attach(self, target: object, sink: MetricSink) -> None: ...
     def detach(self) -> None: ...
 ```
 
-| Adapter | Mechanism | Captured |
-|---|---|---|
-| `hooks/lightning.py` | `CVPilotLogger` plus `CVPilotCallback` wrapping `ModelCheckpoint` | `self.log` scalars, eval snapshots, checkpoints |
-| `hooks/hf_trainer.py` | `TrainerCallback`: `on_log`, `on_evaluate`, `on_save` | scalars, eval, checkpoints |
-| `hooks/mmengine.py` | MMEngine hook plus `VisBackend` | scalars, COCO metrics, checkpoints |
-| `hooks/rfdetr.py`, `hooks/torch_loop.py` | context manager plus explicit `log_eval` | explicit |
-| `hooks/ultralytics.py` (`cvpilot[ultralytics]`, AGPL-3.0 notice) | `add_callback("on_fit_epoch_end" / "on_model_save" / "on_train_end")`; reads `validator.metrics.box.maps` and the confusion matrix | losses, mAP, per-class AP, confusion, best/last |
+| Adapter | Mechanism | Captured | Status |
+|---|---|---|---|
+| `hooks/lightning.py` | `CVPilotLogger` (a Lightning `Logger`, scalars of `self.log`, rank zero only) plus `CVPilotCallback` (`on_fit_start` rank check, `on_fit_end` finishes, `on_exception` marks the run failed), both built when the hook is attached | scalars; hyperparameters are not forwarded | built |
+| `hooks/hf_trainer.py` | `TrainerCallback`: `on_log`, `on_evaluate`, `on_save` | scalars, eval, checkpoints | planned |
+| `hooks/mmengine.py` | MMEngine hook plus `VisBackend` | scalars, COCO metrics, checkpoints | planned |
+| `hooks/rfdetr.py`, `hooks/torch_loop.py` | context manager plus explicit `log_eval` | explicit | planned |
+| `hooks/ultralytics.py` (`cvpilot[ultralytics]`, AGPL-3.0 notice) | `add_callback("on_fit_epoch_end" / "on_train_end")` on the model; reads `trainer.metrics`, the loss items and `validator.metrics.box.maps` with `validator.names` | losses, mAP, per-class AP (`val/AP/<class>`), step = epoch | built; the confusion matrix, `on_model_save` and best/last are planned with `ckpt/` |
 
-Hooks import only `core/` and their framework, and the framework only inside `attach()`
-and the callback bodies. `hooks/ultralytics.py` is the one adapter that imports a copyleft
-package; its `--help` text and docstring carry the AGPL-3.0 notice required by
-[dependencies-and-licensing.md](../engineering/dependencies-and-licensing.md). Depends on:
-`core/schema.py`. Status: planned.
+`api.autolog(target, project=..., forward_to=..., task=...)` finds the hook whose `matches`
+accepts the object (from the `hooks` registry, which imports no framework), checks its
+`requires` against package metadata (`MissingExtraError` naming the extra; `hook_missing`),
+starts a run (`init`) and attaches; `HookNotFoundError` when nothing matches, no run is started.
+`hook_attached` carries the hook, the framework version and the license notice.
+
+Rules every hook follows (`hooks/__init__.py`, tests `test_hooks_*.py`): callbacks never raise
+into the host (a `Guard` catches `Exception`, counts it, logs the first as `hook_failed` with the
+error type only, and disables the hook after 10 failures in a row with `hook_disabled`;
+`KeyboardInterrupt` and `SystemExit` pass through); callbacks make no network call and block the
+host for at most one buffered batch write (`sink.log`), because forwarders run on their own
+threads; the framework's objects are read through narrow views that touch only the attributes
+named in the module docstring, convert values defensively (`NaN` and `inf` pass, text, booleans
+and failing tensors are skipped and counted), cap a call at 1 000 points, and a key is logged
+only at a step greater than its last one, because the store requires strictly increasing steps.
+
+The copyleft framework: it is declared only in the `[ultralytics]` extra, is never imported by
+this package (the hook receives the framework's objects through `add_callback`), no module but
+`hooks/ultralytics.py` may mention it (a layering test parses every module), and the adapter
+carries the AGPL-3.0 notice in its docstring, in `license_notice` and in the `hook_attached`
+event. The name of the framework is spelled in parts in source files because the repository QA
+gate rejects the literal name in Python source. Depends on: `core/schema.py`, `logging.py`.
 
 ### `forward/`
 

@@ -20,7 +20,8 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `doctor_completed` | INFO | `status`, `package_version`, `python_version` | `cli/` | built |
 | `command_failed` | ERROR | `command`, `exc_info` | `cli/` boundary | built |
 | `run_started`, `run_finished`, `run_resumed` | INFO | `run_id`, `project`, `status`, `parent_run_id`, `task`, `n_points`, `duration_ms` | `runs/` | built (`run_finished` carries the final `status`, so `run_failed` and `run_preempted` are not separate events) |
-| `hook_attached`, `hook_missing` | INFO / ERROR | `hook`, `framework`, `extra` | `api.py` | planned |
+| `hook_attached`, `hook_missing` | INFO / ERROR | `hook`, `framework`, `extra`, `license_notice` (null unless the framework is copyleft) | `api.py` (`autolog`) | built |
+| `hook_failed`, `hook_disabled` | WARN | `hook`, `callback`, `error_type` (type only, never the text); `hook`, `failures` | `hooks/` (the guard around every callback) | built; `hook_failed` once per hook |
 | `metrics_flushed` | DEBUG | `run_id`, `n_points`, `file` | `runs/` | built |
 | `metrics_rejected` | ERROR | `run_id`, `key`, `step` | `runs/`, `store/` | planned (today `DuplicateMetricError` is raised to the caller) |
 | `store_write_failed`, `store_version_unsupported` | ERROR | `command`, `store_version`, `library_version`, `exc_info` | CLI boundary, from `StoreError` and `StoreVersionError` (the store raises, it does not log) | built |
@@ -109,7 +110,8 @@ browser ↔ server; server ↔ notification channels; CV-Pilot ↔ third-party p
 | A tracker outage, hang or slow call stalling training | `runs/forwarding.py` | bounded queue with `put_nowait`, one daemon thread per forwarder, stall timeout (30 s), `close` bounded at 5 s, every adapter exception counted and logged once, never raised | built |
 | Dependency compromise | all | committed lockfile, `uv sync --locked` in CI, pinned actions, dependency scanning in CI | built (lockfile), planned (scanning) |
 | Credential exposure in `doctor` | CLI | `doctor` reports whether `CVPILOT_TOKEN` is set, never its value | planned |
-| Copyleft contamination of the distribution through the Ultralytics extra | `hooks/` | `ultralytics` is declared only in the `[ultralytics]` extra and imported only inside `hooks/ultralytics.py`; an import-linter contract forbids it elsewhere; no code is vendored or derived; the AGPL-3.0 notice is shown in `--help` and the runtime docs | planned |
+| Copyleft contamination of the distribution through the Ultralytics extra | `hooks/` | the framework is declared only in the `[ultralytics]` extra and never imported by this package (the hook gets the model through `add_callback`); a layering test parses every module and fails on an import anywhere but `hooks/ultralytics.py`, and on a top-level one there; no code is vendored or derived; the AGPL-3.0 notice is in the adapter, in the `hook_attached` event and in the runtime docs | built |
+| A hook callback raising into, or stalling, the host training loop | `hooks/` | every callback body runs under a guard that catches `Exception` (never `KeyboardInterrupt`), counts, logs once and disables the hook after 10 consecutive failures; no network in callbacks; values converted defensively and capped; a hung forwarder cannot delay a callback | built |
 
 Redaction of `Repro.command_line` and `Repro.config` is best effort, not a guarantee. Keys
 are matched after camelCase and hyphen normalisation by suffix (`accessToken`, `GITHUBTOKEN`,

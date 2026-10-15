@@ -7,6 +7,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Hooks: `cvpilot.autolog(target, project=..., task=...)` attaches a Lightning logger and callback
+  (`cvpilot[lightning]`) or Ultralytics callbacks (`cvpilot[ultralytics]`, AGPL-3.0: the notice is
+  in the adapter, in the `hook_attached` event and in the docs; the package is never imported by
+  CV-Pilot). Callbacks never raise into the host (a guard counts failures, logs the first as
+  `hook_failed` with the error type only and disables the hook after 10 in a row), make no network
+  call, read framework objects through narrow views and cap what they take. Registry
+  `cvpilot.hooks`.
 - Forwarders: `init(forward_to=[...])` or `CVPILOT_FORWARD_TO` sends every logged scalar to MLflow
   (`cvpilot[mlflow]`), W&B (`cvpilot[wandb]`) or Trackio (`cvpilot[trackio]`) through the
   `cvpilot.forwarders` registry. Each forwarder has a daemon worker thread behind a bounded queue:

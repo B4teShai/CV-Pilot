@@ -6,12 +6,21 @@ from typing import TYPE_CHECKING, Any
 
 __version__ = "0.0.1.dev0"
 
-_LAZY = {"init", "log", "log_artifact", "log_eval", "finish", "Run"}
+_LAZY = {"init", "log", "log_artifact", "log_eval", "finish", "autolog", "Run"}
 
 if TYPE_CHECKING:
-    from cvpilot.api import Run, finish, init, log, log_artifact, log_eval
+    from cvpilot.api import Run, autolog, finish, init, log, log_artifact, log_eval
 
-__all__ = ["Run", "__version__", "finish", "init", "log", "log_artifact", "log_eval"]
+__all__ = [
+    "Run",
+    "__version__",
+    "autolog",
+    "finish",
+    "init",
+    "log",
+    "log_artifact",
+    "log_eval",
+]
 
 
 def __getattr__(name: str) -> Any:

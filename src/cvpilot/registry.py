@@ -8,12 +8,13 @@ ones.
 
 from __future__ import annotations
 
+import importlib.metadata
 from collections.abc import Callable, Iterable, Mapping
 from importlib.metadata import EntryPoint, entry_points
 from typing import Any, Generic, TypeVar
 
-from cvpilot.core.errors import CvpilotError
-from cvpilot.core.schema import ForwarderFactory, StoreFactory, TableIOFactory
+from cvpilot.core.errors import CvpilotError, MissingExtraError
+from cvpilot.core.schema import ForwarderFactory, HookFactory, StoreFactory, TableIOFactory
 
 T = TypeVar("T")
 EntryPointLookup = Callable[..., Iterable[EntryPoint]]
@@ -65,7 +66,28 @@ class Registry(Generic[T]):
         return None
 
 
+def check_requires(name: str, factory: object) -> None:
+    """Raise ``MissingExtraError`` naming the extra when a required distribution is absent.
+
+    ``factory.requires`` lists distribution names; ``"a|b"`` is satisfied by either. The check
+    reads package metadata only and imports nothing.
+    """
+    for requirement in getattr(factory, "requires", ()):
+        alternatives = requirement.split("|")
+        for dist in alternatives:
+            try:
+                importlib.metadata.version(dist)
+                break
+            except importlib.metadata.PackageNotFoundError:
+                continue
+        else:
+            raise MissingExtraError(
+                f"{name!r} needs the package {alternatives[0]!r}: install cvpilot[{name}]"
+            )
+
+
 stores: Registry[StoreFactory] = Registry("cvpilot.stores")
 capturers: Registry[Capturer] = Registry("cvpilot.capturers")
 tables: Registry[TableIOFactory] = Registry("cvpilot.tables")
 forwarders: Registry[ForwarderFactory] = Registry("cvpilot.forwarders")
+hooks: Registry[HookFactory] = Registry("cvpilot.hooks")

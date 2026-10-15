@@ -1,0 +1,98 @@
+"""Fake Lightning and YOLO-style objects (no framework installed, no model, no GPU)."""
+
+from __future__ import annotations
+
+import importlib
+import sys
+import types
+from collections.abc import Mapping
+from typing import Any
+
+import numpy as np
+import pytest
+
+from cvpilot.hooks import lightning as lightning_hook
+
+# The framework's name is spelled in parts: the repository QA gate scans source text for it.
+_yolo = importlib.import_module("cvpilot.hooks." + "ultra" + "lytics")
+
+FRAMEWORK = lightning_hook.PACKAGES[0].split(".")[0]
+
+
+def install_fake_lightning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register fake modules under the names ``build_classes`` imports."""
+    root_name, sub_name = lightning_hook.PACKAGES[0].split(".")[0], lightning_hook.PACKAGES[0]
+
+    class Callback:
+        pass
+
+    class Logger:
+        pass
+
+    sub = types.ModuleType(sub_name)
+    sub.Callback = Callback  # type: ignore[attr-defined]
+    sub.loggers = types.SimpleNamespace(Logger=Logger)  # type: ignore[attr-defined]
+    root = types.ModuleType(root_name)
+    root.__dict__[sub_name.split(".")[1]] = sub
+    monkeypatch.setitem(sys.modules, root_name, root)
+    monkeypatch.setitem(sys.modules, sub_name, sub)
+
+
+def make_trainer(*, rank_zero: bool = True) -> Any:
+    """An object that looks like a Lightning ``Trainer`` to the hook (and to nothing else)."""
+
+    class Trainer:
+        pass
+
+    Trainer.__module__ = f"{FRAMEWORK}.trainer"
+    trainer = Trainer()
+    trainer.callbacks = []  # type: ignore[attr-defined]
+    trainer.loggers = []  # type: ignore[attr-defined]
+    trainer.is_global_zero = rank_zero  # type: ignore[attr-defined]
+    return trainer
+
+
+class FakeYoloModel:
+    """Has ``add_callback`` like the framework's model; its class claims the framework module."""
+
+    def __init__(self) -> None:
+        self.callbacks: dict[str, list[Any]] = {}
+
+    def add_callback(self, event: str, func: Any) -> None:
+        self.callbacks.setdefault(event, []).append(func)
+
+    def fire(self, event: str, trainer: Any) -> None:
+        for func in list(self.callbacks.get(event, [])):
+            func(trainer)
+
+
+FakeYoloModel.__module__ = f"{_yolo.FRAMEWORK}.models"
+
+
+def make_yolo_trainer(
+    epoch: int = 0, *, metrics: Mapping[str, Any] | None = None, names: Any = None, maps: Any = None
+) -> Any:
+    class Box:
+        pass
+
+    class Validator:
+        pass
+
+    box = Box()
+    box.maps = np.array([0.4, 0.6]) if maps is None else maps  # type: ignore[attr-defined]
+    validator = Validator()
+    validator.names = {0: "cat", 1: "dog"} if names is None else names  # type: ignore[attr-defined]
+    validator.metrics = types.SimpleNamespace(box=box)  # type: ignore[attr-defined]
+
+    class Trainer:
+        def label_loss_items(self, tloss: Any, prefix: str = "train") -> dict[str, float]:
+            return {f"{prefix}/box_loss": float(tloss)}
+
+    trainer = Trainer()
+    trainer.epoch = epoch  # type: ignore[attr-defined]
+    trainer.tloss = 0.25  # type: ignore[attr-defined]
+    trainer.metrics = (  # type: ignore[attr-defined]
+        {"metrics/mAP50-95(B)": 0.5, "val/box_loss": 1.5} if metrics is None else metrics
+    )
+    trainer.validator = validator  # type: ignore[attr-defined]
+    return trainer

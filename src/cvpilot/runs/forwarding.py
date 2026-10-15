@@ -26,7 +26,6 @@ bounds what the *training* thread waits (nothing, except ``close`` at ``finish``
 from __future__ import annotations
 
 import contextvars
-import importlib.metadata
 import queue
 import threading
 import time
@@ -35,10 +34,10 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from cvpilot.core.errors import CvpilotError, MissingExtraError
+from cvpilot.core.errors import CvpilotError
 from cvpilot.core.schema import Forwarder, ForwarderFactory, MetricPoint, Repro, RunMeta, RunStatus
 from cvpilot.logging import get_logger
-from cvpilot.registry import Registry
+from cvpilot.registry import Registry, check_requires
 from cvpilot.registry import forwarders as default_registry
 
 QUEUE_BATCHES = 256
@@ -63,22 +62,6 @@ class ForwarderStats:
         return not (
             self.failed_calls or self.dropped_batches or self.disabled_reason or self.abandoned
         )
-
-
-def check_requires(name: str, factory: object) -> None:
-    """Raise ``MissingExtraError`` naming the extra when a required distribution is absent."""
-    for requirement in getattr(factory, "requires", ()):
-        alternatives = requirement.split("|")  # "a|b": either distribution satisfies it
-        for dist in alternatives:
-            try:
-                importlib.metadata.version(dist)
-                break
-            except importlib.metadata.PackageNotFoundError:
-                continue
-        else:
-            raise MissingExtraError(
-                f"forwarder {name!r} needs the package {alternatives[0]!r}: install cvpilot[{name}]"
-            )
 
 
 def resolve_forwarders(

@@ -85,18 +85,19 @@ fields are never used for secrets.
 
 | Extra | Unlocks | Dependencies added | Hardware |
 |---|---|---|---|
-| `cvpilot[lightning]` | Lightning logger and callback hook | `lightning`, `torch` | GPU recommended for training; CPU works for tests |
+| `cvpilot[lightning]` | Lightning logger and callback hook (`autolog(trainer, ...)`) | `lightning` (brings `torch`) | GPU recommended for training; CPU works for tests |
 | `cvpilot[hf]` | HF `Trainer` callback hook | `transformers`, `torch` | same |
 | `cvpilot[mmdet]` | MMEngine hook and vis backend | `mmengine`, `mmdet`, `torch` | same |
 | `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker (`init(forward_to=["mlflow"])`) | `mlflow-skinny`, `wandb`, `trackio` | none |
 | `cvpilot[alerts]` | Telegram, Slack and generic webhook channels (SMTP needs no extra) | `httpx` | none |
 | `cvpilot[server]` | `cvpilot server`, websocket live view, htmx UI, share links | `fastapi`, `uvicorn[standard]`, `websockets`, `sqlalchemy`, `asyncpg` (Postgres optional) | 1 vCPU, 512 MB RAM for SQLite mode |
-| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), per-class AP and confusion capture, verified `resume=` | `ultralytics` (AGPL-3.0), `torch` | GPU recommended |
+| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP (confusion capture and verified `resume=` are planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
 
 Notice for `cvpilot[ultralytics]`: `ultralytics` is AGPL-3.0. It is imported only inside
-`hooks/ultralytics.py` when the hook is attached; no Ultralytics code is vendored. Installing
-and using this extra makes the user's combined work subject to AGPL-3.0; `cvpilot autolog
---help` and the hook docstring repeat this notice. The core package and every other extra
+`hooks/ultralytics.py`, and that module does not import it at all: the hook receives the model
+through `add_callback`. No Ultralytics code is vendored. Installing and using this extra makes
+the user's combined work subject to AGPL-3.0; the notice is repeated in the hook docstring and
+in the `license_notice` field of the `hook_attached` event that `autolog` logs. The core package and every other extra
 stay Apache-2.0.
 
 The eval engine runs on CPU with the core package (`numpy`, `pyarrow`; `pycocotools` only for

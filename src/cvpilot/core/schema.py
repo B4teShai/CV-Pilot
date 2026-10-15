@@ -535,6 +535,25 @@ class Forwarder(Protocol):
 ForwarderFactory = Callable[..., Forwarder]
 
 
+class Hook(Protocol):
+    """Adapter between a training framework and a ``MetricSink``; registers under ``hooks``.
+
+    ``requires`` lists distribution names (``"a|b"``: either); ``license_notice`` is set for a
+    copyleft framework. Callbacks the hook installs never raise into the framework.
+    """
+
+    name: str
+    requires: tuple[str, ...]
+    license_notice: str | None
+
+    def matches(self, target: object) -> bool: ...
+    def attach(self, target: object, sink: MetricSink) -> None: ...
+    def detach(self) -> None: ...
+
+
+HookFactory = Callable[[], Hook]
+
+
 class MetricStats(_Model):
     """Index-level summary of a run's metric files; ``min_step``/``max_step`` are None if empty."""
 

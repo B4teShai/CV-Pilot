@@ -113,7 +113,7 @@ result is recorded here; until then the row is a commitment, not a claim.
 |---|---|---|---|
 | `cvpilot` CLI | `--version`, `doctor`, `runs list`, `runs show`, `repro`, `eval`; planned: `compare`, `gate`, `baseline`, `ckpt`, `sync`, `import`, `server` | Typer, single error boundary | built (`--version`, `doctor`, `runs`, `repro`, `eval`) |
 | Python API | `cvpilot.init/log/log_artifact/log_eval/finish`, `Run` handle; planned: `autolog`, `resume_path` | pure Python | built (`init`, `log`, `log_artifact`, `log_eval`, `finish`) |
-| Framework hooks | adapters per framework | framework SDKs as extras | planned |
+| Framework hooks | adapters per framework: Lightning (logger and callback) and Ultralytics (callbacks), `autolog` | framework SDKs as extras | built (Lightning, Ultralytics scalars and per-class AP); HF, MMEngine, RF-DETR planned |
 | Core library | Pydantic schemas, invariants, ULIDs, redaction, hashing, metric math | pydantic v2, numpy | built |
 | Eval engine | mAP, per-class AP/AR, confusion with background, slices, bootstrap CIs | numpy (pycocotools only in tests) | built |
 | Compare + gate | deltas with CIs, thresholds, HTML report with prediction-diff gallery, exit codes | numpy, supervision for rendering, Jinja2 templates | planned |
