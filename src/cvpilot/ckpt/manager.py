@@ -57,6 +57,7 @@ from cvpilot.core.schema import (
     RequireTrust,
     TrustLevel,
 )
+from cvpilot.registry import spot_notices
 from cvpilot.settings import load_settings
 
 DEFAULT_INTERVAL_MINUTES = 10.0
@@ -115,7 +116,7 @@ class CheckpointManager:
         max_checkpoint_bytes: int = DEFAULT_MAX_BYTES,
         verify_after_save: bool = True,
         install_signal_handlers: bool = True,
-        notice_source: preempt.NoticeSource | None = None,
+        notice_source: preempt.NoticeSource | str | None = None,
         notice_interval: float = 5.0,
         clock: Callable[[], float] = time.monotonic,
         lock_timeout: float = 30.0,
@@ -198,8 +199,11 @@ class CheckpointManager:
         )
         self.installed_signals: list[int] = self._guard.install() if install_signal_handlers else []
         self._poller: preempt.NoticePoller | None = None
-        if notice_source is not None:
-            self._poller = preempt.NoticePoller(notice_source, self.flag, interval=notice_interval)
+        source = (
+            spot_notices.get(notice_source)() if isinstance(notice_source, str) else notice_source
+        )
+        if source is not None:
+            self._poller = preempt.NoticePoller(source, self.flag, interval=notice_interval)
             self._poller.start()
 
     # -- plumbing ---------------------------------------------------------------------------

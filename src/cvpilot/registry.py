@@ -91,3 +91,5 @@ capturers: Registry[Capturer] = Registry("cvpilot.capturers")
 tables: Registry[TableIOFactory] = Registry("cvpilot.tables")
 forwarders: Registry[ForwarderFactory] = Registry("cvpilot.forwarders")
 hooks: Registry[HookFactory] = Registry("cvpilot.hooks")
+
+spot_notices: Registry[Callable[..., Any]] = Registry("cvpilot.spot_notices")

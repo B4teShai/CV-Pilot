@@ -50,6 +50,10 @@ mlflow = "cvpilot.forward.mlflow:MlflowForwarder"
 wandb = "cvpilot.forward.wandb:WandbForwarder"
 trackio = "cvpilot.forward.trackio:TrackioForwarder"
 
+[project.entry-points."cvpilot.spot_notices"]
+aws = "cvpilot.remote.spot:AwsSpotNotice"
+gcp = "cvpilot.remote.spot:GcpPreemptionNotice"
+
 [project.entry-points."cvpilot.capturers"]
 git = "cvpilot.capture.env:capture_git"
 packages = "cvpilot.capture.env:capture_packages"

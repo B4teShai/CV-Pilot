@@ -1,0 +1,135 @@
+"""Cloud preemption notice adapters: fixed endpoints, short timeouts, bounded answers."""
+
+from __future__ import annotations
+
+import http.server
+import threading
+import time
+from collections.abc import Iterator
+from typing import Any
+
+import pytest
+
+from cvpilot import registry
+from cvpilot.remote import spot
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    routes: dict[tuple[str, str], tuple[int, bytes, dict[str, str]]] = {}
+    seen: list[dict[str, Any]] = []
+    delay = 0.0
+
+    def log_message(self, *args: Any) -> None:
+        return None
+
+    def _answer(self, method: str) -> None:
+        type(self).seen.append({"method": method, "path": self.path, "headers": dict(self.headers)})
+        if type(self).delay:
+            time.sleep(type(self).delay)
+        status, body, headers = type(self).routes.get((method, self.path), (404, b"", {}))
+        self.send_response(status)
+        for key, value in headers.items():
+            self.send_header(key, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        self._answer("GET")
+
+    def do_PUT(self) -> None:
+        self._answer("PUT")
+
+
+@pytest.fixture
+def server() -> Iterator[str]:
+    Handler.routes, Handler.seen, Handler.delay = {}, [], 0.0
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{httpd.server_port}"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_aws_reports_a_notice_with_an_imdsv2_token(server: str) -> None:
+    Handler.routes[("PUT", "/latest/api/token")] = (200, b"tok-123", {})
+    Handler.routes[("GET", "/latest/meta-data/spot/instance-action")] = (
+        200, b'{"action": "terminate", "time": "2026-10-15T10:00:00Z"}', {}
+    )  # fmt: skip
+    assert spot.AwsSpotNotice(base_url=server).check() is True
+    put, get = Handler.seen
+    assert "X-aws-ec2-metadata-token-ttl-seconds" in put["headers"]
+    assert get["headers"]["X-aws-ec2-metadata-token"] == "tok-123"
+
+
+def test_aws_without_a_notice_is_false(server: str) -> None:
+    Handler.routes[("PUT", "/latest/api/token")] = (200, b"tok", {})
+    assert spot.AwsSpotNotice(base_url=server).check() is False  # 404 on instance-action
+
+
+def test_aws_errors_are_raised_for_the_poller_to_count(server: str) -> None:
+    Handler.routes[("PUT", "/latest/api/token")] = (500, b"", {})
+    with pytest.raises(OSError):
+        spot.AwsSpotNotice(base_url=server).check()
+    Handler.routes[("PUT", "/latest/api/token")] = (200, b"t" * 5000, {})
+    with pytest.raises(OSError):
+        spot.AwsSpotNotice(base_url=server).check()  # an oversized token is not read
+
+
+def test_gcp_reports_true_only_for_the_word_true(server: str) -> None:
+    path = "/computeMetadata/v1/instance/preempted"
+    Handler.routes[("GET", path)] = (200, b"TRUE", {})
+    assert spot.GcpPreemptionNotice(base_url=server).check() is True
+    assert Handler.seen[0]["headers"]["Metadata-Flavor"] == "Google"
+    Handler.routes[("GET", path)] = (200, b"FALSE", {})
+    assert spot.GcpPreemptionNotice(base_url=server).check() is False
+    Handler.routes[("GET", path)] = (200, b"x" * 100_000, {})
+    with pytest.raises(OSError):
+        spot.GcpPreemptionNotice(base_url=server).check()
+
+
+def test_redirects_are_not_followed(server: str) -> None:
+    Handler.routes[("GET", "/computeMetadata/v1/instance/preempted")] = (
+        302, b"", {"Location": "http://example.invalid/steal"}
+    )  # fmt: skip
+    with pytest.raises(OSError):
+        spot.GcpPreemptionNotice(base_url=server).check()
+    assert len(Handler.seen) == 1
+
+
+def test_a_slow_endpoint_times_out_quickly(server: str) -> None:
+    Handler.delay = 3.0
+    started = time.monotonic()
+    with pytest.raises(OSError):
+        spot.GcpPreemptionNotice(base_url=server, timeout=0.3).check()
+    assert time.monotonic() - started < 2.0
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com",
+        "https://169.254.169.254",
+        "http://169.254.169.254:8080",
+        "http://user:pw@169.254.169.254",
+        "http://169.254.169.254/path",
+        "http://[::1]:80",
+        "ftp://127.0.0.1",
+        "",
+    ],
+)
+def test_only_the_fixed_metadata_hosts_are_accepted(url: str) -> None:
+    with pytest.raises(ValueError):
+        spot.AwsSpotNotice(base_url=url)
+
+
+def test_timeouts_are_bounded() -> None:
+    for bad in (0, -1, 11, float("nan")):
+        with pytest.raises(ValueError):
+            spot.GcpPreemptionNotice(timeout=bad)
+
+
+def test_the_adapters_are_registered_by_name() -> None:
+    assert registry.spot_notices.names() == ["aws", "gcp"]
+    assert registry.spot_notices.get("aws") is spot.AwsSpotNotice
