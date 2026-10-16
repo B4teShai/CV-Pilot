@@ -987,6 +987,9 @@ class CheckpointManager:
         self, found: Restored, run_id: str, kind: CheckpointKind, skipped: int, policy: str
     ) -> None:
         manifest = found.manifest
+        if kind == "last":  # seed the save schedule: the next save is due one interval later
+            self._last_step = max(self._last_step or 0, manifest.step)
+            self._last_time = self._clock()
         self._emit(
             "info", "checkpoint_restored", run_id=run_id, step=manifest.step, kind=kind,
             size_bytes=manifest.size_bytes, sha256_prefix=manifest.sha256[:12],
