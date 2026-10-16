@@ -90,9 +90,12 @@ class _Session:
         trust: TrustOption | None,
         min_step: int | None = None,
         accept_rollback_to: int | None = None,
+        accept_key_change: bool = False,
     ) -> None:
         from cvpilot import runs
         from cvpilot.ckpt import auth
+
+        self.accept_key_change = accept_key_change
         from cvpilot.ckpt.directory import AdmitContext
 
         settings: Settings = ctx.obj
@@ -127,7 +130,12 @@ class _Session:
 
         try:
             return RunCheckpoints(
-                self.root, run_id, anchor=self.anchor, key=self.key, require_trust=self.policy
+                self.root,
+                run_id,
+                anchor=self.anchor,
+                key=self.key,
+                require_trust=self.policy,
+                accept_key_change=self.accept_key_change,
             )
         except CheckpointError as exc:
             raise _usage(str(exc)) from None
@@ -182,9 +190,10 @@ def _collect(
     check_data: bool,
     min_step: int | None = None,
     accept_rollback_to: int | None = None,
+    accept_key_change: bool = False,
 ) -> list[dict[str, Any]]:
     root = _root(directory)
-    session = _Session(ctx, root, project, trust, min_step, accept_rollback_to)
+    session = _Session(ctx, root, project, trust, min_step, accept_rollback_to, accept_key_change)
     try:
         rows: list[dict[str, Any]] = []
         try:
@@ -258,6 +267,14 @@ def ckpt_verify(
             "on purpose (logged); it never lowers --expect-min-step or CVPILOT_CKPT_MIN_STEP.",
         ),
     ] = None,
+    accept_key_change: Annotated[
+        bool,
+        typer.Option(
+            "--accept-key-change",
+            help="Judge each checkpoint on its own although the key differs from the one the "
+            "run was saved with (a rotation, logged); without it the whole run is refused.",
+        ),
+    ] = False,
     as_json: JsonOpt = False,
 ) -> None:
     """Verify every checkpoint: size, structure, SHA-256, chain and the trust policy.
@@ -275,6 +292,7 @@ def ckpt_verify(
     rows = _collect(
         ctx, directory, run, kind, project, require_trust, check_data=True,
         min_step=expect_min_step, accept_rollback_to=accept_rollback_to,
+        accept_key_change=accept_key_change,
     )  # fmt: skip
     log = get_logger("cvpilot.cli")
     bad = 0

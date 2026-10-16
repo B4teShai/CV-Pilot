@@ -187,6 +187,9 @@ def find_resume_point(
                     "rolled_back",
                     "checkpoint_missing",
                     "anchor_error",
+                    "key_required",
+                    "key_changed",
+                    "auth_downgrade",
                 ):
                     raise CheckpointUntrustedError(failure[1], reason=failure[0])
     finally:

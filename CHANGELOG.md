@@ -79,6 +79,17 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Security
 
+- Authentication, format and trust only ratchet up. Once a run held a tagged checkpoint (directory,
+  run store or the tag-covered pointer's `auth_since`), an untagged newer manifest is refused as
+  `auth_downgrade` under every policy; restoring or saving without the key fails closed
+  (`key_required`), a different key needs `accept_key_change=True` (`key_changed`), manifests carry
+  tag-covered `schema_version`, `chain_version`, `tag_alg` and `key_id` and the format is bound into
+  the chain digest (legacy manifests are refused under the strict policies and reported under `any`),
+  a manifest the store never recorded is flagged `trust_regressed` under `any`, and a remote only
+  adds evidence: a listed name no longer loosens the rollback check, only manifests that pass the
+  gate count. Reproduced against the previous code: a keyless restore of an authenticated run, and
+  rollback laundering through a junk name in the bucket listing.
+
 - The release workflow refuses a commit that is not an ancestor of `origin/main` (full history
   fetched), runs one release at a time with timeouts, builds with the uv cache off and an exactly
   pinned uv, and audits the locked runtime dependencies before building; CI audits for every

@@ -75,6 +75,12 @@ def load_key(environ: Mapping[str, str] | None = None) -> bytes | None:
     return key
 
 
+def key_id(key: bytes) -> str:
+    """A short, non-secret identifier of ``key`` (16 hex characters): enough to tell a rotated key
+    from a missing one, useless for recovering the key."""
+    return hmac.new(key, b"cvpilot-ckpt-key-id-v1", hashlib.sha256).hexdigest()[:16]
+
+
 def weakness(key: bytes) -> str | None:
     """Why a key looks guessable (a short repeated pattern, few distinct characters, low Shannon
     entropy per character), or None. A hint, never a refusal: the value is not echoed."""

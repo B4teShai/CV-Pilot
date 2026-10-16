@@ -292,3 +292,20 @@ def test_a_store_derived_rollback_can_be_accepted_explicitly_and_is_logged(
     accepted = invoke(*base, "--kind", "last", "--accept-rollback-to", "1")
     assert accepted.code == 0, accepted.err
     assert accepted.event("checkpoint_rollback_accepted")
+
+
+def test_verify_names_a_rotated_key_and_judges_each_file_only_with_the_acknowledgement(
+    invoke: Invoke, store_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CVPILOT_CKPT_KEY", "ab12" * 16)
+    run_id = seed(store_root, tmp_path, (1, 2))
+    monkeypatch.setenv("CVPILOT_CKPT_KEY", "cd34" * 16)
+    plain = invoke("ckpt", "verify", str(tmp_path / "ckpt"), "--project", "proj", "--json")
+    assert plain.code == 1 and {r["reason"] for r in json.loads(plain.out)} == {"key_changed"}
+    accepted = invoke(
+        "ckpt", "verify", str(tmp_path / "ckpt"), "--project", "proj", "--json",
+        "--accept-key-change",
+    )  # fmt: skip
+    assert accepted.code == 1  # the old tags still do not verify under the new key
+    assert {r["reason"] for r in json.loads(accepted.out)} == {"key_changed"}
+    assert run_id

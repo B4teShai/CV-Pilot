@@ -55,10 +55,13 @@ from cvpilot.core.errors import (
 )
 from cvpilot.core.hashing import checkpoint_chain, pointer_digest
 from cvpilot.core.schema import (
+    CHAIN_VERSION,
     CHECKPOINT_SUFFIX,
     GENESIS_DIGEST,
+    MANIFEST_SCHEMA_VERSION,
     MAX_MANIFEST_BYTES,
     MAX_STEP,
+    TAG_ALG,
     CheckpointFormat,
     CheckpointKind,
     CheckpointManifest,
@@ -93,6 +96,11 @@ TRUST_REASONS = frozenset(
         "rolled_back",
         "checkpoint_missing",
         "binding_mismatch",
+        "auth_downgrade",
+        "key_required",
+        "key_changed",
+        "legacy_manifest",
+        "unknown_version",
     }
 )
 """Reasons that mean "not trusted at the required level" (event ``checkpoint_untrusted``)."""
@@ -166,6 +174,19 @@ class _Cand:
     reason: str | None = None
     tag_state: str = "nokey"  # nokey | absent | valid | invalid
     trust: TrustLevel = "local_chain_only"
+    legacy: bool = False  # written before schema versions existed
+    key_changed: bool = False  # tagged with a key other than the one configured now
+
+
+@dataclass(frozen=True)
+class AuthEvidence:
+    """What shows that a run was ever authenticated: a valid tag in the directory, a tagged record
+    in the run store, a tag-covered pointer. ``since`` is the first step proven tagged; ``seen`` is
+    true even when the tag cannot be verified (no key); ``key_ids`` are the keys that tagged it."""
+
+    since: int | None = None
+    seen: bool = False
+    key_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -210,9 +231,23 @@ class Admission:
         except CheckpointUntrustedError as exc:
             self._error = exc.reason
         self._known = known
+        if self._error is None:
+            self._error = self._key_error(rc, kind)
         marks = [m for m in (known, self._ctx.min_step) if m is not None]
         self.floor: int | None = max(marks) if marks else None
         self._accepted_logged = False
+
+    @staticmethod
+    def _key_error(rc: RunCheckpoints, kind: CheckpointKind) -> str | None:
+        """A run that was authenticated is never restored without its key, and never under another
+        one by accident: say which, so the way out is clear."""
+        evidence = rc._evidence.get(kind) or rc.evidence(kind)
+        if rc._key is None:
+            if evidence.seen and not rc.accept_auth_downgrade:
+                return "key_required"
+        elif evidence.key_ids and rc._key_id not in evidence.key_ids and not rc.accept_key_change:
+            return "key_changed"
+        return None
 
     def _rolled_back(self, step: int | None, floor: int | None = None) -> str | None:
         floor = self.floor if floor is None else floor
@@ -300,6 +335,25 @@ def gate_failure(skipped: Iterable[Skipped], policy: str) -> tuple[str, str] | N
             f"checkpoints were rolled back: {known} is known to have existed and nothing at or "
             "above it is left (restore it, or accept the rollback on purpose)"
         )
+    for special, message in (
+        (
+            "key_required",
+            "this run was saved with a key (CVPILOT_CKPT_KEY) but none is configured now: set "
+            "the key to restore it (restoring it unauthenticated is a downgrade)",
+        ),
+        (
+            "key_changed",
+            "this run was saved with a different key than the one configured now: restore with "
+            "the old key, then rotate with accept_key_change=True (and restart_chain=True)",
+        ),
+        (
+            "auth_downgrade",
+            "an untagged checkpoint newer than the first authenticated one of this run was "
+            "refused: once a run was authenticated, everything after it must be",
+        ),
+    ):
+        if special in reasons:
+            return special, message
     if "checkpoint_missing" in reasons:
         return "checkpoint_missing", (
             f"{known} is known to have existed but no checkpoint at or above it verifies "
@@ -367,6 +421,8 @@ class RunCheckpoints:
         key: bytes | None = None,
         require_trust: RequireTrust = "any",
         allow_pt: bool = False,
+        accept_auth_downgrade: bool = False,
+        accept_key_change: bool = False,
     ) -> None:
         if require_trust not in POLICIES:
             raise CheckpointError(f"require_trust must be one of {', '.join(POLICIES)}")
@@ -387,6 +443,11 @@ class RunCheckpoints:
         self._anchor = anchor
         self._lock_timeout = lock_timeout
         self._key = key
+        self._key_id = None if key is None else auth.key_id(key)
+        self.accept_auth_downgrade = accept_auth_downgrade
+        self.accept_key_change = accept_key_change
+        self._evidence: dict[str, AuthEvidence] = {}
+        self._legacy_warned = False
         self.require_trust: RequireTrust = require_trust
         self.allow_pt = allow_pt
         self.skipped: list[Skipped] = []
@@ -483,6 +544,14 @@ class RunCheckpoints:
         ):
             cand.reason = "name_mismatch"
             return cand
+        if (
+            manifest.schema_version not in (None, MANIFEST_SCHEMA_VERSION)
+            or manifest.chain_version not in (None, CHAIN_VERSION)
+            or manifest.tag_alg not in (None, TAG_ALG)
+        ):
+            cand.reason = "unknown_version"
+            return cand
+        cand.legacy = manifest.schema_version is None
         expected = checkpoint_chain(
             manifest.prev_chain_sha256,
             manifest.run_id,
@@ -490,6 +559,7 @@ class RunCheckpoints:
             manifest.step,
             manifest.sha256,
             manifest.size_bytes,
+            None if cand.legacy else manifest.format,
         )
         if expected != manifest.chain_sha256:
             cand.reason = "chain_mismatch"
@@ -508,6 +578,9 @@ class RunCheckpoints:
                     manifest.auth_tag,
                 )
                 cand.tag_state = "valid" if valid else "invalid"
+                cand.key_changed = (
+                    not valid and manifest.key_id is not None and manifest.key_id != self._key_id
+                )
         return cand
 
     @staticmethod
@@ -566,7 +639,13 @@ class RunCheckpoints:
             return None  # with a key, an untagged or wrongly tagged pointer is not believed
         return pointer
 
-    def _write_pointer(self, run_fd: int, manifest: CheckpointManifest, digest: str) -> None:
+    def _write_pointer(
+        self,
+        run_fd: int,
+        manifest: CheckpointManifest,
+        digest: str,
+        auth_since: int | None = None,
+    ) -> None:
         name = f"{manifest.kind}/{manifest_name(manifest.step)}"
         pointer = CheckpointPointer(
             run_id=self.run_id,
@@ -578,6 +657,7 @@ class RunCheckpoints:
             pointer_sha256=pointer_digest(
                 self.run_id, manifest.kind, manifest.step, name, digest, manifest.chain_sha256
             ),
+            auth_since=auth_since,
         )
         if self._key is not None:
             pointer = pointer.model_copy(
@@ -738,6 +818,91 @@ class RunCheckpoints:
         self._emit("warning", "checkpoint_quarantine_cleared", removed=removed)
         return removed
 
+    # -- downgrade ----------------------------------------------------------------------------
+
+    def _collect_evidence(self, run_fd: int, kind: str, cands: list[_Cand]) -> AuthEvidence:
+        """Whether this run was ever authenticated, from the directory, the pointer and the run
+        store: deleting tags or the pointer does not make the run look unauthenticated."""
+        since: int | None = None
+        seen = False
+        ids: set[str] = set()
+        for cand in cands:
+            manifest = cand.manifest
+            if manifest is None or cand.step is None or manifest.auth_tag is None:
+                continue
+            seen = True
+            if manifest.key_id is not None:
+                ids.add(manifest.key_id)
+            if self._key is None or cand.tag_state == "valid":
+                since = cand.step if since is None else min(since, cand.step)
+        try:
+            raw = fsops.read_regular(run_fd, _POINTER_NAME[kind], max_bytes=MAX_MANIFEST_BYTES)
+            pointer = CheckpointPointer.model_validate_json(raw)
+        except (CheckpointError, ValidationError, ValueError):
+            pointer = None
+        if pointer is not None and pointer.auth_tag is not None:
+            seen = True
+        verified = self._pointer(run_fd, kind) if self._key is not None else None
+        if verified is not None and verified.auth_since is not None:
+            since = verified.auth_since if since is None else min(since, verified.auth_since)
+        stored_since, stored_ids = self._anchor_auth(kind)
+        if stored_since is not None:
+            seen = True
+            since = stored_since if since is None else min(since, stored_since)
+        ids.update(stored_ids)
+        evidence = AuthEvidence(since, seen or since is not None, frozenset(ids))
+        self._evidence[kind] = evidence
+        return evidence
+
+    def evidence(self, kind: str) -> AuthEvidence:
+        """The authentication evidence of this run for ``kind`` (computed from what is on disk)."""
+        with self._open_run(create=False) as run_fd:
+            if run_fd is None:
+                return AuthEvidence()
+            kind_fd = self._open_kind(run_fd, kind, create=False)
+            cands = [] if kind_fd is None else self._candidates(kind_fd, kind)
+            try:
+                return self._collect_evidence(run_fd, kind, cands)
+            finally:
+                if kind_fd is not None:
+                    os.close(kind_fd)
+
+    def _anchor_auth(self, kind: str) -> tuple[int | None, frozenset[str]]:
+        fn = getattr(self._anchor, "auth_evidence", None)
+        if not callable(fn):
+            return None, frozenset()
+        try:
+            since, ids = fn(self.run_id, kind)
+        except Exception as exc:  # noqa: BLE001  # a store that cannot answer adds no evidence
+            self._emit("warning", "checkpoint_anchor_failed", error_type=type(exc).__name__)
+            return None, frozenset()
+        return (since if isinstance(since, int) else None), frozenset(ids or ())
+
+    def _downgrade_verdict(self, cand: _Cand, evidence: AuthEvidence) -> None:
+        """Version and authentication downgrades: legacy or unknown formats, and an untagged
+        manifest newer than the first tagged one, are refused whatever the policy."""
+        manifest = cand.manifest
+        if manifest is None or cand.step is None:
+            return
+        refusable = (None, "auth_missing", "not_anchored", "unanchored", "link_mismatch")
+        if cand.key_changed and cand.reason == "auth_invalid":
+            cand.reason = "key_changed"
+        if cand.legacy:
+            if self.require_trust != "any":
+                if cand.reason in refusable:
+                    cand.reason = "legacy_manifest"
+            elif not self._legacy_warned:
+                self._legacy_warned = True
+                self._emit("warning", "checkpoint_legacy_manifest", step=cand.step, kind=cand.name)
+        if (
+            not self.accept_auth_downgrade
+            and manifest.auth_tag is None
+            and evidence.since is not None
+            and cand.step > evidence.since
+            and cand.reason in (*refusable, "legacy_manifest")
+        ):
+            cand.reason = "auth_downgrade"
+
     def _stored_digest(self, kind: str, step: int) -> tuple[str | None, bool]:
         """``(digest, errored)``: the digest recorded in the run store, if any, and whether the
         lookup failed (a failing store is not the same as a store with no row)."""
@@ -828,9 +993,35 @@ class RunCheckpoints:
     def _judge(self, run_fd: int, kind_fd: int, kind: str) -> list[_Cand]:
         """Decide which manifests are trusted at the required level, newest first."""
         cands = self._candidates(kind_fd, kind)
+        evidence = self._collect_evidence(run_fd, kind, cands)
         if self.require_trust == "any":
-            return self._judge_chain(run_fd, cands, kind)
-        return self._judge_strict(cands, kind)
+            judged = self._judge_chain(run_fd, cands, kind)
+        else:
+            judged = self._judge_strict(cands, kind)
+        for cand in judged:
+            self._downgrade_verdict(cand, evidence)
+        if self.require_trust == "any":
+            self._note_regression(judged, kind)
+        return judged
+
+    def _note_regression(self, judged: list[_Cand], kind: str) -> None:
+        """Under ``any`` a manifest the run store never recorded (newer than its highest step) is
+        served at the lowest trust level although the run reached a higher one: say so."""
+        recorded = self._anchor_floor(kind)
+        if recorded is None:
+            return
+        for cand in judged:
+            if (
+                cand.reason is None
+                and cand.trust == "local_chain_only"
+                and cand.step is not None
+                and cand.step > recorded
+            ):
+                self._emit(
+                    "warning", "trust_regressed", kind=kind, step=cand.step, recorded_step=recorded,
+                    trust_level=cand.trust, reached="anchored",
+                )  # fmt: skip
+                return
 
     def _judge_strict(self, cands: list[_Cand], kind: str) -> list[_Cand]:
         """Policies ``authenticated`` and ``anchored``: every candidate needs its own proof (a
@@ -864,19 +1055,20 @@ class RunCheckpoints:
         manifest, before anything is downloaded). Under ``any`` only a wrong tag rejects."""
         if cand.manifest is None:
             return cand
+        evidence = self._evidence.get(kind) or self.evidence(kind)
         if self.require_trust != "any":
             self._strict_verdict(cand, kind)
-            return cand
-        if cand.tag_state == "invalid":
+        elif cand.tag_state == "invalid":
             cand.reason = "auth_invalid"
-            return cand
-        stored, _ = self._stored_digest(kind, cand.step or 0)
-        if stored is not None and stored != cand.digest:
-            cand.reason = "store_mismatch"
-        elif cand.tag_state == "valid":
-            cand.trust = "authenticated"
-        elif stored is not None:
-            cand.trust = "anchored"
+        else:
+            stored, _ = self._stored_digest(kind, cand.step or 0)
+            if stored is not None and stored != cand.digest:
+                cand.reason = "store_mismatch"
+            elif cand.tag_state == "valid":
+                cand.trust = "authenticated"
+            elif stored is not None:
+                cand.trust = "anchored"
+        self._downgrade_verdict(cand, evidence)
         return cand
 
     def _judge_chain(self, run_fd: int, cands: list[_Cand], kind: str) -> list[_Cand]:
@@ -1273,6 +1465,22 @@ class RunCheckpoints:
         ]
         for cand in rejected:  # reported and set aside, never silently left to block the save
             self._quarantine(run_fd, kind_fd, kind, cand)
+        evidence = self._evidence.get(kind, AuthEvidence())
+        if self._key is None and evidence.seen and not self.accept_auth_downgrade:
+            raise CheckpointUntrustedError(
+                "this run was saved with a key (CVPILOT_CKPT_KEY): saving without one would "
+                "mix untagged checkpoints into an authenticated run; set the key",
+                reason="key_required",
+            )
+        if self._key is not None and evidence.key_ids and self._key_id not in evidence.key_ids:
+            if not self.accept_key_change:
+                raise CheckpointUntrustedError(
+                    "the key configured now differs from the one this run was saved with: "
+                    "rotate on purpose with accept_key_change=True (and restart_chain=True), "
+                    "after restoring with the old key",
+                    reason="key_changed",
+                )
+            self._emit("warning", "checkpoint_key_change_accepted", kind=kind, step=step)
         sources: dict[str, int] = {}
         for label, value in (
             (
@@ -1377,7 +1585,13 @@ class RunCheckpoints:
                 parent_run_id=parent_run_id,
                 chain_reset=reset_reason is not None,
                 chain_reset_reason=reset_reason,
-                chain_sha256=checkpoint_chain(prev_chain, self.run_id, kind, step, sha256, size),
+                schema_version=MANIFEST_SCHEMA_VERSION,
+                chain_version=CHAIN_VERSION,
+                key_id=self._key_id,
+                tag_alg=None if self._key is None else TAG_ALG,
+                chain_sha256=checkpoint_chain(
+                    prev_chain, self.run_id, kind, step, sha256, size, format
+                ),
             )
             if self._key is not None:
                 manifest = manifest.model_copy(
@@ -1421,7 +1635,10 @@ class RunCheckpoints:
         manifest_digest = hashlib.sha256(raw).hexdigest()
         if before_publish is not None:
             before_publish(manifest, manifest_digest)
-        self._write_pointer(run_fd, manifest, manifest_digest)
+        since = None
+        if self._key is not None:
+            since = step if evidence.since is None else min(evidence.since, step)
+        self._write_pointer(run_fd, manifest, manifest_digest, since)
         return manifest
 
     def existing(self, kind: CheckpointKind, step: int) -> CheckpointManifest | None:

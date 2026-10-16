@@ -551,6 +551,16 @@ class CheckpointManifest(_Model):
     prev_manifest_sha256: str
     prev_chain_sha256: str
     chain_sha256: str
+    schema_version: int | None = None
+    """``MANIFEST_SCHEMA_VERSION`` for manifests written by this release; absent in older ones,
+    which the strict policies refuse (``legacy_manifest``). Covered by the tag."""
+    chain_version: int | None = None
+    """The chain algorithm (``CHAIN_VERSION``: the format is part of the digest)."""
+    tag_alg: str | None = None
+    """The tag algorithm label (``TAG_ALG``) when the manifest is tagged."""
+    key_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{16}$")
+    """A short identifier of the key that tagged this manifest (not secret): tells a rotated key
+    from a missing one."""
     project: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
     """The project of the run that wrote this checkpoint (covered by the tag): a restart of
     another project refuses it even from a shared bucket. Absent in older manifests."""
@@ -659,6 +669,11 @@ class CheckpointManifest(_Model):
         return self
 
 
+MANIFEST_SCHEMA_VERSION = 2
+CHAIN_VERSION = 1
+TAG_ALG = "hmac-sha256-v1"
+
+
 class CheckpointPointer(_Model):
     """The ``LATEST`` or ``BEST`` file: names a manifest and holds its digest and chain value.
 
@@ -673,6 +688,9 @@ class CheckpointPointer(_Model):
     manifest_sha256: str
     chain_sha256: str
     pointer_sha256: str
+    auth_since: int | None = Field(default=None, ge=0, le=MAX_STEP)
+    """The step at which this run first held a tagged checkpoint, covered by the pointer's tag:
+    an untagged manifest newer than it is a downgrade (``auth_downgrade``)."""
     auth_tag: str | None = None
 
     @field_validator("auth_tag")
@@ -804,6 +822,7 @@ class RunStore(Protocol):
     def put_manifest(self, manifest: CheckpointManifest, manifest_sha256: str) -> None: ...
     def get_manifest_digest(self, run_id: str, kind: CheckpointKind, step: int) -> str | None: ...
     def max_manifest_step(self, run_id: str, kind: CheckpointKind) -> int | None: ...
+    def auth_evidence(self, run_id: str, kind: CheckpointKind) -> tuple[int | None, list[str]]: ...
     def list_manifests(self, run_id: str) -> list[CheckpointManifest]: ...
     def artifact_path(self, sha256: str) -> Path: ...
     def open_artifact(self, sha256: str) -> BinaryIO: ...

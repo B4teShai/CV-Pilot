@@ -147,6 +147,10 @@ Sidecar record written next to every checkpoint file ([ADR-0006](../adr/0006-che
 | `prev_manifest_sha256` | `str` | no | SHA-256 of the previous manifest file of the same `(run, kind)` (64 zeros for the first) (added field) |
 | `prev_chain_sha256` | `str` | no | the previous manifest's `chain_sha256` (added field) |
 | `chain_sha256` | `str` | no | `sha256(prev_chain, run_id, kind, step, sha256, size_bytes)` (added field) |
+| `schema_version` | `int` | yes | `2` for manifests of this release, absent in older ones (refused under the strict policies); covered by the tag (added field) |
+| `chain_version` | `int` | yes | the chain algorithm (`1`: the serializer format is part of the digest) (added field) |
+| `tag_alg` | `str` | yes | `hmac-sha256-v1` when tagged (added field) |
+| `key_id` | `str` | yes | 16 hex characters identifying the key that tagged it, so a rotated key is told from a missing one (added field) |
 | `project` | `str` | yes | project of the writing run, covered by the tag; a restart of another project refuses the manifest (`binding_mismatch`) (added field) |
 | `parent_run_id` | `str` | yes | the run that run resumed, covered by the tag; checked in a lineage restore when `project` is set (added field) |
 | `chain_reset` | `bool` | no | true when `restart_chain=True` deliberately started a new chain although progress was known (added field) |

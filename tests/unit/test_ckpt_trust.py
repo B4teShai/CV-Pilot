@@ -123,7 +123,7 @@ def test_a_wrong_key_rejects_everything_that_was_tagged(tmp_path: Path) -> None:
     save(rc, 1)
     for policy in ("any", "authenticated"):
         wrong = reopen(rc, key=OTHER, require_trust=policy)
-        assert steps(wrong) == [] and set(reasons(wrong).values()) == {"auth_invalid"}
+        assert steps(wrong) == [] and set(reasons(wrong).values()) == {"key_changed"}
 
 
 def test_key_rotation_rejects_old_tags_and_accepts_unsigned_files_only_under_any(
@@ -133,9 +133,10 @@ def test_key_rotation_rejects_old_tags_and_accepts_unsigned_files_only_under_any
     save(rc, 1)  # written before a key existed
     tagged = reopen(rc, key=KEY)
     save(tagged, 2)  # written under the first key
-    rotated = reopen(rc, key=OTHER)
+    assert steps(reopen(rc, key=OTHER)) == []  # a rotated key is refused until acknowledged
+    rotated = reopen(rc, key=OTHER, accept_key_change=True)
     assert steps(rotated) == [1]  # 2 fails its tag; 1 has none and policy is any
-    assert reasons(rotated) == {2: "auth_invalid"}
+    assert reasons(rotated) == {2: "key_changed"}  # a different key, said so
     assert [v.trust for v in rotated.iter_valid("last")] == ["local_chain_only"]
     assert steps(reopen(rc, key=OTHER, require_trust="authenticated")) == []
 
@@ -176,10 +177,10 @@ def test_a_forged_newer_manifest_cannot_launder_an_older_one_when_authenticated(
     tagged = reopen(rc, key=KEY)
     save(tagged, 2)
     # an attacker without the key appends a coherent step 3 whose chain vouches for step 2
-    save(reopen(rc), 3)  # untagged save chained to the tagged 2
+    save(reopen(rc, accept_auth_downgrade=True), 3)  # untagged, chained to the tagged 2
     strict = reopen(rc, key=KEY, require_trust="authenticated")
     assert steps(strict) == [2]
-    assert reasons(strict) == {3: "auth_missing", 1: "auth_missing"}
+    assert reasons(strict) == {3: "auth_downgrade", 1: "auth_missing"}
 
 
 def test_the_tag_covers_the_run_id(tmp_path: Path) -> None:

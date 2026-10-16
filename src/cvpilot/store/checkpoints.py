@@ -93,6 +93,28 @@ def max_manifest_step(store: LocalRunStore, run_id: str, kind: str) -> int | Non
     return None if value is None else int(value)
 
 
+def auth_evidence(store: LocalRunStore, run_id: str, kind: str) -> tuple[int | None, list[str]]:
+    """``(first tagged step, key ids)`` among the recorded manifests of ``(run, kind)``: the store's
+    memory of whether, and with which key, this run was ever authenticated."""
+    _key(run_id, kind, 0)
+    rows = store._query(
+        "SELECT step, record FROM checkpoint_manifest WHERE run_id=? AND kind=? ORDER BY step",
+        (run_id, kind),
+    )
+    first: int | None = None
+    key_ids: set[str] = set()
+    for step, record in rows:
+        try:
+            manifest = CheckpointManifest.model_validate_json(record)
+        except ValueError:
+            continue
+        if manifest.auth_tag is not None:
+            first = step if first is None else min(first, step)
+            if manifest.key_id is not None:
+                key_ids.add(manifest.key_id)
+    return first, sorted(key_ids)
+
+
 def list_manifests(store: LocalRunStore, run_id: str) -> list[CheckpointManifest]:
     """The recorded manifests of a run in step order (kind, then step)."""
     require_run_id(run_id)

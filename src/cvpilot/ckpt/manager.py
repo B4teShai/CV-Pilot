@@ -140,6 +140,10 @@ class _HandleAnchor:
         value: int | None = self._handle.checkpoint_max_step(run_id, kind)
         return value
 
+    def auth_evidence(self, run_id: str, kind: CheckpointKind) -> tuple[int | None, list[str]]:
+        evidence: tuple[int | None, list[str]] = self._handle.checkpoint_auth_evidence(run_id, kind)
+        return evidence
+
 
 class CheckpointManager:
     """Atomic, verified checkpoints for one run. See the module docstring."""
@@ -179,6 +183,7 @@ class CheckpointManager:
         min_step: int | None = None,
         allow_weaker_trust: bool = False,
         restart_chain: bool = False,
+        accept_key_change: bool = False,
     ) -> None:
         settings = load_settings()
         key = auth.load_key()  # environment only; never stored, logged or passed on
@@ -190,8 +195,8 @@ class CheckpointManager:
             remote = settings.checkpoint_remote
         if not isinstance(allow_weaker_trust, bool):
             raise ValueError("allow_weaker_trust must be True or False")
-        if not isinstance(restart_chain, bool):
-            raise ValueError("restart_chain must be True or False")
+        if not isinstance(restart_chain, bool) or not isinstance(accept_key_change, bool):
+            raise ValueError("restart_chain and accept_key_change must be True or False")
         require_trust = auth.resolve_policy(  # type: ignore[assignment]
             require_trust, settings.ckpt_require_trust, key, allow_weaker=allow_weaker_trust
         )
@@ -268,6 +273,7 @@ class CheckpointManager:
         self.min_step: int | None = max(floors) if floors else None
         self.allow_weaker_trust = allow_weaker_trust
         self.restart_chain = restart_chain  # explicit, never from the environment
+        self.accept_key_change = accept_key_change  # explicit, never from the environment
         self._remote_max: dict[str, int | None] = {}
         self._anchor = _HandleAnchor(self._handle)
         weak = None if key is None else auth.weakness(key)
@@ -392,6 +398,8 @@ class CheckpointManager:
                 key=self._key,
                 require_trust=level,
                 allow_pt=self.allow_pt,
+                accept_auth_downgrade=self.allow_weaker_trust,
+                accept_key_change=self.accept_key_change,
             )
             self._dirs[(run_id, level)] = found
         return found
@@ -600,7 +608,15 @@ class CheckpointManager:
                     self._emit(
                         "warning", "checkpoint_floor_unavailable", kind=kind, source="the remote"
                     )
-                self._remote_max[kind] = max(steps, default=None)
+                # the newest remote step whose manifest is admitted: a name alone is no evidence
+                self._remote_max[kind] = next(
+                    (
+                        s
+                        for s in steps[:MAX_REMOTE_CANDIDATES]
+                        if self._mirror.probe(self._own, kind, s)
+                    ),
+                    None,
+                )
             remote = self._remote_max[kind]
             if remote is not None:
                 hints.append(remote)
@@ -1005,8 +1021,13 @@ class CheckpointManager:
                 "warning", "checkpoint_download_failed", kind=kind, error_type=type(exc).__name__
             )
             return None
-        ctx = replace(ctx, present=frozenset(steps))  # still listed, so not "gone"
-        for step in steps[:MAX_REMOTE_CANDIDATES]:
+        # A listed name is not evidence: only steps whose manifest passes the gate count as still
+        # present, so a bucket cannot loosen the rollback check by listing a junk manifest name.
+        top = steps[:MAX_REMOTE_CANDIDATES]
+        ctx = replace(
+            ctx, present=frozenset(s for s in top if self._mirror.probe(found, kind, s, ctx))
+        )
+        for step in top:
             if not self._fetch_one(found, run_id, kind, step, skipped, ctx):
                 continue
             restored = self._restore_local(run_id, kind, map_location, skipped, policy, ctx)
@@ -1039,7 +1060,12 @@ class CheckpointManager:
         )[:MAX_REMOTE_CANDIDATES]
         for step, run_id in candidates:
             found = self._dir_for(run_id, policy)
-            one = replace(ctx, present=frozenset(listed[run_id]))
+            probed = frozenset(
+                s
+                for s in listed[run_id][:MAX_REMOTE_CANDIDATES]
+                if self._mirror.probe(found, kind, s, ctx)
+            )
+            one = replace(ctx, present=probed)
             if self._fetch_one(found, run_id, kind, step, skipped, one):
                 restored = self._restore_local(run_id, kind, map_location, skipped, policy, one)
                 if restored is not None:

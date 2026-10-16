@@ -98,9 +98,14 @@ def test_a_remote_manifest_that_disagrees_with_the_run_store_is_refused_before_t
         install_signal_handlers=False, remote_sleep=lambda s: None, require_trust="anchored",
     )  # fmt: skip
     fake.reads.clear()
-    restored = mgr.restore(run_ids=[old])
-    assert restored is not None and restored.manifest.step == 1  # step 2 was refused, 1 served
+    # step 2 is refused, and step 1 alone is a rollback: the store knows step 2 existed, and the
+    # altered remote manifest does not count as "still there"
+    with pytest.raises(CheckpointUntrustedError) as caught:
+        mgr.restore(run_ids=[old])
+    assert caught.value.reason == "rolled_back"
     assert not any(k.endswith("step_000000002.safetensors") for k in fake.reads)
+    accepted = mgr.restore(run_ids=[old], accept_rollback_to=1)
+    assert accepted is not None and accepted.manifest.step == 1
     run.finish()
 
 

@@ -131,6 +131,9 @@ class StoreAnchor:
     def max_step(self, run_id: str, kind: CheckpointKind) -> int | None:
         return self._store.max_manifest_step(run_id, kind)
 
+    def auth_evidence(self, run_id: str, kind: CheckpointKind) -> tuple[int | None, list[str]]:
+        return self._store.auth_evidence(run_id, kind)
+
 
 def open_anchor(
     project: str, store_dir: Path | None

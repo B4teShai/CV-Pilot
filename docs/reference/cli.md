@@ -278,6 +278,7 @@ exit 2 when the path is not a directory or the options are invalid.
 | `--require-trust` | one of `any`, `anchored`, `authenticated` |  | any, anchored or authenticated (see the help above). |
 | `--expect-min-step` | int range |  | A floor you know from elsewhere: older checkpoints fail (rolled_back). |
 | `--accept-rollback-to` | int range |  | Accept a rollback from the run store or pointer down to this step, on purpose (logged); it never lowers --expect-min-step or CVPILOT_CKPT_MIN_STEP. |
+| `--accept-key-change` | flag |  | Judge each checkpoint on its own although the key differs from the one the run was saved with (a rotation, logged); without it the whole run is refused. |
 | `--json` | flag |  | Print JSON instead of text. |
 
 ### `cvpilot ckpt quarantine`

@@ -268,6 +268,31 @@ class Mirror:
         steps = [int(m.group(1)) for n in names if (m := _STEP_NAME.fullmatch(n))]
         return sorted(steps, reverse=True)
 
+    def probe(
+        self,
+        rc: RunCheckpoints,
+        kind: CheckpointKind,
+        step: int,
+        ctx: AdmitContext | None = None,
+    ) -> bool:
+        """Would the remote manifest at ``step`` be admitted? Only its manifest is read (bounded,
+        no data) and it is judged like any candidate: a name in a listing is not evidence that a
+        checkpoint exists, so only manifests that pass the gate count as present or as a floor."""
+        started = self._clock()
+        try:
+            raw = self._call(
+                lambda: self._store.read_bounded(
+                    f"{rc.run_id}/{kind}/{manifest_name(step)}", MAX_MANIFEST_BYTES
+                ),
+                started,
+            )
+        except OSError:
+            return False
+        cand = rc._cand_from_bytes(raw, kind, manifest_name(step), step)
+        if cand.manifest is None:
+            return False
+        return rc.admission(kind, ctx).decide(rc.judge_single(cand, kind)) is None
+
     def fetch(
         self,
         rc: RunCheckpoints,

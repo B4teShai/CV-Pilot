@@ -100,6 +100,8 @@ EXEMPT = {
     "RunCheckpoints.hold_lease": "liveness",
     "RunCheckpoints.lease_state": "liveness",
     "RunCheckpoints.last_activity": "liveness",
+    "Mirror.probe": "reads and judges one remote manifest; no data, hands out nothing",
+    "RunCheckpoints.evidence": "an input of the gate (was this run ever authenticated?)",
     "Mirror.budget": "a time limit for remote calls",
     "Mirror.begin_restore": "resets a budget",
     "Mirror.label": "scheme and bucket",
@@ -234,6 +236,33 @@ def attack_forged_untagged(world: World) -> None:
         )  # fmt: skip
 
 
+def attack_untagged_planted_and_genuine_removed(world: World) -> None:
+    """Hand-written untagged step 4 chained to the genuine step 3; everything genuine is gone."""
+    import hashlib
+
+    from cvpilot.core.schema import CheckpointManifest
+
+    folder = world.folder()
+    parent_raw = (folder / "step_000000003.manifest.json").read_bytes()
+    parent = json.loads(parent_raw)
+    data = __import__("ckpt_support").blob(4)
+    sha = hashlib.sha256(data).hexdigest()
+    forged = CheckpointManifest(
+        run_id=world.victim, step=4, kind="last", path="last/step_000000004.safetensors",
+        sha256=sha, size_bytes=len(data), format="safetensors", versions={},
+        dataset_hash="merkle:" + "c" * 64, created_at=parent["created_at"],
+        prev_manifest_sha256=hashlib.sha256(parent_raw).hexdigest(),
+        prev_chain_sha256=parent["chain_sha256"], prev_step=3, schema_version=2, chain_version=1,
+        chain_sha256=checkpoint_chain(
+            parent["chain_sha256"], world.victim, "last", 4, sha, len(data), "safetensors"
+        ),
+    )  # fmt: skip
+    (folder / "step_000000004.safetensors").write_bytes(data)
+    (folder / "step_000000004.manifest.json").write_text(forged.model_dump_json() + "\n")
+    remove_steps(world, (1, 2, 3))
+    os.unlink(world.ckpt / world.victim / "LATEST")
+
+
 def attack_store_ahead(world: World) -> None:
     ahead = RunCheckpoints(world.ckpt, world.victim).existing("last", 3)
     assert ahead is not None
@@ -359,6 +388,29 @@ ATTACKS = [
         "authenticated",
         True,
         reasons=frozenset({"rolled_back", "checkpoint_missing"}),
+    ),
+    Attack(
+        "untagged manifest planted after authentication, genuine ones removed",
+        attack_untagged_planted_and_genuine_removed,
+        "authenticated",
+        True,
+        reasons=frozenset({"auth_downgrade", "rolled_back", "checkpoint_missing", "auth_invalid"}),
+    ),
+    Attack(
+        "the key is gone after an authenticated run",
+        lambda w: None,
+        "anchored",
+        True,
+        reasons=frozenset({"key_required"}),
+        env=(("CVPILOT_CKPT_KEY", "__unset__"),),
+    ),
+    Attack(
+        "the key was rotated",
+        lambda w: None,
+        "authenticated",
+        True,
+        reasons=frozenset({"key_changed"}),
+        env=(("CVPILOT_CKPT_KEY", "76" * 32),),
     ),
     Attack(
         "operator floor lowered per call",
@@ -659,7 +711,10 @@ def test_the_same_attack_gets_the_same_answer_from_every_entry_point(
     if attack.name == "an ancestor's directory rolled back":
         pass  # the child's lineage reaches the victim as an ancestor
     for name, value in attack.env:
-        monkeypatch.setenv(name, value)
+        if value == "__unset__":
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
     monkeypatch.setenv("CVPILOT_STORE_DIR", str(world.store))
     params = inspect.signature(adapter).parameters
     outcome = adapter(world, attack, invoke) if "invoke" in params else adapter(world, attack)

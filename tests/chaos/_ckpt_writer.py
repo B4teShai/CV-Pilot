@@ -75,10 +75,12 @@ def main(root: str, store: str, point: str, megabytes: float) -> None:
             stall(point)
         real_record(self, manifest, digest)  # type: ignore[arg-type]
 
-    def write_pointer(self: RunCheckpoints, run_fd: int, manifest: object, digest: str) -> None:
+    def write_pointer(
+        self: RunCheckpoints, run_fd: int, manifest: object, digest: str, *rest: object
+    ) -> None:
         if point == "before_pointer" and current["step"] == STALL_STEP:
             stall(point)
-        real_pointer(self, run_fd, manifest, digest)  # type: ignore[arg-type]
+        real_pointer(self, run_fd, manifest, digest, *rest)  # type: ignore[arg-type]
 
     CheckpointManager._record = record  # type: ignore[method-assign]
     RunCheckpoints._write_pointer = write_pointer  # type: ignore[method-assign]

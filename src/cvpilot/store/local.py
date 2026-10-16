@@ -869,6 +869,10 @@ class LocalRunStore:
         """The recorded manifest digest, or None when nothing was recorded for the key."""
         return _checkpoints.get_manifest_digest(self, run_id, kind, step)
 
+    def auth_evidence(self, run_id: str, kind: str) -> tuple[int | None, list[str]]:
+        """The first tagged step recorded for ``(run, kind)`` and the key ids seen."""
+        return _checkpoints.auth_evidence(self, run_id, kind)
+
     def max_manifest_step(self, run_id: str, kind: str) -> int | None:
         """The highest checkpoint step recorded for ``(run, kind)``, or None."""
         return _checkpoints.max_manifest_step(self, run_id, kind)

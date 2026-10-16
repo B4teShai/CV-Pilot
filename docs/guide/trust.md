@@ -70,6 +70,34 @@ safely uploaded. **Rotation:** tags made under the old key fail under the new on
 re-save to re-tag. Files written before a key existed have no tag and are accepted only under
 `any`.
 
+## Downgrades
+
+Authentication only ratchets up. Once a run held a tagged checkpoint (a valid tag in the directory,
+a tagged record in the run store, or a tag-covered `LATEST` pointer, which carries `auth_since`),
+anything untagged that is newer than the first tagged step is refused as `auth_downgrade` under
+every policy: stripping tags or deleting the pointer does not reset it, because the run store keeps
+the record. The only way through is the explicit constructor argument `allow_weaker_trust=True`.
+
+* **No key.** Restoring or saving a run that was authenticated without `CVPILOT_CKPT_KEY` fails
+  closed with `key_required` and says to set the key; it never degrades to `local_chain_only`.
+* **A different key.** A key other than the one the run was saved with is refused as `key_changed`,
+  for restore and for save. Rotation path: restore with the **old** key; switch to the new key;
+  build the manager with `accept_key_change=True` and `restart_chain=True`. The next save starts a
+  visibly reset chain under the new key (`checkpoint_key_change_accepted` and
+  `checkpoint_chain_reset` are logged); the old checkpoints stay unreadable under the new key.
+* **Versions and formats.** Manifests carry `schema_version`, `chain_version`, `tag_alg` and
+  `key_id`, all covered by the tag, and the serializer format is part of the chain digest, so a
+  safetensors checkpoint cannot be presented as a `pt` one and stripping the version fields breaks
+  the chain. A manifest from before versions existed is refused under `anchored` and
+  `authenticated` (`legacy_manifest`) and reported (`checkpoint_legacy_manifest`) under `any`; an
+  unknown version is refused under every policy. The `pt` opt-in applies at every path.
+* **Trust regression.** Under `any`, a manifest the run store never recorded (newer than its highest
+  step) is served at `local_chain_only` although the run reached `anchored`: that is logged as
+  `trust_regressed`.
+* **The remote only adds evidence.** A name in a bucket listing is not evidence that a checkpoint
+  exists: only remote manifests that pass the gate count as present or as a floor
+  (`Mirror.probe`), so a bucket cannot loosen the rollback check or replace stricter local evidence.
+
 ## Verified, then opened: the gap
 
 `resume_path` verifies a file and hands you its path; your framework opens it later. Anyone who can

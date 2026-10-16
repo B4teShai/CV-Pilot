@@ -352,6 +352,12 @@ class RunHandle:
         """The digest recorded for a checkpoint manifest of this project, or None."""
         return self._store.get_manifest_digest(run_id, kind, step)
 
+    def checkpoint_auth_evidence(
+        self, run_id: str, kind: CheckpointKind
+    ) -> tuple[int | None, list[str]]:
+        """The first tagged checkpoint step the store recorded for a run and the key ids seen."""
+        return self._store.auth_evidence(run_id, kind)
+
     def checkpoint_max_step(self, run_id: str, kind: CheckpointKind) -> int | None:
         """The highest checkpoint step the store recorded for a run, or None."""
         return self._store.max_manifest_step(run_id, kind)

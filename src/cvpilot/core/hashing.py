@@ -37,11 +37,21 @@ def sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
 
 
 def checkpoint_chain(
-    previous_chain: str, run_id: str, kind: str, step: int, sha256: str, size_bytes: int
+    previous_chain: str,
+    run_id: str,
+    kind: str,
+    step: int,
+    sha256: str,
+    size_bytes: int,
+    fmt: str | None = None,
 ) -> str:
     """Chain value of a checkpoint manifest: commits to the file digest, its size and the
-    previous manifest of the same ``(run, kind)`` (the first one chains from 64 zeros)."""
+    previous manifest of the same ``(run, kind)`` (the first one chains from 64 zeros). From
+    schema version 2 on it also commits to the serializer format (``fmt``), so a safetensors
+    checkpoint cannot be presented as a ``pt`` one; ``fmt=None`` is the version-1 formula."""
     text = f"{previous_chain}\n{run_id}\n{kind}\n{step}\n{sha256}\n{size_bytes}"
+    if fmt is not None:
+        text += f"\n{fmt}"
     return hashlib.sha256(text.encode("ascii")).hexdigest()
 
 

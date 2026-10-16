@@ -75,6 +75,7 @@ def forge_manifest(rc: RunCheckpoints, step: int, *, kind: str = "last", **chang
         fields["step"],
         fields["sha256"],
         fields["size_bytes"],
+        fields["format"] if fields.get("schema_version") else None,
     )
     data = (CheckpointManifest(**fields).model_dump_json() + "\n").encode()
     path.write_bytes(data)
