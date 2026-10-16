@@ -275,9 +275,9 @@ def test_the_secret_patterns_catch_what_they_claim_to() -> None:
         "xoxb-" + "1234567890-abcdef",
         "sk-" + "c3" * 15,
         "AIza" + "d4" * 17 + "e",
-        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijkl",
-        "-----BEGIN RSA PRIVATE KEY-----",
-        'password = "hunter2hunter2"',
+        "ey" + "JhbGciOiJIUzI1NiJ9." + "ey" + "JzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijkl",
+        "-----" + "BEGIN RSA PRIVATE KEY" + "-----",
+        "pass" + 'word = "hunter2hunter2"',
     ]
     for sample in samples:
         assert SECRET.search(sample), sample
