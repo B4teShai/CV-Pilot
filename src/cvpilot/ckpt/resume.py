@@ -41,7 +41,7 @@ from cvpilot.core.schema import (
     RunMeta,
     TrustLevel,
 )
-from cvpilot.logging import get_logger
+from cvpilot.logging import ensure_configured, get_logger
 from cvpilot.settings import load_settings
 
 RESUMABLE = ("preempted", "failed", "running", "resumed")
@@ -134,6 +134,7 @@ def find_resume_point(
         CheckpointError: ``require_trust='authenticated'`` without ``CVPILOT_CKPT_KEY``.
     """
     settings = load_settings()
+    ensure_configured("cvpilot-client", settings)  # the recipe calls this before cvpilot.init
     root = Path(checkpoint_dir) if checkpoint_dir is not None else settings.checkpoint_dir
     if root is None:
         raise ValueError(

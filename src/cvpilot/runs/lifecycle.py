@@ -45,9 +45,10 @@ from cvpilot.core.schema import (
     RunStore,
     is_terminal,
 )
-from cvpilot.logging import bind_request_id, get_logger
+from cvpilot.logging import bind_request_id, ensure_configured, get_logger
 from cvpilot.runs.forwarding import Fanout
 from cvpilot.runs.queries import open_existing, open_store
+from cvpilot.settings import load_settings
 
 if TYPE_CHECKING:
     from cvpilot.core.schema import EvalSnapshot
@@ -497,6 +498,8 @@ def recover_run(
     Raises:
         RunNotFoundError, InvalidTransitionError: unknown run, or it already has a final status.
     """
+
+    ensure_configured("cvpilot-client", load_settings())  # the recipe calls this before init
 
     def held() -> bool:
         if checkpoint_dir is None:
