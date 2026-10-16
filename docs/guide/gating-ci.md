@@ -45,6 +45,11 @@ four runs of the same synthetic 40-image set: a baseline, an equal run, a run wi
 predictions and a run of a different evaluation set. Pins are append-only; `--replace` adds a
 newer pin and keeps the old one.
 
+A baseline must come from a `finished` run, whether you pin it with `baseline set` or name it by run id
+in `compare` and `gate`: both refuse a run that is still running, failed or preempted (exit 1, "a
+baseline run must be finished"). There is no override; a run whose process died is marked failed
+with `recover_run`, and you pin a run that finished.
+
 ```bash notest
 cvpilot baseline set prod <BASELINE_RUN>        # pins the latest snapshot; --eval-set HASH, --step N
 cvpilot baseline list                           # add --json, --history

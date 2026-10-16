@@ -148,3 +148,33 @@ def test_tampered_baseline_row_is_reported_with_its_own_event(
         store.close()
     res = invoke("baseline", "list", "--project", "proj")
     assert res.code == 1 and res.event("baseline_integrity_failed")
+
+
+@pytest.mark.parametrize("status", ["running", "failed", "preempted"])
+def test_set_refuses_a_run_that_is_not_finished(
+    invoke: Invoke, store_root: Path, status: str
+) -> None:
+    store = open_project(store_root)
+    try:
+        run = make_run(store, status=status)
+        add_snapshot(store, run, h=H1)
+    finally:
+        store.close()
+    res = invoke("baseline", "set", "prod", run, "--project", "proj")
+    assert res.code == 1 and "must be finished" in res.human and status in res.human
+    assert len(res.event("baseline_refused")) == 1
+    assert json.loads(invoke("baseline", "list", "--project", "proj", "--json").out) == []
+
+
+def test_the_python_api_refuses_an_unfinished_run_too(store_root: Path) -> None:
+    from cvpilot.compare.baselines import set_baseline
+    from cvpilot.core.errors import BaselineRefusedError
+
+    store = open_project(store_root)
+    try:
+        run = make_run(store, status="running")
+        add_snapshot(store, run, h=H1)
+    finally:
+        store.close()
+    with pytest.raises(BaselineRefusedError, match="must be finished"):
+        set_baseline("proj", "prod", run, store_dir=store_root)

@@ -77,7 +77,8 @@ def set_baseline(
     """Pin the snapshot of ``run_id`` (latest step of the eval set unless ``step`` is given).
 
     Raises:
-        BaselineRefusedError: no such snapshot, ambiguous eval set, wrong project.
+        BaselineRefusedError: the run is not finished, no such snapshot, ambiguous eval set,
+            wrong project.
         BaselineExistsError: the tag is pinned and ``replace`` is false.
         SnapshotIntegrityError, BaselineIntegrityError: something fails verification.
         RunNotFoundError, InvalidRunIdError: the run is unknown or the id malformed.
@@ -86,7 +87,14 @@ def set_baseline(
         raise BaselineRefusedError("invalid baseline tag", project=project, run_id=run_id)
     store = open_existing(project, run_id, store_dir)
     try:
-        store.get_run(run_id)
+        status = store.get_run(run_id).status
+        if status != "finished":  # same rule as --baseline RUN_ID; recover_run, then pin
+            raise BaselineRefusedError(
+                f"run {run_id} is {status}; a baseline run must be finished",
+                project=project,
+                tag=tag,
+                run_id=run_id,
+            )
         snapshots = store.list_snapshots(run_id)  # verified: files and the run's chain
         eval_set_hash = _resolve_eval_set(snapshots, project, tag, run_id, eval_set)
         steps = sorted(s.step for s in snapshots if s.eval_set_hash == eval_set_hash)
