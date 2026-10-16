@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import email
-import os
-import stat
 import importlib.util
+import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
