@@ -400,3 +400,35 @@ def test_an_untagged_remote_manifest_does_not_replace_a_stricter_local_one(
         tmp_path / "ckpt" / run.run_id / "last" / "step_000000001.manifest.json"
     ).read_bytes() == local
     run.finish()
+
+
+def test_a_planted_tag_does_not_make_a_keyless_restore_fail_or_invent_a_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evidence comes only from tags that verify (or the run store): a manifest with a random tag
+    and key id changes nothing for a node that has no key and no store."""
+    run, mgr = keyed_run(tmp_path, monkeypatch, key=None)
+    path = tmp_path / "ckpt" / run.run_id / "last" / "step_000000002.manifest.json"
+    doc = json.loads(path.read_text())
+    doc["auth_tag"], doc["key_id"] = "f" * 64, "0" * 16
+    path.chmod(0o600)
+    path.write_text(json.dumps(doc) + "\n")
+    rc = RunCheckpoints(tmp_path / "ckpt", run.run_id, require_trust="any")  # no store, no key
+    evidence = rc.evidence("last")
+    assert evidence.since is None and evidence.key_ids == frozenset() and not evidence.seen
+    run.finish()
+
+
+def test_a_planted_tag_under_a_key_does_not_make_the_save_fail_with_key_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, mgr = keyed_run(tmp_path, monkeypatch)
+    plant_untagged(tmp_path, run.run_id, 50)
+    path = tmp_path / "ckpt" / run.run_id / "last" / "step_000000050.manifest.json"
+    doc = json.loads(path.read_text())
+    doc["auth_tag"], doc["key_id"] = "e" * 64, "1" * 16  # a foreign key id nobody ever used
+    path.chmod(0o600)
+    path.write_text(json.dumps(doc) + "\n")
+    rc = RunCheckpoints(tmp_path / "ckpt", run.run_id, key=auth.load_key())
+    assert "1" * 16 not in rc.evidence("last").key_ids
+    run.finish()

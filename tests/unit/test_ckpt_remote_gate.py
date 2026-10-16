@@ -116,7 +116,8 @@ def test_a_candidate_over_the_per_candidate_cap_is_refused_without_reading_data(
     old = writer(tmp_path, fake, monkeypatch, key=False, mb=1.0)
     run, mgr = reader(tmp_path, fake, remote_max_candidate_bytes=200_000)
     fake.reads.clear()
-    assert mgr.restore(run_ids=[old]) is None
+    with pytest.raises(CheckpointUntrustedError, match="none of them passes"):
+        mgr.restore(run_ids=[old])  # listed, none admitted: an error, never a fresh start
     assert data_reads(fake) == [] and [p for p in installed(tmp_path) if "step_" in p] == []
     run.finish()
 

@@ -25,7 +25,13 @@ from typing import Literal, overload
 
 from cvpilot import runs
 from cvpilot.ckpt import auth, fsops, serializers
-from cvpilot.ckpt.directory import AdmitContext, RunCheckpoints, Skipped, gate_failure
+from cvpilot.ckpt.directory import (
+    TRUST_REASONS,
+    AdmitContext,
+    RunCheckpoints,
+    Skipped,
+    gate_failure,
+)
 from cvpilot.core import verified as verified_files
 from cvpilot.core.errors import CheckpointCorruptError, CheckpointUntrustedError
 from cvpilot.core.schema import (
@@ -146,7 +152,6 @@ def find_resume_point(
         log.warning("checkpoint_trust_downgrade_ignored", requested=require_trust, effective=policy)
     marks = [m for m in (min_step, settings.ckpt_min_step) if m is not None]
     mark = max(marks) if marks else None  # both bind: a call cannot lower the operator's floor
-    ctx = AdmitContext(accept_rollback_to=accept_rollback_to, min_step=mark, project=project)
     opened = runs.open_anchor(project, store_root)
     anchor = opened[0] if opened is not None else None
     rejected: list[Skipped] = []
@@ -154,6 +159,12 @@ def find_resume_point(
         metas = runs.list_runs(project, store_dir=store_root)
         by_id = {m.run_id: m for m in metas}
         parents = {m.parent_run_id for m in metas if m.parent_run_id is not None}
+        # the lineage the run store records binds each manifest's tag-covered parent: a manifest
+        # that claims another parent is refused (binding_mismatch), like in a restore
+        ctx = AdmitContext(
+            accept_rollback_to=accept_rollback_to, min_step=mark, project=project,
+            parents={m.run_id: m.parent_run_id for m in metas},
+        )  # fmt: skip
         leaves = sorted(
             (m for m in metas if m.run_id not in parents), key=lambda m: m.run_id, reverse=True
         )
@@ -175,7 +186,12 @@ def find_resume_point(
                 point = _first_usable(found, owner.run_id, leaf, kind, root, ctx)
                 rejected += found.skipped
                 if point is not None:
-                    verified_files.remember(point.path, point.manifest.format)
+                    verified_files.remember(
+                        point.path,
+                        point.manifest.format,
+                        point.manifest.sha256,
+                        point.manifest.size_bytes,
+                    )
                     log.info(
                         "resume_point_selected", run_id=point.run_id,
                         checkpoint_run_id=point.checkpoint_run_id, step=point.manifest.step,
@@ -192,6 +208,14 @@ def find_resume_point(
                     "auth_downgrade",
                 ):
                     raise CheckpointUntrustedError(failure[1], reason=failure[0])
+                refused = [s for s in found.skipped if s.reason in TRUST_REASONS]
+                if refused:  # a newer lineage member was refused: never fall through to older ones
+                    reasons = sorted({s.reason for s in refused})
+                    raise CheckpointUntrustedError(
+                        f"{len(refused)} checkpoint(s) of run {owner.run_id} were refused "
+                        f"({', '.join(reasons)}); an ancestor or an older run is not used instead",
+                        reason=reasons[0],
+                    )
     finally:
         if opened is not None:
             opened[1]()
@@ -287,7 +311,7 @@ def private_copy(point: ResumePoint) -> Path:
     except BaseException:
         shutil.rmtree(folder, ignore_errors=True)
         raise
-    verified_files.remember(target, manifest.format)
+    verified_files.remember(target, manifest.format, manifest.sha256, manifest.size_bytes)
     return target
 
 

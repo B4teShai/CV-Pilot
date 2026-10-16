@@ -121,3 +121,22 @@ def run_meta(project: str = "p") -> tuple[Any, Any]:
         command_line="t.py",
     )  # fmt: skip
     return meta, repro
+
+
+class FunctionAnchor:
+    """A complete anchor (digest lookup, highest step, authentication evidence) from a function."""
+
+    def __init__(
+        self, digest: Any, max_step: int | None = None, evidence: Any = (None, [])
+    ) -> None:
+        self._digest, self._max, self._evidence = digest, max_step, evidence
+
+    def __call__(self, run_id: str, kind: str, step: int) -> str | None:
+        found: str | None = self._digest(run_id, kind, step)
+        return found
+
+    def max_step(self, run_id: str, kind: str) -> int | None:
+        return self._max
+
+    def auth_evidence(self, run_id: str, kind: str) -> Any:
+        return self._evidence

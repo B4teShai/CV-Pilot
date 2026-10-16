@@ -147,3 +147,30 @@ def test_the_stat_of_the_original_is_not_what_the_copy_vouches_for(
     original.chmod(0o600)
     original.write_bytes(b"swapped after verification")  # the framework opens the copy instead
     assert hashlib.sha256(copy.read_bytes()).hexdigest() == found.manifest.sha256
+
+
+def test_a_file_swapped_after_resume_path_is_refused_by_the_hooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    found = point(tmp_path, monkeypatch)
+    assert framework_file(found) == found.path  # unchanged: accepted
+    original = found.path
+    original.chmod(0o600)
+    data = original.read_bytes()
+    original.write_bytes(data[:-1] + bytes([data[-1] ^ 0xFF]))  # same size, other content
+    with pytest.raises(ValueError, match="changed after it was verified"):
+        framework_file(found)
+    with pytest.raises(ValueError, match="changed after it was verified"):
+        framework_file(str(found.path))
+
+
+def test_a_replaced_inode_is_refused_even_with_identical_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    found = point(tmp_path, monkeypatch)
+    content = found.path.read_bytes()
+    found.path.chmod(0o600)
+    found.path.unlink()
+    found.path.write_bytes(content)
+    with pytest.raises(ValueError, match="changed after it was verified"):
+        framework_file(found)

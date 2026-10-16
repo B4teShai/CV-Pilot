@@ -485,15 +485,36 @@ def resume_from(parent: RunMeta, *, run_id: str, host: str, name: str | None) ->
     )
 
 
-def recover_run(project: str, run_id: str, *, store_dir: Path | None = None) -> None:
+def recover_run(
+    project: str,
+    run_id: str,
+    *,
+    store_dir: Path | None = None,
+    checkpoint_dir: Path | str | None = None,
+) -> None:
     """Mark a run left ``running`` by a dead process as ``failed`` (keeps its flushed points).
 
     Raises:
         RunNotFoundError, InvalidTransitionError: unknown run, or it already has a final status.
     """
+
+    def held() -> bool:
+        if checkpoint_dir is None:
+            return False
+        from cvpilot.ckpt.directory import RunCheckpoints
+
+        try:
+            return RunCheckpoints(Path(checkpoint_dir), run_id).lease_state() is True
+        except Exception:  # noqa: BLE001  # an unreadable directory cannot prove the run dead
+            return True
+
+    if held():
+        raise InvalidTransitionError(f"run {run_id} is still held by a live process")
     store = open_existing(project, run_id, store_dir)
     try:
         meta = store.get_run(run_id)
+        if held():  # checked again once the store is open: the lease is the proof of death
+            raise InvalidTransitionError(f"run {run_id} is still held by a live process")
         if is_terminal(meta.status):
             raise InvalidTransitionError(f"run status cannot change from {meta.status} to failed")
         stats = store.metric_stats(run_id)

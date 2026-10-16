@@ -133,7 +133,7 @@ class Settings(BaseModel, frozen=True):
     checkpoint_remote: str | None = None
     ckpt_require_trust: Literal["authenticated", "anchored", "any"] | None = None
     ckpt_allow_pt: bool = False
-    ckpt_min_step: int | None = Field(default=None, ge=0)
+    ckpt_min_step: int | None = Field(default=None, ge=0, le=10**15)
 
     @field_validator("forward_hosts", mode="before")
     @classmethod

@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from ckpt_support import (
+    FunctionAnchor,
     blob,
     data_file,
     forge_manifest,
@@ -133,8 +134,9 @@ def test_key_rotation_rejects_old_tags_and_accepts_unsigned_files_only_under_any
     save(rc, 1)  # written before a key existed
     tagged = reopen(rc, key=KEY)
     save(tagged, 2)  # written under the first key
-    assert steps(reopen(rc, key=OTHER)) == []  # a rotated key is refused until acknowledged
-    rotated = reopen(rc, key=OTHER, accept_key_change=True)
+    # without a run store nothing verified says the run was authenticated: a planted or stale tag
+    # is not evidence, so only the file with the foreign tag is refused (as key_changed)
+    rotated = reopen(rc, key=OTHER)
     assert steps(rotated) == [1]  # 2 fails its tag; 1 has none and policy is any
     assert reasons(rotated) == {2: "key_changed"}  # a different key, said so
     assert [v.trust for v in rotated.iter_valid("last")] == ["local_chain_only"]
@@ -148,7 +150,7 @@ def test_a_broken_anchor_is_not_the_same_as_no_anchor(tmp_path: Path, events: An
     def broken(run: str, kind: str, step: int) -> str | None:
         raise RuntimeError("store unreadable")
 
-    strict = reopen(rc, anchor=broken, require_trust="anchored")
+    strict = reopen(rc, anchor=FunctionAnchor(broken), require_trust="anchored")
     assert steps(strict) == [] and reasons(strict) == {1: "anchor_error"}
     lenient = reopen(rc, anchor=broken, require_trust="any")
     assert [v.trust for v in lenient.iter_valid("last")] == ["local_chain_only"]
@@ -162,7 +164,7 @@ def test_anchored_policy_needs_the_stores_own_digest_for_every_candidate(tmp_pat
     digest3 = hashlib.sha256(manifest_file(rc, 3).read_bytes()).hexdigest()
     strict = reopen(
         rc,
-        anchor=lambda run, kind, step: digest3 if step == 3 else None,
+        anchor=FunctionAnchor(lambda run, kind, step: digest3 if step == 3 else None),
         require_trust="anchored",
     )
     assert steps(strict) == [3]  # 2 and 1 are vouched for by 3's chain, which does not count

@@ -12,7 +12,7 @@
         "preempted": "(self) -> 'bool'",
         "remote_url": "property",
         "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None) -> 'Restored | None'",
-        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
+        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
         "save_now": "(self, step: 'int', *, kind: 'CheckpointKind' = 'last', **state: 'Any') -> 'CheckpointManifest'",
         "verify": "(self, manifest: 'CheckpointManifest') -> 'bool'"
       }
@@ -77,7 +77,7 @@
         "preempted": "(self) -> 'bool'",
         "remote_url": "property",
         "restore": "(self, kind: 'CheckpointKind' = 'last', *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None) -> 'Restored | None'",
-        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
+        "restore_latest_valid": "(self, *, map_location: 'str' = 'cpu', run_ids: 'Sequence[str] | None' = None, discover: 'bool' = False, require_trust: 'RequireTrust | None' = None, accept_rollback_to: 'int | None' = None, with_trust: 'bool' = False) -> 'dict[str, Any] | Restored | None'",
         "save_now": "(self, step: 'int', *, kind: 'CheckpointKind' = 'last', **state: 'Any') -> 'CheckpointManifest'",
         "verify": "(self, manifest: 'CheckpointManifest') -> 'bool'"
       }

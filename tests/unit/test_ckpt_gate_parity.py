@@ -58,6 +58,8 @@ GATED = {
     "RunCheckpoints.prune": "verdict",
     "RunCheckpoints.install": "write",
     "Mirror.fetch": "write",
+    "Mirror.admitted": "verdict",
+    "CheckpointManager.verify": "verdict",
     "cli ckpt verify": "verdict",
     "cli ckpt prune": "verdict",
     "cli ckpt list": "listing",
@@ -65,8 +67,11 @@ GATED = {
 EXEMPT = {
     # they do not decide what may be returned; the reason says why
     "CheckpointManager.close": "releases resources",
-    "CheckpointManager.list": "lists the manager's own run through RunCheckpoints.inspect (gated)",
-    "CheckpointManager.verify": "answers through RunCheckpoints.inspect (gated)",
+    "CheckpointManager.list": (
+        "one line over RunCheckpoints.inspect(ctx=self._admit_ctx()) of its own run, which the "
+        "attack world cannot attack (the run is live); the context is proven in "
+        "test_ckpt_small_rules.py::test_list_and_verify_use_the_managers_floor"
+    ),
     "CheckpointManager.preempted": "a flag",
     "CheckpointManager.remote_url": "a validated location string",
     "cvpilot.ckpt.CheckpointManager": "the class itself",
@@ -89,28 +94,162 @@ EXEMPT = {
     "RunCheckpoints.trusted_steps": "an input of the gate",
     "RunCheckpoints.judge_single": "an input of the gate (trust verdict of one candidate)",
     "RunCheckpoints.read_pointer": "returns a tag-checked pointer record, never data",
-    "RunCheckpoints.existing": "internal helper for adopt (manifest only, never data)",
-    "RunCheckpoints.read_range": "the mirror's reader of the local file it is uploading",
-    "RunCheckpoints.read_manifest_bytes": "the mirror's reader of the local manifest",
-    "RunCheckpoints.mark_uploaded": "writes a marker",
-    "RunCheckpoints.move_rejected_to_trash": "an explicit, confirmed move of listed files",
+    "RunCheckpoints.existing": (
+        "judges one candidate (trust, binding, store) exactly as inspect does and returns only a "
+        "manifest that passes; no data. The floor is applied by the save that follows (adopt is "
+        "gated): test_ckpt_small_rules.py::test_existing_returns_only_what_the_gate_would_admit"
+    ),
+    "RunCheckpoints.read_range": (
+        "bytes of a local file that the caller names; reached only from Mirror.upload, which "
+        "uploads what it has just verified, and from nothing that returns state to the caller"
+    ),
+    "RunCheckpoints.read_manifest_bytes": (
+        "the bytes of a manifest the caller already holds, for Mirror.upload and Mirror.confirm "
+        "to compare with the remote; the answer is a comparison, not state"
+    ),
+    "RunCheckpoints.mark_uploaded": (
+        "writes a marker after an upload; a marker never admits anything: retention asks "
+        "Mirror.confirm (test_ckpt_small_rules.py::test_retention_does_not_trust_a_marker_...)"
+    ),
+    "RunCheckpoints.move_rejected_to_trash": (
+        "moves only the files of steps recorded as rejected, only on an explicit --yes, into a "
+        "trash directory (test_ckpt_nondestructive.py)"
+    ),
     "cli ckpt trash": "moves listed files into trash only with --yes",
     "RunCheckpoints.quarantined": "lists what a save set aside; hands out no state",
-    "RunCheckpoints.clear_quarantine": "an operator's acknowledgement; deletes, hands out nothing",
-    "cli ckpt quarantine": "lists or clears the quarantine; hands out no state",
+    "RunCheckpoints.clear_quarantine": (
+        "releases list entries and nothing else; it moves no file. Releasing a step lets the "
+        "floor stop counting it, so it is an operator decision (test_ckpt_nondestructive.py)"
+    ),
+    "cli ckpt quarantine": (
+        "lists the recorded rejections or, with --clear, releases them (see clear_quarantine); "
+        "it never touches a checkpoint file"
+    ),
     "RunCheckpoints.is_uploaded": "reads a marker (authenticated when a key is set)",
-    "RunCheckpoints.hold_lease": "liveness",
-    "RunCheckpoints.lease_state": "liveness",
-    "RunCheckpoints.last_activity": "liveness",
+    "RunCheckpoints.hold_lease": (
+        "takes the liveness lease; recover_run refuses a live run on it "
+        "(test_ckpt_small_rules.py::test_recover_run_refuses_while_the_lease_is_held)"
+    ),
+    "RunCheckpoints.lease_state": "reads whether the lease is held; a hint for recover_run",
+    "RunCheckpoints.last_activity": "newest mtime of the run directory; a hint, never a proof",
     "Mirror.probe": "reads and judges one remote manifest; no data, hands out nothing",
     "RunCheckpoints.evidence": "an input of the gate (was this run ever authenticated?)",
     "Mirror.budget": "a time limit for remote calls",
     "Mirror.begin_restore": "resets a budget",
     "Mirror.label": "scheme and bucket",
     "Mirror.list_runs": "a bounded listing of run ids; candidates are fetched through the gate",
-    "Mirror.list_steps": "a listing of step numbers; each is then fetched through the gate",
-    "Mirror.upload": "writes to the remote from a verified local checkpoint",
+    "Mirror.list_steps": (
+        "canonical manifest names only, deduplicated; a name proves nothing, so every use goes "
+        "through Mirror.admitted (probe) or Mirror.fetch (gated): test_ckpt_remote_window.py"
+    ),
+    "Mirror.upload": (
+        "copies a local checkpoint the save just verified; the remote is never read back as "
+        "state by this call (Mirror.confirm and probe read it, and are gated or judged)"
+    ),
+    "Mirror.confirm": "answers yes or no: are these exact bytes on the remote; hands out nothing",
 }
+
+# private and module-level sites that decide or carry a verdict. Each is reached only through a
+# gated entry point above (the reason names it) and must still exist, so a rename cannot hide one.
+SITES = {
+    "CheckpointManager._restore_local": "restore (gated)",
+    "CheckpointManager._restore_remote": "restore (gated); admitted() probes, fetch gates",
+    "CheckpointManager._restore_discovered": "restore(discover=) (gated)",
+    "CheckpointManager._fetch_one": "restore (gated): Mirror.fetch with the manager's context",
+    "CheckpointManager._admit_ctx": "the one context of restore, list, verify, mirror, lineage",
+    "RunCheckpoints._cand_from_bytes": "inspect, probe and fetch (gated)",
+    "RunCheckpoints._load_manifest": "inspect, existing and iter_valid (gated)",
+    "RunCheckpoints._check_data": "iter_valid and inspect (gated)",
+    "RunCheckpoints._write_pointer": "save (gated): written only after the record",
+    "RunCheckpoints._pointer": "iter_valid (gated): a tag-checked record",
+}
+
+# public module-level functions of the modules that move state: each is classified, so a new one
+# fails the test until someone decides. ``module.function`` -> why it is not an entry point.
+MODULE_FUNCTIONS = {
+    "cvpilot.ckpt.auth.load_key": "reads the key from the environment",
+    "cvpilot.ckpt.auth.key_id": "a digest of the key",
+    "cvpilot.ckpt.auth.weakness": "judges a key; no state",
+    "cvpilot.ckpt.auth.is_weaker": "compares policies",
+    "cvpilot.ckpt.auth.resolve_policy": "picks a policy; never lowers one (test_ckpt_policy)",
+    "cvpilot.ckpt.auth.tag": "computes an HMAC",
+    "cvpilot.ckpt.auth.verify": "checks an HMAC",
+    "cvpilot.ckpt.directory.data_name": "a file name",
+    "cvpilot.ckpt.directory.manifest_name": "a file name",
+    "cvpilot.ckpt.directory.marker_name": "a file name",
+    "cvpilot.ckpt.directory.gate_failure": "turns the skip list into the error; hands out nothing",
+    "cvpilot.ckpt.directory.list_runs": "run ids that have a directory; every candidate is judged",
+    "cvpilot.ckpt.fsops.*": "descriptor-relative file primitives; no policy",
+    "cvpilot.ckpt.preempt.default_signals": "signal numbers",
+    "cvpilot.ckpt.remote.retrying": "a retry wrapper",
+    "cvpilot.ckpt.resume.find_resume_point": "GATED (cvpilot.ckpt.find_resume_point)",
+    "cvpilot.ckpt.resume.resume_path": "GATED (cvpilot.ckpt.resume_path)",
+    "cvpilot.ckpt.resume.private_copy": "copies a file the resume point verified, checking again",
+    "cvpilot.ckpt.rng.capture_rng": "reads generators",
+    "cvpilot.ckpt.rng.validate_rng": "validates a state",
+    "cvpilot.ckpt.rng.apply_rng": "applies a validated state",
+    "cvpilot.ckpt.serializers.*": "parsers and scanners of one candidate's bytes",
+    "cvpilot.ckpt.state.*": "parsers of one candidate's state",
+    "cvpilot.core.verified.remember": (
+        "records the identity and digest of a verified file (test_ckpt_resume_private.py)"
+    ),
+    "cvpilot.core.verified.format_of": "reads the registry; hands out a format name only",
+    "cvpilot.core.verified.framework_file": (
+        "rechecks identity and digest before it returns a path (test_ckpt_resume_private.py)"
+    ),
+    "cvpilot.runs.lifecycle.start_run": "opens a run",
+    "cvpilot.runs.lifecycle.log_points": "records metrics",
+    "cvpilot.runs.lifecycle.finish_run": "closes a run",
+    "cvpilot.runs.lifecycle.resume_from": "builds a child meta; the lineage is checked by the gate",
+    "cvpilot.runs.lifecycle.recover_run": (
+        "marks a dead run failed; refuses while the lease is held (test_ckpt_small_rules.py)"
+    ),
+    "cvpilot.hooks._guard.*": "coerces metric values",
+    "cvpilot.hooks._resume.verified_path_text": "a verified path as text, from framework_file",
+    "cvpilot.hooks.lightning.resume_arguments": "a path from resume_path, then framework_file",
+    "cvpilot.hooks.lightning.build_classes": "builds callbacks",
+    "cvpilot.hooks.ultralytics.resume_arguments": "a path from resume_path, then framework_file",
+    "cvpilot.store.checkpoints.*": "the run store's record of manifests: evidence for the gate",
+}
+MODULES = (
+    "cvpilot.ckpt.auth", "cvpilot.ckpt.directory", "cvpilot.ckpt.fsops", "cvpilot.ckpt.manager",
+    "cvpilot.ckpt.preempt", "cvpilot.ckpt.remote", "cvpilot.ckpt.resume", "cvpilot.ckpt.rng",
+    "cvpilot.ckpt.serializers", "cvpilot.ckpt.state", "cvpilot.core.verified",
+    "cvpilot.runs.lifecycle", "cvpilot.hooks._guard", "cvpilot.hooks._resume",
+    "cvpilot.hooks._sink", "cvpilot.hooks.lightning", "cvpilot.hooks.ultralytics",
+    "cvpilot.store.checkpoints",
+)  # fmt: skip
+
+
+def module_functions() -> set[str]:
+    import importlib
+
+    found: set[str] = set()
+    for name in MODULES:
+        module = importlib.import_module(name)
+        for fn_name, fn in vars(module).items():
+            if inspect.isfunction(fn) and fn.__module__ == name and not fn_name.startswith("_"):
+                found.add(f"{name}.{fn_name}")
+    return found
+
+
+def classified(name: str) -> bool:
+    module = name.rsplit(".", 1)[0]
+    return name in MODULE_FUNCTIONS or f"{module}.*" in MODULE_FUNCTIONS
+
+
+def test_every_module_level_function_is_classified() -> None:
+    unknown = {n for n in module_functions() if not classified(n)}
+    assert unknown == set(), f"decide whether these move or judge checkpoint state: {unknown}"
+    stale = {n for n in MODULE_FUNCTIONS if not n.endswith(".*") and n not in module_functions()}
+    assert stale == set(), f"stale module function entries: {stale}"
+
+
+def test_the_private_sites_exist() -> None:
+    for site in SITES:
+        cls, name = site.split(".")
+        owner = {"CheckpointManager": CheckpointManager, "RunCheckpoints": RunCheckpoints}[cls]
+        assert callable(getattr(owner, name, None)), f"{site} was renamed or removed"
 
 
 def discovered() -> set[str]:
@@ -156,6 +295,7 @@ class World:
     child: runs.RunHandle  # a new run (a resumed child unless `lineage` is false)
     fake: FakeRemote | None
     kind: str = "last"
+    genuine: Any = None  # the honest step-3 manifest, taken before the attack
 
     @property
     def store(self) -> Path:
@@ -202,7 +342,11 @@ def build(
     else:
         child_meta, child_repro = run_meta("p")
     child = runs.start_run(child_meta, child_repro, store_dir=tmp / "store")
-    return World(tmp, victim, child, fake)
+    world = World(tmp, victim, child, fake)
+    from cvpilot.ckpt import auth
+
+    world.genuine = RunCheckpoints(tmp / "ckpt", victim, key=auth.load_key()).existing("last", 3)
+    return world
 
 
 def cvpilot_new_id() -> str:
@@ -432,7 +576,7 @@ def judge(call: Callable[[], Any], reasons: frozenset[str]) -> Outcome:
     try:
         result = call()
     except CheckpointUntrustedError as exc:
-        assert exc.reason in reasons | {"untrusted"}, exc.reason
+        assert exc.reason in reasons | {"untrusted", "remote_untrusted"}, exc.reason
         return "refused"
     except CheckpointCorruptError as exc:
         assert exc.reason in reasons | {"auth_missing", "untrusted"}, exc.reason
@@ -578,12 +722,39 @@ def entry_fetch(world: World, attack: Attack) -> Outcome:
         require_trust=attack.policy,  # type: ignore[arg-type]
     )  # fmt: skip
     steps = mirror.list_steps(world.victim, "last") or [3]
-    ctx = AdmitContext(present=frozenset(steps), accept_rollback_to=attack.accept)
+    ctx = AdmitContext(accept_rollback_to=attack.accept)
 
     def call() -> Any:
         return mirror.fetch(rc, "last", steps[0], ctx) or None
 
     return judge(call, attack.reasons)
+
+
+def entry_admitted(world: World, attack: Attack) -> Outcome:
+    assert world.fake is not None
+    from cvpilot.ckpt import auth
+    from cvpilot.ckpt.directory import AdmitContext
+
+    mirror = Mirror(parse_remote_uri(URI), world.fake, sleep=lambda s: None)
+    rc = RunCheckpoints(
+        world.tmp / "fresh", world.victim, create=True,
+        anchor=(runs.open_anchor("p", world.store) or (None,))[0], key=auth.load_key(),
+        require_trust=attack.policy,  # type: ignore[arg-type]
+    )  # fmt: skip
+    try:
+        found = mirror.admitted(rc, "last", AdmitContext(accept_rollback_to=attack.accept))
+    except CheckpointUntrustedError as exc:
+        assert exc.reason == "remote_untrusted", exc.reason
+        return "refused"
+    return "served" if found else "refused"
+
+
+def entry_manager_verify(world: World, attack: Attack) -> Outcome:
+    mgr = CheckpointManager(
+        world.child, dir=world.ckpt, every_n_steps=1, install_signal_handlers=False
+    )
+    assert world.genuine is not None
+    return "served" if mgr.verify(world.genuine) else "refused"
 
 
 def entry_cli_verify(world: World, attack: Attack, invoke: Invoke) -> Outcome:
@@ -644,6 +815,16 @@ ENTRIES: dict[str, tuple[Callable[..., Outcome], set[str]]] = {
         entry_fetch,
         {a.name for a in ATTACKS if not a.remote},
     ),
+    "Mirror.admitted": (entry_admitted, {a.name for a in ATTACKS if not a.remote}),
+    "CheckpointManager.verify": (  # the genuine manifest is a last one: the best attack misses it
+        entry_manager_verify,
+        {
+            "remote rolled back",
+            "remote forged",
+            "accept override too high",
+            "best checkpoints rolled back",
+        },
+    ),
     "cli ckpt verify": (
         entry_cli_verify,
         {"remote rolled back", "remote forged", "accept override too high"},
@@ -659,6 +840,7 @@ LOW_LEVEL = {
     "RunCheckpoints.inspect",
     "RunCheckpoints.prune",
     "Mirror.fetch",
+    "Mirror.admitted",
 }
 WEAK_LOCAL = "weakened per call: untagged after a key was configured"
 WEAK_REMOTE = "weakened per call: remote untagged after a key was configured"
@@ -669,6 +851,8 @@ for _name, (_adapter, _skip) in list(ENTRIES.items()):
         extra |= {WEAK_LOCAL, WEAK_REMOTE, FLOOR}
     if _name.startswith("cli ckpt"):
         extra |= {FLOOR}  # the command line has no rollback acceptance and no floor of its own
+    if _name == "CheckpointManager.verify":  # the manifest is the caller's; the key it needs is env
+        extra |= {WEAK_LOCAL}
     if _name != "CheckpointManager.restore" and not _name.startswith("CheckpointManager."):
         extra |= {WEAK_REMOTE}
     ENTRIES[_name] = (_adapter, _skip | extra)
@@ -726,7 +910,11 @@ def test_the_same_attack_gets_the_same_answer_from_every_entry_point(
 
 @pytest.mark.parametrize(
     "entry",
-    [e for e in ENTRIES if e not in {"Mirror.fetch", "CheckpointManager.restore(discover=)"}],
+    [
+        e
+        for e in ENTRIES
+        if e not in {"Mirror.fetch", "Mirror.admitted", "CheckpointManager.restore(discover=)"}
+    ],
 )
 def test_the_control_group_every_gated_entry_point_serves_an_honest_directory(
     tmp_path: Path,

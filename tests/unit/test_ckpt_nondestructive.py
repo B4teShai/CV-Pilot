@@ -196,3 +196,32 @@ def test_the_cli_trash_does_nothing_without_yes(
     res = invoke("ckpt", "trash", str(tmp_path / "ckpt"), "--run", run.run_id)
     assert res.code == 2 and history(tmp_path, run) == before
     run.finish()
+
+
+def test_a_partial_anchor_is_refused_under_a_strict_policy(tmp_path: Path) -> None:
+    from cvpilot.core.hashing import new_run_id
+
+    class Partial:
+        def __call__(self, *a: Any) -> str | None:
+            return None
+
+    with pytest.raises(CheckpointError, match="anchor"):
+        RunCheckpoints(tmp_path / "ckpt", new_run_id(), anchor=Partial(), require_trust="anchored")
+    RunCheckpoints(tmp_path / "ckpt", new_run_id(), anchor=Partial(), require_trust="any")
+
+
+def test_a_failed_record_under_anchored_fails_the_save_and_holds_the_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, events: Any
+) -> None:
+    run, mgr = world(tmp_path, monkeypatch, key=None, require_trust="anchored")
+    pointer = (tmp_path / "ckpt" / run.run_id / "LATEST").read_bytes()
+
+    def broken(*a: Any, **k: Any) -> None:
+        raise RuntimeError("store locked")
+
+    monkeypatch.setattr(run, "record_checkpoint", broken)
+    with pytest.raises(CheckpointError, match="pointer was not moved"):
+        mgr.save_now(3, model=weights(3.0))
+    assert (tmp_path / "ckpt" / run.run_id / "LATEST").read_bytes() == pointer
+    assert [e for e in events() if e["message"] == "checkpoint_unanchored"]
+    run.finish()

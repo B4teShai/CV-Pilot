@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from ckpt_support import (
     DATASET,
+    FunctionAnchor,
     blob,
     data_file,
     forge_manifest,
@@ -305,7 +306,9 @@ def test_forged_manifest_and_pointer_are_caught_by_the_store_anchor(tmp_path: Pa
     anchored = RunCheckpoints(
         tmp_path / "ckpt",
         rc.run_id,
-        anchor=lambda run, kind, step: digest if (kind, step) == ("last", genuine.step) else None,
+        anchor=FunctionAnchor(
+            lambda run, kind, step: digest if (kind, step) == ("last", genuine.step) else None
+        ),
     )
     assert valid_steps(anchored) == [1]
     assert reasons(anchored) == {2: "store_mismatch"}

@@ -16,6 +16,7 @@ import base64
 import binascii
 import json
 import math
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -35,6 +36,7 @@ BYTES = "$bytes"
 INTDICT = "$intdict"
 SCALAR = "$scalar"
 _MARKERS = {TENSOR, FLOAT, BYTES, INTDICT, SCALAR}
+_INT_KEY = re.compile(r"-?[0-9]{1,20}")
 _FLOATS = {"inf": math.inf, "-inf": -math.inf, "nan": math.nan}
 
 
@@ -229,10 +231,13 @@ def merge_state(
                 if key == INTDICT:
                     inner = value[key]
                     if not isinstance(inner, dict) or not all(
-                        isinstance(k, str) and k.lstrip("-").isdigit() for k in inner
+                        isinstance(k, str) and _INT_KEY.fullmatch(k) for k in inner
                     ):
                         raise ValueError("invalid integer-key marker")
-                    return {int(k): walk(v, depth + 1) for k, v in inner.items()}
+                    converted = {int(k): walk(v, depth + 1) for k, v in inner.items()}
+                    if len(converted) != len(inner):  # "1" and "01" are one key after conversion
+                        raise ValueError("duplicate integer keys in the integer-key marker")
+                    return converted
                 if key == FLOAT:
                     if value[key] not in _FLOATS:
                         raise ValueError("invalid float marker")

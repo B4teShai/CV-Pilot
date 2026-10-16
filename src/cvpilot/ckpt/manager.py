@@ -31,7 +31,7 @@ import platform
 import signal
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, overload
@@ -309,6 +309,8 @@ class CheckpointManager:
                 min_step=self.min_step,
             )  # fmt: skip
         self._lease_fd: int | None = self._own.hold_lease()  # dies with the process
+        if self._lease_fd is None:  # no flock here (some FUSE and network file systems)
+            self._emit("warning", "checkpoint_lease_unavailable", dir=str(self._root))
         self._last_step: int | None = None
         self._last_time = clock()
         self._best_value: float | None = None
@@ -570,7 +572,7 @@ class CheckpointManager:
         pending = [
             e.manifest
             for kind in ("last", "best")
-            for e in self._own.inspect(kind, check_data=False)
+            for e in self._own.inspect(kind, check_data=False, ctx=self._admit_ctx())
             if e.manifest is not None and not self._own.is_uploaded(e.manifest)
         ]
         pending.sort(key=lambda m: (m.step, m.kind), reverse=True)
@@ -595,35 +597,61 @@ class CheckpointManager:
                 duration_ms=round((time.perf_counter() - started) * 1000, 1),
             )  # fmt: skip
 
+    def _admit_ctx(self, accept_rollback_to: int | None = None) -> AdmitContext:
+        """The one context every call into the gate uses (restore, list, verify, upload, best
+        seeding): the operator's floor, the project binding, the lineage and the byte cap."""
+        lineage = [self._handle.run_id, *self._handle.ancestors()]
+        parents: dict[str, str | None] = {lineage[0]: self._handle.meta.parent_run_id}
+        parents.update({a: b for a, b in zip(lineage[1:], lineage[2:], strict=False)})
+        return AdmitContext(
+            accept_rollback_to=accept_rollback_to,
+            min_step=self.min_step,
+            waive_min_step=self.allow_weaker_trust,
+            max_candidate_bytes=self._remote_candidate_bytes,
+            project=self._handle.meta.project,
+            parents=parents,
+        )
+
     def _floor_hint(self, kind: CheckpointKind) -> int | None:
         """A step known to have existed that no local file proves: ``min_step`` and the newest step
-        the remote lists for this run (looked up once, then kept up to date by our own uploads)."""
+        the remote proves for this run (an admitted manifest with its data object). Under ``any`` a
+        remote manifest that only chains to itself is advisory and never raises the floor: a bucket
+        writer could otherwise plant a huge step and stop every save. A failed or empty lookup is
+        not remembered."""
         hints = [self.min_step] if self.min_step is not None else []
         if self._mirror is not None:
             if kind not in self._remote_max:
                 try:
-                    steps = self._mirror.list_steps(self._handle.run_id, kind)
-                except OSError:
-                    steps = []
+                    found = self._mirror.admitted(self._own, kind, want=1)
+                except (OSError, CheckpointUntrustedError):
                     self._emit(
                         "warning", "checkpoint_floor_unavailable", kind=kind, source="the remote"
                     )
-                # the newest remote step whose manifest is admitted: a name alone is no evidence
-                self._remote_max[kind] = next(
-                    (
-                        s
-                        for s in steps[:MAX_REMOTE_CANDIDATES]
-                        if self._mirror.probe(self._own, kind, s)
-                    ),
-                    None,
-                )
-            remote = self._remote_max[kind]
+                else:
+                    step, level = found[0] if found else (None, None)
+                    if (
+                        step is not None
+                        and self.require_trust == "any"
+                        and level
+                        not in (
+                            "anchored",
+                            "authenticated",
+                        )
+                    ):
+                        self._emit("info", "remote_floor_ignored", kind=kind, step=step)
+                        step = None
+                    if step is not None:
+                        self._remote_max[kind] = step
+            remote = self._remote_max.get(kind)
             if remote is not None:
                 hints.append(remote)
         return max(hints, default=None)
 
     def _record(self, manifest: CheckpointManifest, digest: str) -> None:
-        """Store the manifest digest (the external anchor); a failure weakens trust, not saves."""
+        """Store the manifest digest (the external anchor). Under ``any`` a failure weakens trust
+        and is logged; under ``anchored`` or ``authenticated`` an unrecorded checkpoint would be
+        refused by the very next restore (``not_anchored``), so the save fails before the pointer
+        moves and the step is reported as unanchored."""
         try:
             self._handle.record_checkpoint(manifest, digest)
         except Exception as exc:  # noqa: BLE001  # the index must never break a verified save
@@ -631,6 +659,22 @@ class CheckpointManager:
                 "warning", "checkpoint_record_failed", step=manifest.step,
                 kind=manifest.kind, error_type=type(exc).__name__,
             )  # fmt: skip
+            if self.require_trust != "any":
+                self._emit("error", "checkpoint_unanchored", step=manifest.step, kind=manifest.kind)
+                raise CheckpointError(
+                    f"checkpoint {manifest.step} was written but could not be recorded in the run "
+                    f"store ({type(exc).__name__}); under {self.require_trust} it would be "
+                    "refused, so the pointer was not moved"
+                ) from None
+
+    def _confirmed(self, manifest: CheckpointManifest) -> bool:
+        """Retention may rely on an upload only if the marker says so AND the remote still holds
+        exactly that checkpoint (without a key a marker is only a file anyone could write)."""
+        return bool(
+            self._mirror is not None
+            and self._own.is_uploaded(manifest)
+            and self._mirror.confirm(self._own, manifest)
+        )
 
     def _retain(self, kind: CheckpointKind) -> None:
         keep = self.keep_last if kind == "last" else self.keep_best
@@ -639,7 +683,7 @@ class CheckpointManager:
                 kind,
                 keep=keep,
                 mode=self.mode,
-                is_confirmed=self._own.is_uploaded if self._mirror is not None else None,
+                is_confirmed=self._confirmed if self._mirror is not None else None,
             )
         except CheckpointError as exc:
             self._emit(
@@ -716,7 +760,9 @@ class CheckpointManager:
         found: list[float] = []
         for run_id in [self._handle.run_id, *self._handle.ancestors()]:
             try:
-                newest = next(iter(self._dir_for(run_id).iter_valid("best")), None)
+                newest = next(
+                    iter(self._dir_for(run_id).iter_valid("best", ctx=self._admit_ctx())), None
+                )
             except CheckpointError as exc:
                 self._emit(
                     "warning", "best_seed_failed", checkpoint_run_id=run_id,
@@ -903,17 +949,7 @@ class CheckpointManager:
         )
         if self._mirror is not None:
             self._mirror.begin_restore()
-        lineage = [self._handle.run_id, *self._handle.ancestors()]
-        parents: dict[str, str | None] = {lineage[0]: self._handle.meta.parent_run_id}
-        parents.update({a: b for a, b in zip(lineage[1:], lineage[2:], strict=False)})
-        ctx = AdmitContext(
-            accept_rollback_to=accept_rollback_to,
-            min_step=self.min_step,
-            waive_min_step=self.allow_weaker_trust,
-            max_candidate_bytes=self._remote_candidate_bytes,
-            project=self._handle.meta.project,
-            parents=parents,
-        )
+        ctx = self._admit_ctx(accept_rollback_to)
         skipped: list[Skipped] = []
         for run_id in order:
             found = self._restore_local(run_id, kind, map_location, skipped, policy, ctx)
@@ -1015,19 +1051,16 @@ class CheckpointManager:
         assert self._mirror is not None  # noqa: S101  # the caller checked
         found = self._dir_for(run_id, policy)
         try:
-            steps = self._mirror.list_steps(run_id, kind)
+            candidates = self._mirror.admitted(found, kind, ctx, want=MAX_REMOTE_CANDIDATES)
+        except CheckpointUntrustedError:  # an OSError subclass: caught first on purpose
+            skipped.append(Skipped(None, kind, f"remote:{kind}", "remote_untrusted"))
+            return None
         except OSError as exc:
             self._emit(
                 "warning", "checkpoint_download_failed", kind=kind, error_type=type(exc).__name__
             )
             return None
-        # A listed name is not evidence: only steps whose manifest passes the gate count as still
-        # present, so a bucket cannot loosen the rollback check by listing a junk manifest name.
-        top = steps[:MAX_REMOTE_CANDIDATES]
-        ctx = replace(
-            ctx, present=frozenset(s for s in top if self._mirror.probe(found, kind, s, ctx))
-        )
-        for step in top:
+        for step, _level in candidates:
             if not self._fetch_one(found, run_id, kind, step, skipped, ctx):
                 continue
             restored = self._restore_local(run_id, kind, map_location, skipped, policy, ctx)
@@ -1049,25 +1082,26 @@ class CheckpointManager:
         try:
             run_ids = [r for r in self._mirror.list_runs() if r not in set(known)]
             run_ids = run_ids[:MAX_DISCOVERED_RUNS]
-            listed = {run_id: self._mirror.list_steps(run_id, kind) for run_id in run_ids}
         except OSError as exc:
             self._emit(
                 "warning", "checkpoint_download_failed", kind=kind, error_type=type(exc).__name__
             )
             return None
-        candidates = sorted(
-            ((step, run_id) for run_id, steps in listed.items() for step in steps), reverse=True
-        )[:MAX_REMOTE_CANDIDATES]
-        for step, run_id in candidates:
+        found_all: list[tuple[int, str]] = []
+        for run_id in run_ids:
+            try:
+                for step, _level in self._mirror.admitted(
+                    self._dir_for(run_id, policy), kind, ctx, want=3
+                ):
+                    found_all.append((step, run_id))
+            except CheckpointUntrustedError:  # an OSError subclass: caught first on purpose
+                skipped.append(Skipped(None, kind, f"remote:{run_id}", "remote_untrusted"))
+            except OSError:
+                continue
+        for step, run_id in sorted(found_all, reverse=True)[:MAX_REMOTE_CANDIDATES]:
             found = self._dir_for(run_id, policy)
-            probed = frozenset(
-                s
-                for s in listed[run_id][:MAX_REMOTE_CANDIDATES]
-                if self._mirror.probe(found, kind, s, ctx)
-            )
-            one = replace(ctx, present=probed)
-            if self._fetch_one(found, run_id, kind, step, skipped, one):
-                restored = self._restore_local(run_id, kind, map_location, skipped, policy, one)
+            if self._fetch_one(found, run_id, kind, step, skipped, ctx):
+                restored = self._restore_local(run_id, kind, map_location, skipped, policy, ctx)
                 if restored is not None:
                     return restored
         return None
@@ -1106,6 +1140,7 @@ class CheckpointManager:
         run_ids: Sequence[str] | None = ...,
         discover: bool = ...,
         require_trust: RequireTrust | None = ...,
+        accept_rollback_to: int | None = ...,
         with_trust: Literal[False] = ...,
     ) -> dict[str, Any] | None: ...
 
@@ -1117,6 +1152,7 @@ class CheckpointManager:
         run_ids: Sequence[str] | None = ...,
         discover: bool = ...,
         require_trust: RequireTrust | None = ...,
+        accept_rollback_to: int | None = ...,
         with_trust: Literal[True],
     ) -> Restored | None: ...
 
@@ -1127,6 +1163,7 @@ class CheckpointManager:
         run_ids: Sequence[str] | None = None,
         discover: bool = False,
         require_trust: RequireTrust | None = None,
+        accept_rollback_to: int | None = None,
         with_trust: bool = False,
     ) -> dict[str, Any] | Restored | None:
         """The state of the newest valid ``last`` checkpoint, or ``None`` on a fresh start.
@@ -1139,7 +1176,7 @@ class CheckpointManager:
         """
         restored = self.restore(
             "last", map_location=map_location, run_ids=run_ids, discover=discover,
-            require_trust=require_trust,
+            require_trust=require_trust, accept_rollback_to=accept_rollback_to,
         )  # fmt: skip
         if restored is None:
             return None
@@ -1150,14 +1187,18 @@ class CheckpointManager:
     def list(self) -> list[Entry]:
         """Every checkpoint of this run (both kinds, newest first) with its verification result."""
         return [
-            *self._own.inspect("last"),
-            *self._own.inspect("best"),
+            *self._own.inspect("last", ctx=self._admit_ctx()),
+            *self._own.inspect("best", ctx=self._admit_ctx()),
         ]
 
     def verify(self, manifest: CheckpointManifest) -> bool:
         """Re-verify one checkpoint against the directory (size, structure and SHA-256)."""
         found = self._dir_for(manifest.run_id)
-        entries = [e for e in found.inspect(manifest.kind) if e.step == manifest.step]
+        entries = [
+            e
+            for e in found.inspect(manifest.kind, ctx=self._admit_ctx())
+            if e.step == manifest.step
+        ]
         ok = bool(entries) and entries[0].status == "valid" and entries[0].manifest == manifest
         if ok:
             self._emit(

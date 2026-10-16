@@ -103,6 +103,7 @@ TRUST_REASONS = frozenset(
         "key_changed",
         "legacy_manifest",
         "unknown_version",
+        "remote_untrusted",
     }
 )
 """Reasons that mean "not trusted at the required level" (event ``checkpoint_untrusted``)."""
@@ -196,13 +197,25 @@ class AdmitContext:
     """What a caller adds to the gate: steps known to exist elsewhere (a remote listing), a
     deliberate rollback acceptance, an external high-water mark and a per-candidate byte cap."""
 
-    present: frozenset[int] = frozenset()
     accept_rollback_to: int | None = None
     min_step: int | None = None
     waive_min_step: bool = False  # only a constructor-level acknowledgement sets this
     project: str | None = None  # a manifest that names another project is refused
     parents: Mapping[str, str | None] = field(default_factory=dict)  # run -> parent, from the store
     max_candidate_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        """One validator for every number a caller can hand the gate (an int, never a bool, a
+        float or NaN; steps in ``[0, MAX_STEP]``)."""
+        for name in ("min_step", "accept_rollback_to"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_STEP
+            ):
+                raise CheckpointError(f"{name} must be an integer in [0, {MAX_STEP}]")
+        size = self.max_candidate_bytes
+        if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size < 1):
+            raise CheckpointError("max_candidate_bytes must be a positive integer")
 
 
 class Admission:
@@ -225,7 +238,7 @@ class Admission:
     ) -> None:
         self._rc, self._kind = rc, kind
         self._ctx = ctx or AdmitContext()
-        self._trusted = trusted | set(self._ctx.present)
+        self._trusted = set(trusted)
         self._error: str | None = None
         known: int | None = None
         try:
@@ -363,6 +376,11 @@ def gate_failure(skipped: Iterable[Skipped], policy: str) -> tuple[str, str] | N
             "the old key, then rotate with accept_key_change=True (and restart_chain=True)",
         ),
         (
+            "remote_untrusted",
+            "the remote lists checkpoints but none of them passes the gate: nothing was "
+            "restored, and this is not a fresh start",
+        ),
+        (
             "auth_downgrade",
             "an untagged checkpoint newer than the first authenticated one of this run was "
             "refused: once a run was authenticated, everything after it must be",
@@ -449,6 +467,16 @@ class RunCheckpoints:
         self._emit_fn = emit
         self._anchor = anchor
         self._lock_timeout = lock_timeout
+        if require_trust != "any" and anchor is not None:
+            missing = [
+                n for n in ("max_step", "auth_evidence") if not callable(getattr(anchor, n, None))
+            ]
+            if missing or not callable(anchor):
+                raise CheckpointError(
+                    "a run-store anchor must be callable and provide max_step and auth_evidence "
+                    "under a strict policy: a partial anchor would silently turn off the floor and "
+                    "the authentication evidence"
+                )
         self._key = key
         self._key_id = None if key is None else auth.key_id(key)
         self.accept_auth_downgrade = accept_auth_downgrade
@@ -853,22 +881,23 @@ class RunCheckpoints:
         since: int | None = None
         seen = False
         ids: set[str] = set()
+        unverifiable = 0
         for cand in cands:
             manifest = cand.manifest
             if manifest is None or cand.step is None or manifest.auth_tag is None:
                 continue
-            seen = True
-            if manifest.key_id is not None:
-                ids.add(manifest.key_id)
-            if self._key is None or cand.tag_state == "valid":
+            if cand.tag_state == "valid":  # only a tag that verifies is evidence of anything
+                seen = True
                 since = cand.step if since is None else min(since, cand.step)
-        try:
-            raw = fsops.read_regular(run_fd, _POINTER_NAME[kind], max_bytes=MAX_MANIFEST_BYTES)
-            pointer = CheckpointPointer.model_validate_json(raw)
-        except (CheckpointError, ValidationError, ValueError):
-            pointer = None
-        if pointer is not None and pointer.auth_tag is not None:
-            seen = True
+                if manifest.key_id is not None:
+                    ids.add(manifest.key_id)
+            else:
+                unverifiable += 1  # no key, or a wrong tag: a planted tag proves nothing
+        if unverifiable:
+            self._emit(
+                "info", "checkpoint_unverified_tags_ignored", kind=kind, count=unverifiable,
+                has_key=self._key is not None,
+            )  # fmt: skip
         verified = self._pointer(run_fd, kind) if self._key is not None else None
         if verified is not None and verified.auth_since is not None:
             since = verified.auth_since if since is None else min(since, verified.auth_since)
@@ -1686,7 +1715,8 @@ class RunCheckpoints:
         return manifest
 
     def existing(self, kind: CheckpointKind, step: int) -> CheckpointManifest | None:
-        """The self-checked manifest at ``(kind, step)`` if there is one (data not re-hashed)."""
+        """The manifest at ``(kind, step)`` if there is one and the gate would admit it (its data is
+        not re-hashed)."""
         _check_kind(kind)
         _check_step(step)
         with self._open_run(create=False) as run_fd:
@@ -1701,7 +1731,10 @@ class RunCheckpoints:
                 return None
             finally:
                 os.close(kind_fd)
-        return cand.manifest
+        if cand.manifest is None:
+            return None
+        judged = self.judge_single(cand, kind)
+        return judged.manifest if judged.reason is None else None
 
     # -- liveness -------------------------------------------------------------------------------
 
@@ -1819,7 +1852,8 @@ class RunCheckpoints:
             temp_data, temp_manifest = fsops.temp_name(final_data), fsops.temp_name(final_manifest)
             try:
                 if fsops.exists(kind_fd, final_manifest) or fsops.exists(kind_fd, final_data):
-                    return None
+                    self._emit("warning", "checkpoint_step_occupied", kind=kind, step=step)
+                    return None  # the existing file is left exactly as it is
                 sha256, size = fsops.write_exclusive(
                     kind_fd, temp_data, chunks, max_bytes=manifest.size_bytes
                 )
@@ -1838,6 +1872,7 @@ class RunCheckpoints:
                 except CheckpointExistsError:
                     if linked:  # we made the manifest, the data name was taken: undo ours only
                         fsops.unlink_quiet(kind_fd, final_manifest)
+                    self._emit("warning", "checkpoint_step_occupied", kind=kind, step=step)
                     return None  # an existing file is never overwritten: the step is left alone
                 except BaseException:
                     if linked:

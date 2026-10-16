@@ -27,8 +27,14 @@ from cvpilot.ckpt.directory import (
     RunCheckpoints,
     manifest_name,
 )
-from cvpilot.core.errors import CheckpointCorruptError, CheckpointError
-from cvpilot.core.schema import MAX_MANIFEST_BYTES, CheckpointKind, CheckpointManifest, RemoteStore
+from cvpilot.core.errors import CheckpointCorruptError, CheckpointError, CheckpointUntrustedError
+from cvpilot.core.schema import (
+    MAX_MANIFEST_BYTES,
+    CheckpointKind,
+    CheckpointManifest,
+    RemoteStore,
+    TrustLevel,
+)
 from cvpilot.core.ulid import is_valid_ulid
 from cvpilot.core.uri import RemoteLocation
 
@@ -37,6 +43,7 @@ CHUNK = 8 * 1024 * 1024
 MAX_BACKOFF_S = 8.0
 MAX_REMOTE_RUNS = 1000
 _STEP_NAME = re.compile(r"step_([0-9]{9,19})\.manifest\.json")
+MAX_PROBES = 64  # manifests read to find the admitted ones: a listing cannot make this unbounded
 
 
 def retrying(
@@ -265,8 +272,66 @@ class Mirror:
         """Steps that have a manifest on the remote, newest first."""
         started = self._clock()
         names = self._call(lambda: self._store.list(f"{run_id}/{kind}"), started)
-        steps = [int(m.group(1)) for n in names if (m := _STEP_NAME.fullmatch(n))]
+        steps = {
+            int(m.group(1))
+            for n in names
+            if (m := _STEP_NAME.fullmatch(n)) and n == manifest_name(int(m.group(1)))
+        }  # canonical names only: an alias (extra leading zeros) is junk, and duplicates collapse
         return sorted(steps, reverse=True)
+
+    def admitted(
+        self,
+        rc: RunCheckpoints,
+        kind: CheckpointKind,
+        ctx: AdmitContext | None = None,
+        *,
+        want: int = 10,
+    ) -> list[tuple[int, TrustLevel]]:
+        """Up to ``want`` steps whose remote manifest and data object pass the gate, newest first.
+        Junk names above the real ones are probed and passed over (at most ``MAX_PROBES``); a
+        listing that names checkpoints none of which is admitted is an error, never a fresh start.
+
+        Raises:
+            OSError: the listing failed (nothing is cached by the caller).
+            CheckpointUntrustedError: entries exist and none passes the probe.
+        """
+        steps = self.list_steps(rc.run_id, kind)
+        found: list[tuple[int, TrustLevel]] = []
+        for step in steps[:MAX_PROBES]:
+            if len(found) >= want:
+                break
+            level = self.probe(rc, kind, step, ctx)
+            if level is not None:
+                found.append((step, level))
+        if steps and not found:
+            raise CheckpointUntrustedError(
+                f"the remote lists {len(steps)} checkpoint(s) of {rc.run_id} but none passes the "
+                "gate; nothing was restored",
+                reason="remote_untrusted",
+            )
+        return found
+
+    def confirm(self, rc: RunCheckpoints, manifest: CheckpointManifest) -> bool:
+        """Is this exact checkpoint on the remote right now? The remote manifest must be the very
+        bytes of the local one and the data object must have the recorded size. A local marker says
+        it was uploaded once; retention asks this before it relies on that."""
+        started = self._clock()
+        try:
+            local = rc.read_manifest_bytes(manifest)
+            data_name = manifest.path.split("/", 1)[1]
+            remote = self._call(
+                lambda: self._store.read_bounded(
+                    f"{rc.run_id}/{manifest.kind}/{manifest_name(manifest.step)}",
+                    MAX_MANIFEST_BYTES,
+                ),
+                started,
+            )
+            size = self._call(
+                lambda: self._store.size(f"{rc.run_id}/{manifest.kind}/{data_name}"), started
+            )
+        except (OSError, CheckpointError):
+            return False
+        return remote == local and size == manifest.size_bytes
 
     def probe(
         self,
@@ -274,10 +339,10 @@ class Mirror:
         kind: CheckpointKind,
         step: int,
         ctx: AdmitContext | None = None,
-    ) -> bool:
-        """Would the remote manifest at ``step`` be admitted? Only its manifest is read (bounded,
-        no data) and it is judged like any candidate: a name in a listing is not evidence that a
-        checkpoint exists, so only manifests that pass the gate count as present or as a floor."""
+    ) -> TrustLevel | None:
+        """The trust level of the remote manifest at ``step`` if it would be admitted, else None.
+        Only its manifest is read (bounded) and its data object is sized, never read: a name in a
+        listing is not evidence that a checkpoint exists."""
         started = self._clock()
         try:
             raw = self._call(
@@ -287,19 +352,19 @@ class Mirror:
                 started,
             )
         except OSError:
-            return False
+            return None
         cand = rc._cand_from_bytes(raw, kind, manifest_name(step), step)
         if cand.manifest is None:
-            return False
-        if rc.admission(kind, ctx).decide(rc.judge_single(cand, kind)) is not None:
-            return False
-        # a manifest alone is not a checkpoint: the data object must be there, at its size
-        try:
+            return None
+        judged = rc.judge_single(cand, kind)
+        if rc.admission(kind, ctx).decide(judged) is not None:
+            return None
+        try:  # the data object must be there, at the recorded size
             data_name = cand.manifest.path.split("/", 1)[1]
             size = self._call(lambda: self._store.size(f"{rc.run_id}/{kind}/{data_name}"), started)
         except OSError:
-            return False
-        return size == cand.manifest.size_bytes
+            return None
+        return judged.trust if size == cand.manifest.size_bytes else None
 
     def fetch(
         self,
