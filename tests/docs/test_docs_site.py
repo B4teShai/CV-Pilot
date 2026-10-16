@@ -36,7 +36,8 @@ def site(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_the_site_builds_in_strict_mode_with_every_page(site: Path) -> None:
     for page in ("index.html", "tutorial/index.html", "reference/cli/index.html",
                  "guide/trust/index.html", "adr/0006-checkpoint-semantics/index.html",
-                 "engineering/release/index.html"):  # fmt: skip
+                 "engineering/release/index.html", "status/index.html",
+                 "reference/settings/index.html"):  # fmt: skip
         assert (site / page).is_file(), page
 
 
@@ -105,6 +106,8 @@ GUIDE_PAGES = [
     *sorted((DOCS / "guide").glob("*.md")),
     DOCS / "index.md",
     DOCS / "reference" / "api.md",
+    DOCS / "reference" / "settings.md",
+    DOCS / "status.md",
 ]
 
 

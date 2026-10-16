@@ -122,15 +122,19 @@ def test_no_run_block_anywhere_contains_an_expression() -> None:
             assert "${{" not in str(step.get("run", "")), step
 
 
-def readme_workflows() -> list[dict[str, Any]]:
-    readme = (ROOT / "README.md").read_text()
-    blocks = re.findall(r"```yaml\n(.*?)```", readme, re.S)
-    return [yaml.safe_load(b) for b in blocks]
+def guide_workflows() -> list[dict[str, Any]]:
+    """The full workflow examples of the CI guide (the page that documents the Action)."""
+    page = (ROOT / "docs" / "guide" / "gating-ci.md").read_text()
+    return [yaml.safe_load(b) for b in re.findall(r"```yaml\n(.*?)```", page, re.S)]
 
 
-def test_the_readme_example_workflow_follows_the_trust_model() -> None:
-    docs = readme_workflows()
-    assert docs, "the README documents the Action with a workflow example"
+def test_the_readme_stays_free_of_workflow_examples() -> None:
+    assert "```yaml" not in (ROOT / "README.md").read_text()
+
+
+def test_the_guide_example_workflow_follows_the_trust_model() -> None:
+    docs = guide_workflows()
+    assert docs, "the CI guide documents the Action with a workflow example"
     for doc in docs:
         assert lint_trusted_gate(doc) == []
 

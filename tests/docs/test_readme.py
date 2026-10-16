@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from docs_harness import RUNNABLE_LANGS, blocks, clean_env, run_page
@@ -14,7 +15,8 @@ def test_the_readme_quickstart_runs_and_prints_what_it_promises(tmp_path: Path) 
     home = tmp_path / "home"
     home.mkdir()
     results = run_page(README.read_text(), tmp_path / "work", clean_env(home))
-    assert len(results) == 2 and "run_started" in results[0].output
+    assert len(results) == 1
+    assert "run_started" in results[0].stderr and "run_finished" in results[0].stderr
 
 
 def test_every_other_command_block_in_the_readme_is_marked_notest() -> None:
@@ -30,10 +32,45 @@ def test_the_readme_names_no_unbuilt_feature_as_available() -> None:
     assert "no checkpoint manager" not in text
 
 
-def test_the_guide_shows_the_recipe_the_readme_runs() -> None:
-    """The guide shows, character for character, the restart recipe the README test executes."""
-    from docs_harness import blocks as parse
+def test_the_recipes_that_left_the_readme_live_in_the_guide() -> None:
+    """What the README no longer shows is on the page that now owns it."""
+    docs = ROOT / "docs"
+    assert "find_resume_point" in (docs / "guide" / "checkpoints.md").read_text()
+    gating = (docs / "guide" / "gating-ci.md").read_text()
+    for needle in ("--per-class-max-drop", "log_eval", "expect-baseline-chain", "iscrowd"):
+        assert needle in gating, needle
+    settings = (docs / "reference" / "settings.md").read_text()
+    for name in ("CVPILOT_CKPT_KEY", "CVPILOT_FORWARD_TO", "CVPILOT_STORE_DIR", "130"):
+        assert name in settings, name
+    assert "Planned" in (docs / "status.md").read_text()
 
-    recipe = next(b for b in parse(README.read_text()) if b.file == "restart.py").body
-    guide = (ROOT / "docs" / "guide" / "checkpoints.md").read_text()
-    assert recipe in guide
+
+# The README is a front door: one plain sentence, one picture, one example, links.
+MAX_LINES = 100
+MAX_WORDS = 500
+C4_IMAGES = ("context", "containers", "components", "data-model", "flow-a", "flow-b", "runtime")
+
+
+def prose_words(text: str) -> int:
+    """Words outside fenced code blocks; link targets do not count, link text does."""
+    prose = re.sub(r"^```.*?^```[ \t]*$", "", text, flags=re.S | re.M)
+    prose = re.sub(r"\]\([^)]*\)", "]", prose)
+    return len(prose.split())
+
+
+def test_the_readme_stays_short_enough_to_read_in_twenty_seconds() -> None:
+    text = README.read_text()
+    assert len(text.splitlines()) <= MAX_LINES
+    assert prose_words(text) <= MAX_WORDS
+
+
+def test_the_readme_has_exactly_one_picture_and_it_is_the_overview() -> None:
+    images = re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", README.read_text())
+    assert len(images) == 1 and images[0].endswith("/docs/diagrams/png/overview.png")
+    assert not any(f"/png/{name}.png" in README.read_text() for name in C4_IMAGES)
+
+
+def test_the_readme_leaves_internals_to_the_docs() -> None:
+    text = README.read_text()
+    for word in ("HMAC", "trust policy", "lineage", "quarantine", "eval_set_hash", "CVPILOT_"):
+        assert word not in text, word
