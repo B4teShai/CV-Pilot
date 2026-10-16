@@ -5,6 +5,17 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Fixed
+
+- `cvpilot baseline set` (and `cvpilot.compare.baselines.set_baseline`) now refuses a run that is not
+  `finished`, like `--baseline RUN_ID` already did; there is no override.
+- A resumed `CheckpointManager` seeds its save schedule from the restored `last` checkpoint
+  (step and time), so the first save after a resume happens one interval later instead of at once.
+- `cvpilot ckpt verify`: the help text now says what each trust policy reports for a missing newest
+  checkpoint. Under the default policy `any` the exit code is unchanged and one `note:` line on stderr
+  tells when the run store or a pointer records a newer step than the newest valid checkpoint.
+- The events of `find_resume_point` and `recover_run` are JSON on stderr when called before `init`.
+
 ### Changed
 
 - The README is now a short front page (what it is for, one picture, a runnable example, links).

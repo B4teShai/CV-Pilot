@@ -1,6 +1,6 @@
 # Notebooks: CV-Pilot on real data and real models (outputs saved from a real run)
 `01_tutorial.ipynb`: doctor, record a run, score YOLO11n on COCO128 per class, pin a baseline, compare and gate a worse candidate, CI, kill and resume a training job.
-`02_edge_cases.ipynb`: 37 checked cases (bad inputs, fail-closed gates, edited results, damaged or tampered checkpoints) ending in an expected-vs-actual table.
+`02_edge_cases.ipynb`: 39 checked cases (bad inputs, fail-closed gates, edited results, damaged or tampered checkpoints) ending in an expected-vs-actual table.
 Data: COCO128 (128 photos; annotations CC BY 4.0, images keep their Flickr licences). Models: YOLO11n via `ultralytics` (AGPL-3.0, extra `cvpilot[ultralytics]`) and a small PyTorch classifier.
 Both downloads (about 13 MB, SHA-256 pinned, checked before unpacking or loading) go to `$CVPILOT_NOTEBOOK_DATA` (default `<tmp>/cvpilot-notebooks`), never into the repository; the internet is needed once.
 Run from the repository root; nothing is added to `pyproject.toml` or `uv.lock`:
