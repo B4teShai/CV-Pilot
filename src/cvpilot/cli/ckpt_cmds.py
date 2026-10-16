@@ -331,17 +331,17 @@ def ckpt_quarantine(
         bool,
         typer.Option(
             "--clear",
-            help="Delete the quarantined entries (you are saying they are not yours); the step "
-            "floor they imposed falls away.",
+            help="Release the listed entries (you are saying they are not yours): the step floor "
+            "they imposed falls away. No file is deleted or moved.",
         ),
     ] = False,
     as_json: JsonOpt = False,
 ) -> None:
-    """Show what a save set aside, or discard it with ``--clear``.
+    """Show the rejected manifests a save recorded, or release them with ``--clear``.
 
-    A save quarantines a manifest it does not trust whose step is above every trusted one (a
-    planted high step would otherwise block every later save). Quarantined entries keep counting
-    toward the step floor until you clear them. Exit 0; exit 2 on a usage error.
+    A save records (it moves and deletes nothing) a manifest it does not trust whose step is above
+    every trusted one: a planted high step would otherwise block every later save. Recorded entries
+    keep counting toward the step floor until you release them. Exit 0; exit 2 on a usage error.
     """
     root = _root(directory)
     session = _Session(ctx, root, None, None)
@@ -360,7 +360,42 @@ def ckpt_quarantine(
                 step = "-" if row["step"] is None else f"{row['step']:09d}"
                 typer.echo(f"{run}  {row['kind']:<4}  {step:>9}  quarantined")
             if clear:
-                typer.echo(f"cleared {cleared} quarantined manifest(s)")
+                typer.echo(f"released {cleared} quarantined manifest(s); no file was touched")
+    finally:
+        session.close()
+
+
+@ckpt_app.command("trash")
+def ckpt_trash(
+    ctx: typer.Context,
+    directory: DirArg,
+    run: Annotated[
+        str,
+        typer.Option("--run", callback=run_id_argument, help="Run whose rejected files to move."),
+    ],
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Confirm: move the files of the recorded entries.")
+    ] = False,
+) -> None:
+    """Move the files of the quarantined entries into ``<run>/trash/`` (never deletes them).
+
+    This is the only command that moves checkpoint files because of a rejection, and it does
+    nothing without ``--yes``. Exit 0; exit 2 on a usage error or without ``--yes``.
+    """
+    root = _root(directory)
+    session = _Session(ctx, root, None, None)
+    try:
+        found = session.open(run)
+        if not yes:
+            names = [f"{e.kind}/{e.name}" for e in found.quarantined()]
+            typer.echo(f"would move {len(names)} entr(y/ies); repeat with --yes: {names}", err=True)
+            raise typer.Exit(2)
+        try:
+            moved = found.move_rejected_to_trash()
+        except CheckpointError as exc:
+            raise _usage(str(exc)) from None
+        for name in moved:
+            typer.echo(f"moved {name}")
     finally:
         session.close()
 

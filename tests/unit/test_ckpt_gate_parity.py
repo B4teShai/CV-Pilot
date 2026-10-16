@@ -93,6 +93,8 @@ EXEMPT = {
     "RunCheckpoints.read_range": "the mirror's reader of the local file it is uploading",
     "RunCheckpoints.read_manifest_bytes": "the mirror's reader of the local manifest",
     "RunCheckpoints.mark_uploaded": "writes a marker",
+    "RunCheckpoints.move_rejected_to_trash": "an explicit, confirmed move of listed files",
+    "cli ckpt trash": "moves listed files into trash only with --yes",
     "RunCheckpoints.quarantined": "lists what a save set aside; hands out no state",
     "RunCheckpoints.clear_quarantine": "an operator's acknowledgement; deletes, hands out nothing",
     "cli ckpt quarantine": "lists or clears the quarantine; hands out no state",

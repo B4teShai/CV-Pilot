@@ -287,11 +287,11 @@ exit 2 when the path is not a directory or the options are invalid.
 cvpilot ckpt quarantine [OPTIONS] {directory}
 ```
 
-Show what a save set aside, or discard it with ``--clear``.
+Show the rejected manifests a save recorded, or release them with ``--clear``.
 
-A save quarantines a manifest it does not trust whose step is above every trusted one (a
-planted high step would otherwise block every later save). Quarantined entries keep counting
-toward the step floor until you clear them. Exit 0; exit 2 on a usage error.
+A save records (it moves and deletes nothing) a manifest it does not trust whose step is above
+every trusted one: a planted high step would otherwise block every later save. Recorded entries
+keep counting toward the step floor until you release them. Exit 0; exit 2 on a usage error.
 
 | Argument | Type | Description |
 |---|---|---|
@@ -300,8 +300,28 @@ toward the step floor until you clear them. Exit 0; exit 2 on a usage error.
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `--run` | str |  | Run whose quarantine to show. Required. |
-| `--clear` | flag |  | Delete the quarantined entries (you are saying they are not yours); the step floor they imposed falls away. |
+| `--clear` | flag |  | Release the listed entries (you are saying they are not yours): the step floor they imposed falls away. No file is deleted or moved. |
 | `--json` | flag |  | Print JSON instead of text. |
+
+### `cvpilot ckpt trash`
+
+```text
+cvpilot ckpt trash [OPTIONS] {directory}
+```
+
+Move the files of the quarantined entries into ``<run>/trash/`` (never deletes them).
+
+This is the only command that moves checkpoint files because of a rejection, and it does
+nothing without ``--yes``. Exit 0; exit 2 on a usage error or without ``--yes``.
+
+| Argument | Type | Description |
+|---|---|---|
+| `directory` | path | Checkpoint directory (holds one folder per run). |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--run` | str |  | Run whose rejected files to move. Required. |
+| `--yes` | flag |  | Confirm: move the files of the recorded entries. |
 
 ### `cvpilot ckpt prune`
 

@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -82,6 +83,7 @@ DEFAULT_MAX_ENTRIES = 10_000
 """Most files examined in one kind directory; bounds the work of a walk."""
 KINDS: tuple[CheckpointKind, ...] = ("last", "best")
 _POINTER_NAME: dict[str, str] = {"last": "LATEST", "best": "LATEST_BEST"}
+QUARANTINE_NAME = "QUARANTINE"
 _DATA = re.compile(r"step_([0-9]{9,19})\.(safetensors|pt)")
 _MANIFEST = re.compile(r"step_([0-9]{9,19})\.manifest\.json")
 _MARKER = re.compile(r"step_([0-9]{9,19})\.remote\.json")
@@ -395,15 +397,6 @@ def list_runs(root: Path, *, limit: int = 100_000) -> list[str]:
         os.close(fd)
 
 
-def os_replace_across(src_fd: int, src: str, dst_fd: int, dst: str) -> None:
-    """Move a file between two directories of the same run (quarantine only; the destination is
-    junk by definition, so replacing a previous quarantined copy is fine)."""
-    try:
-        os.replace(src, dst, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
-    except OSError as exc:
-        raise CheckpointError(f"cannot move {src} to quarantine: {exc}") from exc
-
-
 class RunCheckpoints:
     """The checkpoints of one run below a checkpoint root. See the module docstring."""
 
@@ -715,108 +708,128 @@ class RunCheckpoints:
             self._emit("warning", "checkpoint_floor_unavailable", kind=kind, source="run store")
             return None
 
-    # -- quarantine ---------------------------------------------------------------------------
+    # -- quarantine (a list, never a move) ----------------------------------------------------
 
-    def _quarantine(self, run_fd: int, kind_fd: int, kind: str, cand: _Cand) -> None:
-        """Move a rejected manifest and its data out of the way (``<run>/quarantine/<kind>/``).
-        They keep counting toward the step floor until an operator clears them."""
-        manifest = cand.manifest
-        if manifest is None or cand.step is None:
+    _FORGERY = frozenset(
+        {
+            "auth_missing", "auth_invalid", "store_mismatch", "not_anchored", "unanchored",
+            "link_mismatch", "pointer_mismatch", "binding_mismatch", "auth_downgrade",
+        }
+    )  # fmt: skip
+
+    def _q_load(self, run_fd: int) -> dict[str, dict[str, dict[str, Any]]]:
+        try:
+            raw = fsops.read_regular(run_fd, QUARANTINE_NAME, max_bytes=MAX_MANIFEST_BYTES)
+            data = json.loads(raw)
+        except (CheckpointError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if k in KINDS and isinstance(v, dict)}
+
+    def _q_store(self, run_fd: int, data: dict[str, dict[str, dict[str, Any]]]) -> None:
+        temp = fsops.temp_name(QUARANTINE_NAME)
+        try:
+            fsops.write_exclusive(
+                run_fd, temp, json.dumps(data, sort_keys=True).encode(), final_mode=0o600
+            )
+            fsops.replace(run_fd, temp, QUARANTINE_NAME)  # our own bookkeeping, not evidence
+        except BaseException:
+            fsops.unlink_quiet(run_fd, temp)
+            raise
+        fsops.fsync_dir(run_fd)
+
+    def _quarantine(self, run_fd: int, kind: str, cands: list[_Cand]) -> None:
+        """Remember rejected manifests above the newest trusted one. Nothing is moved or deleted:
+        the list is reported, counts toward the save floor until released, and the files stay."""
+        data = self._q_load(run_fd)
+        mine = data.setdefault(kind, {})
+        fresh = []
+        for cand in cands:
+            if cand.step is None or str(cand.step) in mine or cand.reason not in self._FORGERY:
+                continue
+            mine[str(cand.step)] = {"reason": cand.reason, "released": False}
+            fresh.append(cand)
+        if not fresh:
             return
-        q_run = fsops.open_subdir(run_fd, "quarantine", create=True)
-        try:
-            q_kind = fsops.open_subdir(q_run, kind, create=True)
-            try:
-                for name in (manifest_name(cand.step), manifest.path.split("/", 1)[1]):
-                    if fsops.exists(kind_fd, name):
-                        os_replace_across(kind_fd, name, q_kind, name)
-                fsops.fsync_dir(q_kind)
-            finally:
-                os.close(q_kind)
-        finally:
-            os.close(q_run)
-        fsops.fsync_dir(kind_fd)
-        self._emit(
-            "warning", "checkpoint_quarantined", kind=kind, step=cand.step,
-            reason=cand.reason, recovery="cvpilot ckpt quarantine <dir> --run <id> --clear",
-        )  # fmt: skip
+        self._q_store(run_fd, data)
+        for cand in fresh:
+            self._emit(
+                "warning", "checkpoint_quarantined", kind=kind, step=cand.step,
+                reason=cand.reason, files_moved=False,
+                recovery="cvpilot ckpt quarantine <dir> --run <id> --clear",
+            )  # fmt: skip
 
-    def _quarantine_max(self, run_fd: int, kind: str) -> int | None:
-        try:
-            q_run = fsops.open_subdir(run_fd, "quarantine", create=False)
-        except CheckpointError:
-            return None
-        try:
-            try:
-                q_kind = fsops.open_subdir(q_run, kind, create=False)
-            except CheckpointError:
-                return None
-            try:
-                steps = [
-                    c.step
-                    for c in self._candidates(q_kind, kind)
-                    if c.reason is None and c.step is not None
-                ]
-            finally:
-                os.close(q_kind)
-        finally:
-            os.close(q_run)
-        return max(steps, default=None)
+    def _quarantine_steps(self, run_fd: int, kind: str, *, released: bool) -> set[int]:
+        found = self._q_load(run_fd).get(kind, {})
+        return {
+            int(k) for k, v in found.items() if k.isdigit() and bool(v.get("released")) == released
+        }
 
     def quarantined(self) -> list[Entry]:
-        """What a save set aside: the rejected manifests below ``quarantine/``, newest first."""
+        """Rejected manifests a save recorded and nobody released yet, newest first."""
         found: list[Entry] = []
         with self._open_run(create=False) as run_fd:
             if run_fd is None:
                 return found
-            try:
-                q_run = fsops.open_subdir(run_fd, "quarantine", create=False)
-            except CheckpointError:
-                return found
-            try:
-                for kind in KINDS:
-                    try:
-                        q_kind = fsops.open_subdir(q_run, kind, create=False)
-                    except CheckpointError:
-                        continue
-                    try:
-                        for cand in self._candidates(q_kind, kind):
-                            if cand.step is not None:
-                                found.append(
-                                    Entry(cand.name, cand.step, kind, "corrupt", "quarantined")
-                                )
-                    finally:
-                        os.close(q_kind)
-            finally:
-                os.close(q_run)
+            for kind in KINDS:
+                for step in sorted(self._quarantine_steps(run_fd, kind, released=False)):
+                    found.append(Entry(manifest_name(step), step, kind, "corrupt", "quarantined"))
         found.sort(key=lambda e: e.step if e.step is not None else -1, reverse=True)
         return found
 
     def clear_quarantine(self) -> int:
-        """Delete everything in quarantine (the operator's acknowledgement that those entries are
-        not theirs): the floor they imposed falls away. Returns the number of manifests removed."""
-        removed = 0
+        """Release every recorded entry: the operator says they are not theirs, and the floor they
+        imposed falls away. No file is touched; the entries stay on disk and in verify."""
         with self._locked() as run_fd:
-            try:
-                q_run = fsops.open_subdir(run_fd, "quarantine", create=False)
-            except CheckpointError:
-                return 0
+            data = self._q_load(run_fd)
+            released = 0
+            for kind in KINDS:
+                for entry in data.get(kind, {}).values():
+                    if not entry.get("released"):
+                        entry["released"] = True
+                        released += 1
+            if released:
+                self._q_store(run_fd, data)
+        self._emit("warning", "checkpoint_quarantine_cleared", released=released, files_moved=False)
+        return released
+
+    def move_rejected_to_trash(self) -> list[str]:
+        """Move the files of every recorded entry into ``<run>/trash/<kind>/`` (the only place a
+        file is moved because of a rejection, and only when this is called on purpose)."""
+        moved: list[str] = []
+        with self._locked() as run_fd:
+            data = self._q_load(run_fd)
+            trash = fsops.open_subdir(run_fd, "trash", create=True)
             try:
                 for kind in KINDS:
-                    try:
-                        q_kind = fsops.open_subdir(q_run, kind, create=False)
-                    except CheckpointError:
+                    kind_fd = self._open_kind(run_fd, kind, create=False)
+                    if kind_fd is None:
                         continue
                     try:
-                        for name in fsops.listdir(q_kind, limit=self.max_entries):
-                            if fsops.unlink_quiet(q_kind, name) and _MANIFEST.fullmatch(name):
-                                removed += 1
+                        sub = fsops.open_subdir(trash, kind, create=True)
+                        try:
+                            for key in data.get(kind, {}):
+                                step = int(key)
+                                for name in self._names_of(kind_fd, step):
+                                    os.replace(name, f"{name}.{secrets.token_hex(3)}",
+                                               src_dir_fd=kind_fd, dst_dir_fd=sub)  # fmt: skip
+                                    moved.append(f"{kind}/{name}")
+                        finally:
+                            os.close(sub)
                     finally:
-                        os.close(q_kind)
+                        os.close(kind_fd)
             finally:
-                os.close(q_run)
-        self._emit("warning", "checkpoint_quarantine_cleared", removed=removed)
-        return removed
+                os.close(trash)
+        self._emit("warning", "checkpoint_files_trashed", count=len(moved))
+        return moved
+
+    def _names_of(self, kind_fd: int, step: int) -> list[str]:
+        return [
+            n
+            for n in fsops.listdir(kind_fd, limit=self.max_entries)
+            if (m := _DATA.fullmatch(n) or _MANIFEST.fullmatch(n)) and int(m.group(1)) == step
+        ]
 
     # -- downgrade ----------------------------------------------------------------------------
 
@@ -1463,8 +1476,6 @@ class RunCheckpoints:
             and (newest_trusted is None or c.step > newest_trusted)
             and any(k.step == c.step for k in consistent)
         ]
-        for cand in rejected:  # reported and set aside, never silently left to block the save
-            self._quarantine(run_fd, kind_fd, kind, cand)
         evidence = self._evidence.get(kind, AuthEvidence())
         if self._key is None and evidence.seen and not self.accept_auth_downgrade:
             raise CheckpointUntrustedError(
@@ -1481,13 +1492,21 @@ class RunCheckpoints:
                     reason="key_changed",
                 )
             self._emit("warning", "checkpoint_key_change_accepted", kind=kind, step=step)
+        self._quarantine(run_fd, kind, rejected)  # a list only: nothing is moved or deleted
+        released = self._quarantine_steps(run_fd, kind, released=True)
         sources: dict[str, int] = {}
         for label, value in (
             (
                 "a manifest in the directory",
-                max((c.step for c in consistent if c.step is not None), default=None),
+                max(
+                    (c.step for c in consistent if c.step is not None and c.step not in released),
+                    default=None,
+                ),
             ),
-            ("a quarantined manifest", self._quarantine_max(run_fd, kind)),
+            (
+                "a recorded rejected manifest",
+                max(self._quarantine_steps(run_fd, kind, released=False), default=None),
+            ),
             ("the run store", self._anchor_floor(kind)),
             ("the pointer", self._pointer_floor(run_fd, kind)),
             ("min_step or the remote", floor_hint),
@@ -1513,13 +1532,12 @@ class RunCheckpoints:
                     "checkpoints are immutable"
                 )
         if floor is not None and step <= floor:
-            held = [r.step for r in rejected if r.step == floor]
-            if held:
+            if floor in self._quarantine_steps(run_fd, kind, released=False):
                 raise CheckpointStepError(
                     f"step {step} does not exceed {floor}: an untrusted manifest at step {floor} "
-                    "was quarantined and still counts as the floor. If you know it is not "
-                    "yours, discard it with: cvpilot ckpt quarantine <dir> --run "
-                    f"{self.run_id} --clear"
+                    "is quarantined (listed, not moved) and still counts as the floor. If you "
+                    "know it is not yours, release it with: cvpilot ckpt quarantine <dir> "
+                    f"--run {self.run_id} --clear"
                 )
             origin = next(label for label, value in sources.items() if value == floor)
             raise CheckpointStepError(
