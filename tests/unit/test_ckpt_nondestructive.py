@@ -161,9 +161,10 @@ def test_a_planted_manifest_is_listed_not_moved_and_release_deletes_nothing(
     data = blob(9)
     sha = hashlib.sha256(data).hexdigest()
     forged = CheckpointManifest(
-        run_id=run.run_id, step=999, kind="last", path="last/step_000000999.safetensors", sha256=sha,
-        size_bytes=len(data), format="safetensors", versions={}, dataset_hash="merkle:" + "c" * 64,
-        created_at=parent["created_at"], prev_manifest_sha256=hashlib.sha256(parent_raw).hexdigest(),
+        run_id=run.run_id, step=999, kind="last", sha256=sha, size_bytes=len(data),
+        path="last/step_000000999.safetensors", format="safetensors", versions={},
+        dataset_hash="merkle:" + "c" * 64, created_at=parent["created_at"],
+        prev_manifest_sha256=hashlib.sha256(parent_raw).hexdigest(),
         prev_chain_sha256=parent["chain_sha256"], prev_step=2, schema_version=2, chain_version=1,
         chain_sha256=checkpoint_chain(
             parent["chain_sha256"], run.run_id, "last", 999, sha, len(data), "safetensors"
