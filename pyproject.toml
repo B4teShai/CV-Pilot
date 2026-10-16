@@ -149,6 +149,8 @@ select = ["E", "F", "I", "UP", "B", "S"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
+# notebooks: imports sit next to the cell that uses them, and printed tables have long lines
+"notebooks/**" = ["E402", "E501"]
 
 [tool.mypy]
 strict = true
