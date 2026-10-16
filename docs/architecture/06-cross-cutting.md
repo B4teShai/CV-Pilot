@@ -196,7 +196,7 @@ What a contributor can do to an unprotected setup, and the control that stops it
 | Hide a regression in a small slice | `--skip-small-slices` skipped it silently | `--max-skipped N` (default 0): skipped slices are counted against a cap, listed in the output and in the Action summary, and exceeding the cap fails |
 | Change the code that runs | the workflow, `action.yml`, the CI scripts and the installed cvpilot all came from the pull request | the rules below |
 
-The rules for a CI gate (the README example follows them and `tests/unit/test_action.py` lints it):
+The rules for a CI gate (the example in the [CI guide](../guide/gating-ci.md) follows them and `tests/unit/test_action.py` lints it):
 
 1. Install cvpilot from a pinned release with hashes (`pip install --require-hashes`), never from
    the pull request.

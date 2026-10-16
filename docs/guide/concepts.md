@@ -33,6 +33,41 @@ and loads the first that verifies. See [Checkpoints and resume](checkpoints.md).
 `message` (`run_started`, `checkpoint_saved`, `checkpoint_skipped_corrupt`, `gate_failed`, ...) and
 the details in separate fields; secrets are redacted by key and never logged.
 
+## Recording a run: what to expect
+
+- `init` works outside a git repository and without a GPU: absent facts are recorded as none.
+- A step must be strictly greater than the last step logged for the same metric key.
+- `log` buffers up to 10 000 points and writes one Parquet file when the buffer is full or 2 s
+  have passed; `finish` flushes and compacts them.
+- Secrets in the config and on the command line are redacted before storage (best effort for free
+  text). Set `CVPILOT_STORE_COMMAND_LINE=false` to store only the executable name and the number of
+  arguments; `cvpilot repro` then cannot re-run the command. `repro RUN` prints a bash script:
+  checkout, the stored diff and the command.
+- `runs` and `repro` exit `1` for a well-formed run id that is not in the store and `2` for a
+  missing project, an invalid project or a malformed run id (see [Settings](../reference/settings.md)).
+
+## Send metrics to a tracker and hook into a framework
+
+```python notest
+import cvpilot
+
+run = cvpilot.init("fridge-sku", task="detection", forward_to=["mlflow"])  # or CVPILOT_FORWARD_TO
+# Lightning: pip install "cvpilot[lightning]"; the Trainer gets a logger and a callback
+run = cvpilot.autolog(trainer, project="fridge-sku", task="detection")
+# Ultralytics: pip install "cvpilot[ultralytics]"; see the license note in the install guide
+run = cvpilot.autolog(yolo_model, project="fridge-sku", task="detection")
+```
+
+Forwarders (`cvpilot[mlflow]`, `[wandb]`, `[trackio]`) run on their own threads behind bounded
+queues: a tracker that is down, slow or hung is counted and logged once and never raises into or
+blocks training (`finish` waits at most 5 s). Tokens stay in the tracker SDK's own environment
+variables; CV-Pilot refuses credentials in URLs, plain http outside `CVPILOT_ENV=dev` and disabled
+TLS verification. Hook callbacks never raise into the framework. The `ultralytics` package is
+AGPL-3.0: using `cvpilot[ultralytics]` makes your combined work subject to AGPL-3.0; CV-Pilot never
+imports it. These integrations are tested with fake trainers and injected fake SDK modules; smoke
+tests against the real libraries exist behind `pytest -m real_libs` and were not run in the
+development environment. Design: [ADR-0008](../adr/0008-forwarders.md).
+
 ## Layers
 
 Interface (`cli/`, the public API) uses application packages (`runs/`, `eval/`, `compare/`,

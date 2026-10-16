@@ -114,7 +114,7 @@ and from the remote when nothing local verifies. `cvpilot.resume_path("proj")` a
 
 A restarted script gets a **new run id**, so it finds its predecessor through the run store and the
 checkpoint directory: both must live on storage that survives the restart (a persistent mount).
-This is the recipe the README runs twice in a test:
+A test (`tests/docs/test_guide_recipes.py`) runs this recipe twice, as a killed job and its restart:
 
 ```python notest
 import cvpilot
@@ -135,6 +135,15 @@ for step in range(start, start + 3):
     ckpt.maybe_save(step, model={"w": [float(step)]})
     if ckpt.preempted():
         break  # SIGTERM or SIGUSR1 set a flag; the run is already marked preempted
+```
+
+Run it twice. The first process stands in for a job that was killed, the second is its restart: a
+new run that resumes the first and starts where it stopped.
+
+```bash notest
+export CVPILOT_PROJECT=fridge-sku CVPILOT_STORE_DIR="$PWD/state/store" CVPILOT_CHECKPOINT_DIR="$PWD/state/ckpt"
+python restart.py   # prints: starting at step 0
+python restart.py   # prints: starting at step 3, and logs checkpoint_restored step=2 kind=last
 ```
 
 ### A fresh node with only the bucket

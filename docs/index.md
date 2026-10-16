@@ -1,31 +1,39 @@
 # CV-Pilot
 
-Regression gates, remote monitoring and resume-safe checkpoints for vision models, on top of
-the experiment tracker you already use.
+CV-Pilot stops you from shipping a worse vision model and from losing training progress. It works
+next to the experiment tracker you already use (MLflow, Weights & Biases, Trackio): it records each
+training run, measures detection and classification quality per class, compares every new model
+with your current best, and fails your CI build if something got worse.
 
-CV-Pilot records every run (environment, git state, dataset hash, metrics), evaluates detection
-and classification predictions into immutable snapshots, pins baselines, and fails a pull request
-when a model regresses. Its checkpoint manager writes atomically, verifies what it restores, and
-survives a kill at any moment of a save.
+It also saves crash-proof checkpoints, so a preempted or killed job resumes where it stopped.
+Everything runs on your machine from Python or the command line; no server is needed.
 
-## Start here
+![CV-Pilot records your training, compares the new model with your best one and tells CI pass or fail](diagrams/png/overview.png)
 
-- [Install](guide/install.md), then the [Tutorial](tutorial.md): a synthetic run from logging to
-  gating to a preemption and a damaged checkpoint. Every command in it is executed by a test.
-- [Concepts](guide/concepts.md) for the vocabulary, [Checkpoints and resume](guide/checkpoints.md)
-  for the checkpoint manager, [Gating in CI](guide/gating-ci.md) and the
-  [Trust model](guide/trust.md) before you rely on either in a shared environment.
-- [Command line](reference/cli.md) (generated from the code) and [Python API](reference/api.md).
-- [Architecture](architecture/README.md), the [decision records](adr/0001-scope-and-license.md) and
-  the [engineering guide](engineering/README.md) explain why it is built the way it is.
+## I want to try it
 
-## Status
+- [Install](guide/install.md) it with `pip install cvpilot` (Python 3.10 or newer).
+- Follow the [Tutorial](tutorial.md): a synthetic run from logging to a failed gate to a resume.
+  Every command in it is executed by a test.
+- Look up a command in the [command line reference](reference/cli.md) or a function in the
+  [Python API](reference/api.md).
 
-Version 0.1.0 is a release candidate: it has not been published to any index. The documents under
-Architecture mark each component as built or planned; the server, alerts, sync and the other
-frameworks' hooks are planned and are not part of this release.
+## I want to understand it
+
+- [Concepts](guide/concepts.md): runs, snapshots, baselines, gates and checkpoints in plain words.
+- [How it works](architecture/README.md): the architecture, from a 30-second picture to the details.
+- [Checkpoints and resume](guide/checkpoints.md) and the [Trust model](guide/trust.md).
+- [Compare and gate in CI](guide/gating-ci.md), including the GitHub Action.
+- [Settings and exit codes](reference/settings.md) and
+  [what is built and what is planned](status.md).
+
+## I want to contribute
+
+- [Contributing](https://github.com/B4teShai/CV-Pilot/blob/main/CONTRIBUTING.md): how to send a change.
+- [Engineering guide](engineering/README.md): standards, testing, errors and logging, release.
+- [Architecture decisions](adr/0001-scope-and-license.md): why it is built the way it is.
 
 ## License
 
-Apache-2.0. The optional Ultralytics hook talks to an AGPL-3.0 package that CV-Pilot never
-imports; using that extra makes your combined work subject to that license.
+Apache-2.0. The optional `cvpilot[ultralytics]` extra uses the AGPL-3.0 Ultralytics package, which
+then applies to your combined work.

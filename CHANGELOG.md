@@ -5,13 +5,20 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Changed
+
+- The README is now a short front page (what it is for, one picture, a runnable example, links).
+  The settings, exit codes, evaluation, baseline and gate walkthrough, GitHub Action example and
+  status moved into the docs (`docs/reference/settings.md`, `docs/status.md`, the guide pages). A new
+  overview diagram replaces the architecture diagrams in the README.
+
 ### Added
 
 - `CheckpointManager.restore(discover=True)` and `restore_latest_valid(discover=True, run_ids=...)`:
   a restarted script on a node without the run store or checkpoint directory finds the earlier
   run's checkpoints on the remote (newest 20 runs, best step first), through the same gate as any
-  other checkpoint. A fresh-node test runs across real processes. The README restart recipe is
-  executed by the test suite; `recover_run`, `list_runs` and `get_run_view` now honour
+  other checkpoint. A fresh-node test runs across real processes. The restart recipe of the
+  checkpoint guide is executed by the test suite; `recover_run`, `list_runs` and `get_run_view` now honour
   `CVPILOT_STORE_DIR` like `init` does. Remote listings are bounded.
 - `cvpilot ckpt verify --expect-min-step N` and `--accept-rollback-to N`; `CVPILOT_CKPT_MIN_STEP`
   applies to `verify` as well. The trust guide now separates forgery (stopped by a key) from

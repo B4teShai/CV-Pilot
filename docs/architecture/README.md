@@ -1,5 +1,17 @@
 # CV-Pilot architecture
 
+## The 30-second picture
+
+![CV-Pilot records your training, compares the new model with your best one and tells CI pass or fail](../diagrams/png/overview.png)
+
+- Your training code (Lightning, Ultralytics or plain Python) calls CV-Pilot.
+- CV-Pilot records each run, evaluates the model per class and saves checkpoints.
+- A new model is compared with your best one, and CI passes or fails.
+- Metrics can also go to your tracker (MLflow, Weights & Biases, Trackio).
+- It all runs on your machine; no server is needed. The sections below are the technical detail.
+
+## The technical index
+
 This directory is the single source of truth for how CV-Pilot is built. It follows the
 [C4 model](https://c4model.com) from the outside in, then covers data, runtime behaviour,
 deployment and cross-cutting concerns. Decisions that shaped it are recorded as ADRs.
