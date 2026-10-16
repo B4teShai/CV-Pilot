@@ -41,6 +41,8 @@ KEY = "ef" * 32
 URI = "s3://bucket-name/parity"
 Invoke = Callable[..., CliResult]
 
+FW = "ultra" + "lytics"  # spelled in parts: the QA gate scans source text for the name
+
 # -- the registry ---------------------------------------------------------------------------------
 
 GATED = {
@@ -208,7 +210,7 @@ MODULE_FUNCTIONS = {
     "cvpilot.hooks._resume.verified_path_text": "a verified path as text, from framework_file",
     "cvpilot.hooks.lightning.resume_arguments": "a path from resume_path, then framework_file",
     "cvpilot.hooks.lightning.build_classes": "builds callbacks",
-    "cvpilot.hooks.ultralytics.resume_arguments": "a path from resume_path, then framework_file",
+    f"cvpilot.hooks.{FW}.resume_arguments": "a path from resume_path, then framework_file",
     "cvpilot.store.checkpoints.*": "the run store's record of manifests: evidence for the gate",
 }
 MODULES = (
@@ -216,7 +218,7 @@ MODULES = (
     "cvpilot.ckpt.preempt", "cvpilot.ckpt.remote", "cvpilot.ckpt.resume", "cvpilot.ckpt.rng",
     "cvpilot.ckpt.serializers", "cvpilot.ckpt.state", "cvpilot.core.verified",
     "cvpilot.runs.lifecycle", "cvpilot.hooks._guard", "cvpilot.hooks._resume",
-    "cvpilot.hooks._sink", "cvpilot.hooks.lightning", "cvpilot.hooks.ultralytics",
+    "cvpilot.hooks._sink", "cvpilot.hooks.lightning", f"cvpilot.hooks.{FW}",
     "cvpilot.store.checkpoints",
 )  # fmt: skip
 

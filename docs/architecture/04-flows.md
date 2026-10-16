@@ -174,6 +174,9 @@ Failure paths:
 | A state a restore would refuse (integer over 2**64, too deep, a bfloat16 tensor) | `CheckpointError` naming the cause, nothing written | n/a | `checkpoint_save_failed` (ERROR) |
 | Nothing is known to have existed and no valid checkpoint anywhere | `restore()` returns `None` (a fresh start) | n/a | `checkpoint_restore_empty` |
 | A floor is known and no valid checkpoint reaches it (deleted, emptied, corrupted, rolled back) | `CheckpointUntrustedError` `rolled_back` or `checkpoint_missing`, the step in the message; under `any`, `None` plus the event | n/a (library) | `checkpoint_untrusted` (ERROR); `checkpoint_progress_lost` (WARN) under `any` |
+| The newest checkpoint is damaged and a floor is known (strict policy) | fails closed naming the damaged step; an older one needs `accept_rollback_to` (logged) | n/a (library) | `checkpoint_untrusted` (reason `rolled_back`) |
+| The remote lists checkpoints and none passes the gate | `CheckpointUntrustedError`, not a fresh start | n/a (library) | `checkpoint_untrusted` (reason `remote_untrusted`) |
+| A save is rejected (forged or unproven manifest above the trusted ones) | the step goes on the quarantine list, no file moves; `ckpt trash --yes` removes the debris | n/a (library) | `checkpoint_quarantined` |
 | Candidates exist but none reaches `CVPILOT_CKPT_REQUIRE_TRUST` | nothing is loaded; `CheckpointUntrustedError` | n/a (library) | `checkpoint_untrusted` (ERROR) |
 | A call asks for a weaker policy or a lower floor than the configuration | ignored; the stricter setting applies | n/a | `checkpoint_trust_downgrade_ignored` (WARN) |
 | The run store cannot answer under `anchored` or `authenticated` | fails closed | n/a (library) | `checkpoint_untrusted` (reason `anchor_error`) |

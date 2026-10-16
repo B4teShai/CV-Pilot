@@ -17,7 +17,7 @@ from ckpt_support import run_meta
 from cvpilot import runs
 from cvpilot.ckpt import remote as remote_mod
 from cvpilot.ckpt.manager import CheckpointManager
-from cvpilot.core.errors import CheckpointError, CheckpointPathError
+from cvpilot.core.errors import CheckpointError, CheckpointPathError, CheckpointUntrustedError
 
 Events = Callable[[], list[dict[str, Any]]]
 URI = "s3://bucket-name/runs/exp"
@@ -238,7 +238,8 @@ def test_a_forged_remote_manifest_is_never_installed(tmp_path: Path) -> None:
     fields["size_bytes"] += 1  # the chain value no longer matches
     fake.objects[name] = json.dumps(fields).encode()
     run2, reader = build(tmp_path, fake, sub="b")
-    assert reader.restore(run_ids=[old_id]) is None
+    with pytest.raises(CheckpointUntrustedError, match="none of them passes"):
+        reader.restore(run_ids=[old_id])  # listed but refused: never a fresh start
     run2.finish()
 
 
@@ -251,7 +252,8 @@ def test_a_remote_manifest_of_another_run_is_refused(tmp_path: Path) -> None:
         fake.objects[key.replace(run.run_id, victim)] = fake.objects[key]
     run.finish("preempted")
     run2, reader = build(tmp_path, fake, sub="b")
-    assert reader.restore(run_ids=[victim]) is None
+    with pytest.raises(CheckpointUntrustedError, match="none of them passes"):
+        reader.restore(run_ids=[victim])  # listed but refused: never a fresh start
     run2.finish()
 
 

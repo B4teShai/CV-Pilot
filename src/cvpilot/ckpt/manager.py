@@ -638,7 +638,7 @@ class CheckpointManager:
                             "authenticated",
                         )
                     ):
-                        self._emit("info", "remote_floor_ignored", kind=kind, step=step)
+                        self._emit("info", "checkpoint_remote_floor_ignored", kind=kind, step=step)
                         step = None
                     if step is not None:
                         self._remote_max[kind] = step

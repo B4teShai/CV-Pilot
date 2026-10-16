@@ -18,6 +18,32 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   rollback and deletion (needs a floor from the run store, versioned storage or a step you
   supply) and says what a fresh machine with only a key cannot detect.
 
+### Security
+
+- A rejected checkpoint is never moved or deleted: the quarantine is a list in the run directory
+  that counts toward the save floor, `ckpt quarantine --clear` only releases entries, and the new
+  `ckpt trash --run ID --yes` is the only command that moves rejected files. Key and evidence
+  checks now run before anything is recorded, so a wrong key cannot fill the list.
+- A damaged newest checkpoint no longer lets an older one be served below a known floor under
+  `anchored` and `authenticated`: the restore fails naming the damaged step, and going back needs
+  `accept_rollback_to`. `min_step` is unconditional. A remote only counts when its data object is
+  present at the recorded size.
+- The `pt` archive scan treated memoised names as unknown values; a global built from a memo fetch
+  is now refused.
+- Remote listings: canonical names only, de-duplicated, probed newest-first until enough steps are
+  admitted (at most 64 probes); entries that exist but none passes raise `remote_untrusted`. Under
+  `any`, a remote manifest that is neither anchored nor authenticated no longer raises the floor,
+  and failed lookups are not cached. Retention checks the remote before it trusts an upload marker.
+- Authentication evidence comes from tag-verified manifests only. Strict policies require a
+  complete anchor, and a save whose record cannot be anchored holds the pointer and fails.
+- `find_resume_point` passes the lineage and refuses when a newer member's candidates were
+  rejected as untrusted. `CheckpointManager.list`, `verify`, the mirror and lineage use the same
+  gate context as restore; `RunCheckpoints.existing` judges; `min_step`, `accept_rollback_to` and
+  the byte cap share one validator; `CVPILOT_CKPT_MIN_STEP` has an upper bound.
+- Verified-file paths remember inode, size and SHA-256 and are rechecked before use;
+  `recover_run` refuses a run whose lease is held; `$intdict` keys are strict and unique.
+- A key alone gives no freshness; the guide, README and ADR-0006 say so.
+
 ### Fixed
 
 - The README is the package index page, so it no longer carries a frozen "release candidate,

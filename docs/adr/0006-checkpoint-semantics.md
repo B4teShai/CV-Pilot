@@ -113,8 +113,9 @@ Option C, implemented by `ckpt/` with the following rules.
 
 A save must exceed a floor made of every self-consistent manifest (trusted or not, quarantined
 included), the run store's highest step, a tag-valid pointer, `min_step` and the remote's newest
-step; untrusted manifests above every trusted one are quarantined (never silently ignored) until an
-operator clears them. A new manifest chains only to the newest trusted checkpoint; with none and a
+admitted step; untrusted manifests above every trusted one are recorded on a quarantine list
+(never silently ignored, never moved) until an operator releases them, and deleting the files is a
+separate confirmed command. A new manifest chains only to the newest trusted checkpoint; with none and a
 floor known it fails closed (`chain_unavailable`) unless the manager was built with
 `restart_chain=True`, which is recorded as `chain_reset` inside the tagged manifest. Files are
 created exclusively and linked into place without replacing; the pointer only moves forward; the
@@ -190,3 +191,20 @@ pointer's target is never pruned. See the checkpoint guide.
 - [../architecture/04-flows.md](../architecture/04-flows.md) (flow B)
 - [../architecture/03-data-model.md](../architecture/03-data-model.md) (`CheckpointManifest`)
 - [0005-run-store.md](0005-run-store.md)
+
+## Amendment (2026-10-16): failure is not permission, and a key is not freshness
+
+* A rejection never moves or deletes a file; the quarantine is a list that counts toward the floor,
+  and `ckpt trash --yes` is the only command that moves rejected files.
+* The rule "a newer checkpoint that is merely damaged lets an older one be served" is removed.
+  Under `anchored` and `authenticated`, an older step below a known floor needs a good checkpoint
+  at or above the floor in the same inspection, or an explicit, logged `accept_rollback_to`;
+  `min_step` is unconditional.
+* Remote listings are canonical, de-duplicated and probed until enough steps are admitted; entries
+  that exist but none passes are an error (`remote_untrusted`). Under `any`, a remote manifest that
+  is neither anchored nor authenticated never raises the floor.
+* Authentication evidence comes from tag-verified manifests only; strict policies require a
+  complete anchor and a failed anchor write holds the pointer.
+* A key proves authorship, not recency. Freshness needs the run store, versioned storage or a step
+  the operator supplies.
+* One validated `AdmitContext` is used by restore, list, verify, the mirror and lineage.

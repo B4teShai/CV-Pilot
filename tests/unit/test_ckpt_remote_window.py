@@ -125,7 +125,7 @@ def test_a_bucket_writer_cannot_raise_the_save_floor_under_any(
     forged_remote_manifest(fake, run, 10**12)
     mgr._remote_max.clear()
     assert mgr.save_now(4, model=weights(4.0)).step == 4  # was CheckpointStepError
-    assert [e for e in events() if e["message"] == "remote_floor_ignored"]
+    assert [e for e in events() if e["message"] == "checkpoint_remote_floor_ignored"]
     run.finish()
 
 

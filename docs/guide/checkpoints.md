@@ -68,16 +68,20 @@ untouched.
 ## What a save refuses
 
 A save only ever adds. Its step must exceed the **floor**: the highest step of any self-consistent
-manifest in the directory (trusted or not, and those already quarantined), the run store's highest
+manifest in the directory (trusted or not, and every step on the quarantine list), the run store's highest
 step for the run and kind, a tag-valid pointer, `min_step` and the newest step the remote lists. A
 rejected or forged entry therefore still counts, so deleting the newest checkpoint or planting a
 lower-step forgery cannot make the next save look like a healthy continuation.
 
-* **Quarantine.** A manifest the policy does not trust whose step is above every trusted one (a
-  planted `step_999999`) is moved to `<run>/quarantine/<kind>/`, logged as `checkpoint_quarantined`,
-  and the save fails with `CheckpointStepError` saying so: it keeps counting toward the floor until
-  you decide. `cvpilot ckpt quarantine DIR --run ID` lists it, `--clear` discards it
-  (`checkpoint_quarantine_cleared`) and saving resumes.
+* **Quarantine is a list.** A manifest the policy does not trust whose step is above every trusted
+  one (a planted `step_999999`) is recorded in the run's `QUARANTINE` list and logged as
+  `checkpoint_quarantined`; no file is moved or deleted, and the save fails with
+  `CheckpointStepError` saying so. The step keeps counting toward the floor until you decide.
+  `cvpilot ckpt quarantine DIR --run ID` lists the entries and `--clear` only releases them
+  (`checkpoint_quarantine_cleared`); saving resumes. Removing the files is a separate, confirmed
+  command: `cvpilot ckpt trash DIR --run ID --yes` moves the listed files to a trash directory and
+  refuses without `--yes`. Key and evidence checks run before anything is recorded, so a wrong or
+  missing key never writes to the list.
 * **Chain.** A new manifest chains to the newest *trusted* checkpoint. With none, but a floor above
   zero (or a rejected higher entry), the save fails closed with `CheckpointChainError`
   (`chain_unavailable`). `CheckpointManager(restart_chain=True)` (never an environment setting)

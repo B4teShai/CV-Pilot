@@ -46,6 +46,27 @@ floor. `find_resume_point` and `resume_path` behave the same. Starting over is a
 `accept_rollback_to=0` (logged); after it only verified saves move the floor forward, and
 re-saving an old step number is refused by the run store.
 
+**Damage is not a licence to fall back.** Under `anchored` and `authenticated`, when something is
+known to have existed at or above a step (the run store, a tag-checked pointer, `min_step`), an
+older checkpoint is served only if a good checkpoint at or above that step was seen. If the newest
+one is truncated, deleted or unverifiable, the restore fails and names the damaged step; going back
+to an older one is `accept_rollback_to=N` (logged as `checkpoint_rollback_accepted`). `min_step` is
+applied unconditionally. Under `any` nothing is enforced and the walk back to the newest valid one
+is the documented behaviour.
+
+**A key alone gives no freshness.** A key proves who wrote a checkpoint, not when. With only the
+key, an attacker who can write the directory can put back an older, genuine, tagged checkpoint and
+it verifies. Freshness comes from something the attacker cannot rewrite: the run store (an anchor),
+versioned or write-once bucket storage, or a step you supply (`min_step`, `--expect-min-step`).
+A key shorter than 128 bits of entropy is accepted with a warning (`checkpoint_key_weak`), not
+refused; use 32 random bytes.
+
+**Evidence comes from tag-verified manifests only.** When a key exists, a manifest whose tag does
+not verify never counts as proof that the run was authenticated or as a floor
+(`checkpoint_unverified_tags_ignored`), so planting tagged-looking files cannot move either.
+Strict policies require a complete anchor (`max_step` and `auth_evidence`); a save whose record
+cannot be written to the run store fails (`checkpoint_unanchored`) and the pointer is not moved.
+
 **Recommendation.** Keep the default `any` only for a directory that nobody else can write (a
 laptop, a private node). For a directory that is shared, restored from a bucket or writable by
 others, set both:
@@ -95,8 +116,25 @@ the record. The only way through is the explicit constructor argument `allow_wea
   step) is served at `local_chain_only` although the run reached `anchored`: that is logged as
   `trust_regressed`.
 * **The remote only adds evidence.** A name in a bucket listing is not evidence that a checkpoint
-  exists: only remote manifests that pass the gate count as present or as a floor
-  (`Mirror.probe`), so a bucket cannot loosen the rollback check or replace stricter local evidence.
+  exists. Only canonical, de-duplicated names are considered, and `Mirror.admitted` probes
+  newest-first (at most 64) until enough steps pass the gate with their data object at the recorded
+  size. Junk names above the real ones are passed over; entries that exist but none passes raise
+  `CheckpointUntrustedError` (`remote_untrusted`), never a fresh start. Under `any` a remote
+  manifest that is neither anchored nor authenticated does not raise the floor (a bucket writer
+  could otherwise plant a huge step and stop every save: `checkpoint_remote_floor_ignored`). A failed lookup
+  is not cached. Retention deletes a local copy on an upload marker only after the remote is read
+  back and holds the same manifest bytes and a data object of the recorded size.
+* **Quarantine is a list, not a move.** A rejected checkpoint is never moved or deleted because of
+  the rejection. The step is recorded in a `QUARANTINE` list that counts toward the save floor;
+  `cvpilot ckpt quarantine --clear` only releases list entries. Deleting the debris is a separate
+  command, `cvpilot ckpt trash --run ID --yes`, which moves the listed files into a trash
+  directory.
+* **A pickle scan is defence in depth.** The `pt` scan refuses unknown globals including those
+  built with memoised names; it narrows what a hostile file can do and does not make loading a
+  `pt` file safe. Prefer safetensors.
+* **Liveness.** A run holds a lease on its checkpoint directory; `recover_run` refuses a run whose
+  lease is held. The lease is an advisory file lock: it is not reliable on NFS or FUSE mounts, and
+  a run that cannot take one logs `checkpoint_lease_unavailable`.
 
 ## Verified, then opened: the gap
 
@@ -106,7 +144,10 @@ time-of-check-to-time-of-use race that no check inside this library can close, b
 happens in the framework). Restrict write access to the directory, which the first section already
 asks for, or close the gap yourself: `cvpilot.ckpt.private_copy(point)` copies the verified bytes
 into a new directory only you can use (mode 0700, the file 0600), checking the SHA-256 and size
-while it copies, and returns that path for `resume_arguments`; the restore path of
+while it copies, and returns that path for `resume_arguments`; the hooks' `resume_arguments` take the verified path as it is and recheck the file's identity
+(inode, size, modification time) and SHA-256 immediately before returning it, which narrows the gap
+to the time between that recheck and your framework's open; they do not copy. Call `private_copy`
+first to remove it. The restore path of
 `CheckpointManager.restore` does not have the gap at all, because the bytes that were hashed are the
 bytes that are parsed. A `pt` file is read once on the way to a resume point: the archive scan runs
 over the bytes whose digest was just checked.

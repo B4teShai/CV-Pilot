@@ -38,8 +38,8 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `checkpoint_saved`, `checkpoint_verified`, `checkpoint_uploaded` | INFO | `run_id`, `step`, `kind`, `size_bytes`, `sha256_prefix`, `is_best`, `remote` (scheme and bucket only, never the path), `duration_ms` | `ckpt/` | built |
 | `checkpoint_restored` | INFO | `run_id` (the owning run; `checkpoint_run_id` when it is an ancestor), `step`, `kind`, `size_bytes`, `sha256_prefix`, `skipped`, `trust_level` (`authenticated`, `anchored` or `local_chain_only`) | `ckpt/` | built |
 | `checkpoint_skipped_corrupt` | WARN | `run_id`, `step`, `kind`, `reason` (`size_mismatch`, `digest_mismatch`, `unloadable`, `not_regular_file`, `data_missing`, `pointer_mismatch`, `link_mismatch`, `unanchored`, `chain_mismatch`, `manifest_invalid`, `manifest_unreadable`, `name_mismatch`, `pt_not_allowed`, `unsafe_loader`, `unsafe_archive`, ...) | `ckpt/` | built |
-| `checkpoint_untrusted` | WARN per checkpoint; ERROR when restore fails closed | `reason` (`auth_invalid`, `auth_missing`, `store_mismatch`, `not_anchored`, `anchor_error`), `step`, `kind`; the ERROR adds `required` and `rejected` | `ckpt/`, `cli/` | built |
-| `checkpoint_upload_failed`, `checkpoint_verify_failed`, `preemption_save_incomplete`, `checkpoint_anchor_failed`, `checkpoint_record_failed`, `checkpoint_prune_failed`, `checkpoint_debris_removed`, `checkpoint_download_failed` | WARN | `step`, `kind`, `reason` or `error_type` (the exception class only), `remote` where relevant | `ckpt/` | built |
+| `checkpoint_untrusted` | WARN per checkpoint; ERROR when restore fails closed | `reason` (`auth_invalid`, `auth_missing`, `store_mismatch`, `not_anchored`, `anchor_error`, `remote_untrusted`), `step`, `kind`; the ERROR adds `required` and `rejected` | `ckpt/`, `cli/` | built |
+| `checkpoint_upload_failed`, `checkpoint_verify_failed`, `preemption_save_incomplete`, `checkpoint_anchor_failed`, `checkpoint_record_failed`, `checkpoint_prune_failed`, `checkpoint_debris_removed`, `checkpoint_download_failed`, `checkpoint_unanchored`, `checkpoint_unverified_tags_ignored`, `checkpoint_remote_floor_ignored`, `checkpoint_step_occupied`, `checkpoint_lease_unavailable` | WARN | `step`, `kind`, `reason` or `error_type` (the exception class only), `remote` where relevant | `ckpt/` | built |
 | `checkpoint_save_failed` | ERROR | `run_id`, `step`, `kind`, `error_type`, `exc_info` | `ckpt/` | built |
 | `checkpoint_restore_empty` | INFO | `dir`, `skipped` | `ckpt/` | built |
 | `preemption_signal_received` | INFO | `signal`, `grace_seconds` | `ckpt/` | built |
@@ -155,7 +155,10 @@ candidates exist but none reaches the required level, restore raises `checkpoint
 and loads nothing; it never falls back to a lower level. A store lookup that fails is reported
 as `anchor_error` and fails closed under `anchored`; it is not treated as "no store". A tag that
 is present but wrong rejects the candidate under every policy. With a key set, a pointer
-without a valid tag is ignored. The default policy is `any`, because a laptop or a private
+without a valid tag is ignored, and only tag-verified manifests count as authentication evidence.
+A key proves authorship, not recency: freshness needs the run store, versioned storage or
+`min_step`. Strict policies need a complete anchor; a record that cannot be anchored holds the
+pointer. The default policy is `any`, because a laptop or a private
 node resuming its own directory has no adversary: for any directory that is shared, restored
 from a bucket or writable by others, set a key and `CVPILOT_CKPT_REQUIRE_TRUST=authenticated`
 (the GitHub Action and the tutorial do). Key rotation: tags made under the old key fail under
