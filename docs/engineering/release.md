@@ -80,7 +80,10 @@ python scripts/verify_wheel.py "$out/cvpilot-$version-py3-none-any.whl" --python
 2. Re-check the names (above) and the pins of the third-party actions in `release.yml` and `ci.yml`
    (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, and for an annotated tag
    `git/tags/<sha>`; `tests/unit/test_release_workflow.py` lists the verified pins).
-3. `tests/release/test_packaging.py` builds both artifacts and checks their contents (license and
+3. `build-system.requires` pins the backend and its dependencies exactly (they equal `uv.lock`;
+   `tests/release/test_build_pins.py` checks that). Pins are not hashes: an isolated build still
+   trusts the index for those exact versions, so the audit and the lock stay the real controls.
+   `tests/release/test_packaging.py` builds both artifacts and checks their contents (license and
    NOTICE present, `py.typed` present, no tests, benchmarks, plans, editor or agent configuration directories, `.env`, caches or
    fixtures, size within budget, only the documented core dependencies), runs `twine check
    --strict`, builds a wheel from the sdist and installs the wheel into clean environments for 3.10

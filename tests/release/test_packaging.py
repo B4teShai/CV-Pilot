@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import email
+import os
+import stat
 import importlib.util
 import re
 import shutil
@@ -39,7 +41,10 @@ HEAVY = (
 WHEEL_BUDGET = 1 * 1024 * 1024
 SDIST_BUDGET = 2 * 1024 * 1024
 SECRET = re.compile(
-    r"AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|xox[abprs]-[A-Za-z0-9-]{10,}|"
+    r"sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|"
+    r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|"
     r"(?i:api[_-]?key|token|password|secret)\s*=\s*['\"][^'\"\s]{6,}['\"]"
 )
 
@@ -256,3 +261,65 @@ def test_the_wheel_installs_in_a_clean_environment_and_runs(
         report.doctor_output == "ok" and report.version_output == f"cvpilot {cvpilot.__version__}"
     )
     assert "site-packages" in report.module_path
+
+
+MANIFEST = Path(__file__).with_name("wheel_manifest.txt")
+SUFFIXES = {".py", ".typed"}
+
+
+def test_the_secret_patterns_catch_what_they_claim_to() -> None:
+    samples = [
+        "AKIA" + "A" * 16,
+        "github_pat_" + "a1" * 15,
+        "ghp_" + "b2" * 20,
+        "xoxb-" + "1234567890-abcdef",
+        "sk-" + "c3" * 15,
+        "AIza" + "d4" * 17 + "e",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijkl",
+        "-----BEGIN RSA PRIVATE KEY-----",
+        'password = "hunter2hunter2"',
+    ]
+    for sample in samples:
+        assert SECRET.search(sample), sample
+    assert not SECRET.search("a perfectly ordinary sentence about tokens and keys")
+
+
+def test_no_archive_member_is_anything_but_a_regular_file_or_directory(
+    wheel: Path, sdist: Path
+) -> None:
+    with zipfile.ZipFile(wheel) as archive:
+        for info in archive.infolist():
+            mode = info.external_attr >> 16
+            assert stat.S_IFMT(mode) in (0, stat.S_IFREG, stat.S_IFDIR), info.filename
+    with tarfile.open(sdist) as archive:
+        for member in archive.getmembers():
+            assert member.isfile() or member.isdir(), f"{member.name}: not a regular file"
+            assert not member.islnk() and not member.issym(), member.name
+            assert not member.name.startswith(("/", "..")) and ".." not in member.name.split("/")
+
+
+def test_the_wheel_is_exactly_the_committed_list_of_files_with_allowed_suffixes(
+    wheel: Path,
+) -> None:
+    files = sorted(
+        n for n in wheel_names(wheel) if n.startswith("cvpilot/") and not n.endswith("/")
+    )
+    for name in files:
+        assert Path(name).suffix in SUFFIXES, f"unexpected file type in the wheel: {name}"
+    if os.environ.get("CVPILOT_UPDATE_WHEEL_MANIFEST") == "1":
+        MANIFEST.write_text("\n".join(files) + "\n")
+    committed = MANIFEST.read_text().split()
+    assert files == committed, (
+        "the wheel differs from tests/release/wheel_manifest.txt: review the change, then "
+        "regenerate with CVPILOT_UPDATE_WHEEL_MANIFEST=1"
+    )
+
+
+def test_the_source_tree_holds_no_symlink_and_no_secret() -> None:
+    for root_dir in ("src", ".github", "docs", "scripts", "tests/release"):
+        for path in (ROOT / root_dir).rglob("*"):
+            assert not path.is_symlink(), f"symlink in the source tree: {path}"
+            if path.is_file() and path.suffix in {".py", ".md", ".yml", ".toml", ".json", ".txt"}:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                if path.name != "test_packaging.py":  # holds the samples that test the patterns
+                    assert not SECRET.search(text), str(path)

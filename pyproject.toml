@@ -1,5 +1,13 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+# exact pins, not hashes: pip builds in isolation without hash checking; the pins stop a newer
+# backend (or one of its dependencies) from changing what a build produces. Keep them equal to uv.lock.
+requires = [
+  "hatchling==1.32.4",
+  "packaging==26.3",
+  "pathspec==1.1.1",
+  "pluggy==1.6.0",
+  "trove-classifiers==2026.9.21.13",
+]
 build-backend = "hatchling.build"
 
 [project]

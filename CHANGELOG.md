@@ -79,6 +79,12 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Security
 
+- The build backend and its dependencies are pinned exactly in `build-system.requires` (equal to the
+  lock; pins, not hashes), so a newer backend cannot change what a build produces. The packaging
+  tests also walk every archive member (only regular files and directories), compare the wheel with
+  a committed file list and a suffix allow-list, run broader secret patterns (GitHub, Slack, API
+  keys, JWTs, private keys) over artifacts and the source tree, and refuse symlinks in the source.
+
 - Authentication, format and trust only ratchet up. Once a run held a tagged checkpoint (directory,
   run store or the tag-covered pointer's `auth_since`), an untagged newer manifest is refused as
   `auth_downgrade` under every policy; restoring or saving without the key fails closed
