@@ -309,3 +309,30 @@ def test_verify_names_a_rotated_key_and_judges_each_file_only_with_the_acknowled
     assert accepted.code == 1  # the old tags still do not verify under the new key
     assert {r["reason"] for r in json.loads(accepted.out)} == {"key_changed"}
     assert run_id
+
+
+def _wipe(tmp_path: Path, run_id: str, *steps: int) -> None:
+    for step in steps:
+        for suffix in (".manifest.json", ".safetensors"):
+            (tmp_path / "ckpt" / run_id / "last" / f"step_{step:09d}{suffix}").unlink()
+
+
+def test_plain_verify_says_when_the_store_knows_a_newer_step_but_keeps_its_exit_code(
+    invoke: Invoke, seeded: str, tmp_path: Path
+) -> None:
+    _wipe(tmp_path, seeded, 3, 2)
+    res = invoke("ckpt", "verify", str(tmp_path / "ckpt"), "--project", "proj", "--json")
+    assert res.code == 0, res.err  # unchanged: under the default policy this is not an error
+    assert [(step, st) for step, st, _ in _ids(res)] == [(1, "valid")]
+    assert "step 3" in res.human and "step 1" in res.human and "anchored" in res.human
+    strict = invoke(
+        "ckpt", "verify", str(tmp_path / "ckpt"), "--project", "proj", "--require-trust", "anchored"
+    )
+    assert strict.code == 1 and "note:" not in strict.human  # the policy reports it itself
+
+
+def test_plain_verify_prints_no_note_when_nothing_is_missing(
+    invoke: Invoke, seeded: str, tmp_path: Path
+) -> None:
+    res = invoke("ckpt", "verify", str(tmp_path / "ckpt"), "--project", "proj")
+    assert res.code == 0 and res.human == ""

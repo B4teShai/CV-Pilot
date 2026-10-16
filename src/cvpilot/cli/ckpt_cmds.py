@@ -242,6 +242,46 @@ def ckpt_list(
         typer.echo(_line(row))
 
 
+def _floor_notes(
+    ctx: typer.Context,
+    directory: Path,
+    run: str | None,
+    kind: KindOption,
+    project: str | None,
+    rows: list[dict[str, Any]],
+) -> list[str]:
+    """Human lines for runs whose recorded progress is above their newest valid checkpoint.
+
+    Under the default policy ``any`` that is not an error (the exit code stays as it was); the
+    note says what ``--require-trust anchored`` would report. Nothing is printed under the
+    stricter policies, which report ``rolled_back`` themselves."""
+    if not rows or any(r.get("policy") != "any" for r in rows):
+        return []
+    session = _Session(ctx, _root(directory), project, TrustOption.anchored)
+    notes: list[str] = []
+    try:
+        for run_id in sorted({r["run_id"] for r in rows}):
+            for one in _kinds(kind):
+                valid = [
+                    r["step"]
+                    for r in rows
+                    if r["run_id"] == run_id and r["kind"] == one and r["status"] == "valid"
+                ]
+                try:
+                    floor = session.open(run_id).freshness_floor(one)
+                except CheckpointError:
+                    continue  # the store could not answer: say nothing rather than guess
+                if valid and floor > max(valid):
+                    notes.append(
+                        f"note: run {run_id} ({one}): step {floor} was recorded but the newest "
+                        f"valid checkpoint is step {max(valid)}; the default policy does not "
+                        "treat that as an error, --require-trust anchored does"
+                    )
+    finally:
+        session.close()
+    return notes
+
+
 @ckpt_app.command("verify")
 def ckpt_verify(
     ctx: typer.Context,
@@ -255,7 +295,8 @@ def ckpt_verify(
         typer.Option(
             "--expect-min-step",
             min=0,
-            help="A floor you know from elsewhere: older checkpoints fail (rolled_back).",
+            help="A floor you know from elsewhere: older checkpoints fail (rolled_back) "
+            "under every policy.",
         ),
     ] = None,
     accept_rollback_to: Annotated[
@@ -279,9 +320,13 @@ def ckpt_verify(
 ) -> None:
     """Verify every checkpoint: size, structure, SHA-256, chain and the trust policy.
 
-    The newest step known to have existed (run store, a tag-checked pointer,
-    ``CVPILOT_CKPT_MIN_STEP``, ``--expect-min-step``) is a floor: a checkpoint older than it
-    is reported as ``rolled_back`` unless you accept that with ``--accept-rollback-to``.
+    What a missing newest checkpoint looks like depends on the policy. Under ``any`` (the
+    default) only the files are judged: an older checkpoint that is intact is ``valid`` and the
+    exit code is 0, with a ``note:`` line on stderr when the run store or a pointer records a
+    newer step. Under ``anchored`` or ``authenticated`` the newest step known to have existed
+    (run store, a tag-checked pointer, ``CVPILOT_CKPT_MIN_STEP``) is a floor: older checkpoints
+    are ``rolled_back`` (exit 1) unless you accept that with ``--accept-rollback-to``.
+    ``--expect-min-step`` and ``CVPILOT_CKPT_MIN_STEP`` apply under every policy.
 
     Prints one line per checkpoint on stdout. Exit 0 when everything verifies; exit 1 when a
     checkpoint is corrupt, truncated, forged or untrusted, or when nothing verifies at all;
@@ -313,6 +358,8 @@ def ckpt_verify(
     else:
         for row in rows:
             typer.echo(_line(row))
+    for note in _floor_notes(ctx, directory, run, kind, project, rows):
+        typer.echo(note, err=True)
     if not rows:
         typer.echo("error: no checkpoints found", err=True)
         raise typer.Exit(1)

@@ -258,9 +258,13 @@ cvpilot ckpt verify [OPTIONS] {directory}
 
 Verify every checkpoint: size, structure, SHA-256, chain and the trust policy.
 
-The newest step known to have existed (run store, a tag-checked pointer,
-``CVPILOT_CKPT_MIN_STEP``, ``--expect-min-step``) is a floor: a checkpoint older than it
-is reported as ``rolled_back`` unless you accept that with ``--accept-rollback-to``.
+What a missing newest checkpoint looks like depends on the policy. Under ``any`` (the
+default) only the files are judged: an older checkpoint that is intact is ``valid`` and the
+exit code is 0, with a ``note:`` line on stderr when the run store or a pointer records a
+newer step. Under ``anchored`` or ``authenticated`` the newest step known to have existed
+(run store, a tag-checked pointer, ``CVPILOT_CKPT_MIN_STEP``) is a floor: older checkpoints
+are ``rolled_back`` (exit 1) unless you accept that with ``--accept-rollback-to``.
+``--expect-min-step`` and ``CVPILOT_CKPT_MIN_STEP`` apply under every policy.
 
 Prints one line per checkpoint on stdout. Exit 0 when everything verifies; exit 1 when a
 checkpoint is corrupt, truncated, forged or untrusted, or when nothing verifies at all;
@@ -276,7 +280,7 @@ exit 2 when the path is not a directory or the options are invalid.
 | `--kind` | one of `last`, `best`, `all` | `all` | Which checkpoints. |
 | `--project` | str |  | Project whose run store anchors the digests. |
 | `--require-trust` | one of `any`, `anchored`, `authenticated` |  | any, anchored or authenticated (see the help above). |
-| `--expect-min-step` | int range |  | A floor you know from elsewhere: older checkpoints fail (rolled_back). |
+| `--expect-min-step` | int range |  | A floor you know from elsewhere: older checkpoints fail (rolled_back) under every policy. |
 | `--accept-rollback-to` | int range |  | Accept a rollback from the run store or pointer down to this step, on purpose (logged); it never lowers --expect-min-step or CVPILOT_CKPT_MIN_STEP. |
 | `--accept-key-change` | flag |  | Judge each checkpoint on its own although the key differs from the one the run was saved with (a rotation, logged); without it the whole run is refused. |
 | `--json` | flag |  | Print JSON instead of text. |
