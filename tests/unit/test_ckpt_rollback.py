@@ -103,16 +103,18 @@ def test_a_fresh_machine_with_only_the_key_cannot_see_pure_deletion(
     fresh.finish()
 
 
-def test_a_damaged_newest_checkpoint_is_corruption_not_rollback(
+def test_a_damaged_newest_checkpoint_needs_an_explicit_acceptance_to_fall_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run, mgr = saved(tmp_path, monkeypatch)
     newest = tmp_path / "ckpt" / run.run_id / "last" / "step_000000003.safetensors"
     newest.chmod(0o644)
     newest.write_bytes(newest.read_bytes()[:30])
-    restored = mgr.restore()
+    with pytest.raises(CheckpointUntrustedError, match="step 3 is damaged"):
+        mgr.restore()
+    restored = mgr.restore(accept_rollback_to=2)
     assert restored is not None and restored.manifest.step == 2
-    assert [s.reason for s in restored.skipped] == ["size_mismatch"]
+    assert [s.reason for s in restored.skipped][:1] == ["size_mismatch"]
     run.finish()
 
 

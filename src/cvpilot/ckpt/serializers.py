@@ -354,7 +354,9 @@ def _scan_pickle(data: bytes) -> None:
                     raise _unsafe(
                         f"the pickle refers to {str(recent[-2])[:40]}.{str(recent[-1])[:40]}"
                     )
-            if name != "MEMOIZE" and not name.endswith(("PUT", "GET")):
+            if name != "MEMOIZE" and not name.endswith("PUT"):
+                # a memo fetch (GET, BINGET) pushes something the scan cannot name: it counts as
+                # a non-string, so a STACK_GLOBAL fed by one is refused
                 recent.append(str(arg) if name in _STRING_OPS else None)
                 del recent[:-2]
     except CheckpointCorruptError:

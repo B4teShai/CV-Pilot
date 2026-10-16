@@ -250,13 +250,15 @@ def test_the_floor_moves_forward_only_with_verified_saves_after_an_acceptance(
     run.finish()
 
 
-def test_a_pointer_whose_newest_data_is_gone_walks_back_to_the_older_valid_one(
+def test_a_pointer_whose_newest_data_is_gone_falls_back_only_when_accepted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, events: Events
 ) -> None:
     world = World(tmp_path, monkeypatch, keyed=True, policy="authenticated")
     os.unlink(world.folder / "step_000000003.safetensors")
-    restored = world.reader.restore()
-    assert restored is not None and restored.manifest.step == 2  # damage, not rollback
+    with pytest.raises(CheckpointUntrustedError, match="step 3 is damaged"):
+        world.reader.restore()
+    restored = world.reader.restore(accept_rollback_to=2)
+    assert restored is not None and restored.manifest.step == 2
     assert any(e["message"] == "checkpoint_skipped_corrupt" for e in events())
     world.child.finish()
 

@@ -291,7 +291,15 @@ class Mirror:
         cand = rc._cand_from_bytes(raw, kind, manifest_name(step), step)
         if cand.manifest is None:
             return False
-        return rc.admission(kind, ctx).decide(rc.judge_single(cand, kind)) is None
+        if rc.admission(kind, ctx).decide(rc.judge_single(cand, kind)) is not None:
+            return False
+        # a manifest alone is not a checkpoint: the data object must be there, at its size
+        try:
+            data_name = cand.manifest.path.split("/", 1)[1]
+            size = self._call(lambda: self._store.size(f"{rc.run_id}/{kind}/{data_name}"), started)
+        except OSError:
+            return False
+        return size == cand.manifest.size_bytes
 
     def fetch(
         self,

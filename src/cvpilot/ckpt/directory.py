@@ -238,6 +238,9 @@ class Admission:
         marks = [m for m in (known, self._ctx.min_step) if m is not None]
         self.floor: int | None = max(marks) if marks else None
         self._accepted_logged = False
+        self.floor_met = False
+        """Set by a verdict (``inspect``) once a checkpoint at or above the floor is known good:
+        older ones are then listed as what they are, not as a fall-back. A restore never sets it."""
 
     @staticmethod
     def _key_error(rc: RunCheckpoints, kind: CheckpointKind) -> str | None:
@@ -316,9 +319,9 @@ class Admission:
             limit is not None and manifest.size_bytes > limit
         ):
             return "too_large"
-        if self.floor is not None and cand.step < self.floor:
-            if any(t >= self.floor for t in self._trusted):
-                return None  # the newer one is still here (damaged): corruption, not rollback
+        if self.floor is not None and cand.step < self.floor and not self.floor_met:
+            # Falling back below a known floor needs an explicit acceptance, also when the newest
+            # checkpoint is merely damaged: a writer can damage data as easily as delete it.
             return self._rolled_back(cand.step)
         return None
 
@@ -332,10 +335,21 @@ def gate_failure(skipped: Iterable[Skipped], policy: str) -> tuple[str, str] | N
     reasons = [s.reason for s in items]
     floors = [s.floor for s in items if s.floor is not None]
     known = f"step {max(floors)}" if floors else "an earlier step"
+    damaged = sorted(
+        (s for s in items if s.step is not None and s.reason not in TRUST_REASONS and floors),
+        key=lambda s: -(s.step or 0),
+    )
+    damaged = [s for s in damaged if s.step is not None and s.step >= min(floors)]
+    note = (
+        f"; step {damaged[0].step} is damaged or unverifiable ({damaged[0].reason})"
+        if damaged
+        else ""
+    )
     if "rolled_back" in reasons:
         return "rolled_back", (
             f"checkpoints were rolled back: {known} is known to have existed and nothing at or "
-            "above it is left (restore it, or accept the rollback on purpose)"
+            f"above it verifies{note} (restore it, or accept falling back on purpose with "
+            "accept_rollback_to)"
         )
     for special, message in (
         (
@@ -1318,6 +1332,11 @@ class RunCheckpoints:
                     ctx,
                     trusted={c.step for c in judged if c.reason is None and c.step is not None},
                 )
+                if gate.floor is not None and not check_data:  # manifests only: no data to doubt
+                    gate.floor_met = any(
+                        c.reason is None and c.step is not None and c.step >= gate.floor
+                        for c in judged
+                    )
                 for cand in judged:
                     manifest = cand.manifest
                     reason = gate.decide(cand)
@@ -1326,6 +1345,13 @@ class RunCheckpoints:
                             self._check_data(kind_fd, manifest, load=False)
                         except CheckpointCorruptError as exc:
                             reason = exc.reason
+                    if (
+                        reason is None
+                        and gate.floor is not None
+                        and cand.step is not None
+                        and cand.step >= gate.floor
+                    ):
+                        gate.floor_met = True  # a good checkpoint at the floor: older are history
                     entries.append(
                         Entry(
                             cand.name,
