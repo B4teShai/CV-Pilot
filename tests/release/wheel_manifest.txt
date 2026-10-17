@@ -1,4 +1,7 @@
 cvpilot/__init__.py
+cvpilot/alerts/__init__.py
+cvpilot/alerts/config.py
+cvpilot/alerts/engine.py
 cvpilot/api.py
 cvpilot/capture/__init__.py
 cvpilot/capture/env.py
@@ -64,6 +67,12 @@ cvpilot/hooks/_sink.py
 cvpilot/hooks/lightning.py
 cvpilot/hooks/ultralytics.py
 cvpilot/logging.py
+cvpilot/notify/__init__.py
+cvpilot/notify/_channel.py
+cvpilot/notify/_http.py
+cvpilot/notify/slack.py
+cvpilot/notify/telegram.py
+cvpilot/notify/webhook.py
 cvpilot/py.typed
 cvpilot/registry.py
 cvpilot/remote/__init__.py

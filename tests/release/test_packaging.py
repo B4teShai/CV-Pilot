@@ -212,6 +212,7 @@ def test_the_console_script_is_declared(wheel: Path) -> None:
         "cvpilot.stores",
         "cvpilot.hooks",
         "cvpilot.forwarders",
+        "cvpilot.channels",
         "cvpilot.remotes",
         "cvpilot.spot_notices",
     ):

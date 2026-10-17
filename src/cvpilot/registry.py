@@ -15,6 +15,7 @@ from typing import Any, Generic, TypeVar
 
 from cvpilot.core.errors import CvpilotError, MissingExtraError
 from cvpilot.core.schema import (
+    ChannelFactory,
     ForwarderFactory,
     HookFactory,
     RemoteFactory,
@@ -97,6 +98,7 @@ capturers: Registry[Capturer] = Registry("cvpilot.capturers")
 tables: Registry[TableIOFactory] = Registry("cvpilot.tables")
 forwarders: Registry[ForwarderFactory] = Registry("cvpilot.forwarders")
 hooks: Registry[HookFactory] = Registry("cvpilot.hooks")
+channels: Registry[ChannelFactory] = Registry("cvpilot.channels")
 
 spot_notices: Registry[Callable[..., Any]] = Registry("cvpilot.spot_notices")
 remotes: Registry[RemoteFactory] = Registry("cvpilot.remotes")

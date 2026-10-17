@@ -78,6 +78,11 @@ mlflow = "cvpilot.forward.mlflow:MlflowForwarder"
 wandb = "cvpilot.forward.wandb:WandbForwarder"
 trackio = "cvpilot.forward.trackio:TrackioForwarder"
 
+[project.entry-points."cvpilot.channels"]
+webhook = "cvpilot.notify.webhook:WebhookChannel"
+slack = "cvpilot.notify.slack:SlackChannel"
+telegram = "cvpilot.notify.telegram:TelegramChannel"
+
 [project.entry-points."cvpilot.remotes"]
 s3 = "cvpilot.remote.fsspec_store:open_remote"
 gs = "cvpilot.remote.fsspec_store:open_remote"

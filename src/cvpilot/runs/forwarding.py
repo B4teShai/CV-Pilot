@@ -21,6 +21,11 @@ Guarantees (each has a test in ``tests/unit/test_forward_fanout.py``):
 The time an adapter spends inside a tracker SDK is bounded by the SDK's own timeouts; this module
 bounds what the *training* thread waits (nothing, except ``close`` at ``finish`` for at most
 ``CLOSE_TIMEOUT_S``).
+
+The same machinery delivers alerts to channels (ADR-0009): ``Delivery`` names the adapter method,
+the log events and the unit that differ (``NOTIFY``: ``send``, ``alert_delivery_failed``, alerts),
+and ``notify_fanout`` applies smaller bounds suited to a handful of messages. Nothing else is
+duplicated.
 """
 
 from __future__ import annotations
@@ -37,11 +42,15 @@ from functools import partial
 from typing import Any
 
 from cvpilot.core.errors import CvpilotError
-from cvpilot.core.schema import Forwarder, ForwarderFactory, MetricPoint, Repro, RunMeta, RunStatus
+from cvpilot.core.schema import Channel, Forwarder, Repro, RunMeta, RunStatus
 from cvpilot.logging import get_logger
-from cvpilot.registry import Registry, check_requires
+from cvpilot.registry import Registry, channels, check_requires
 from cvpilot.registry import forwarders as default_registry
 
+NOTIFY_QUEUE = 16
+"""Alerts queued per channel (an alert is a batch of one); a full queue drops, counted."""
+NOTIFY_CALL_TIMEOUT_S = 20.0
+"""A channel call running longer than this (two attempts of 5 s each fit) marks it stalled."""
 QUEUE_BATCHES = 256
 """Batches queued per forwarder; a batch holds at most ``FLUSH_POINTS`` (10 000) points."""
 MAX_QUEUED_POINTS = 200_000
@@ -52,6 +61,32 @@ CALL_TIMEOUT_S = 30.0
 CLOSE_TIMEOUT_S = 5.0
 """Longest ``Fanout.close`` waits for all workers together."""
 _POLL_S = 0.05
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """What differs between delivering metric points and delivering alerts."""
+
+    method: str
+    """The adapter method that receives a batch."""
+    failed_event: str
+    summary_event: str
+    logger: str
+    label: str
+    """The log field naming the adapter (``forwarder`` or ``channel``)."""
+    unit: str
+    """What a batch holds, in the log field names (``points`` or ``alerts``)."""
+
+
+FORWARD = Delivery(
+    "log_points", "forward_failed", "forward_summary", "cvpilot.forward", "forwarder", "points"
+)
+NOTIFY = Delivery(
+    "send", "alert_delivery_failed", "alert_delivery_summary", "cvpilot.notify", "channel", "alerts"
+)
+
+Batch = tuple[Any, ...]
+"""Metric points for a forwarder, alerts for a channel."""
 
 
 @dataclass
@@ -83,8 +118,9 @@ def resolve_forwarders(
     *,
     allow_insecure: bool = False,
     allowed_hosts: Sequence[str] = (),
-    registry: Registry[ForwarderFactory] | None = None,
-) -> list[Forwarder]:
+    registry: Registry[Any] | None = None,
+    delivery: Delivery = FORWARD,
+) -> list[Any]:
     """Instantiate the forwarders ``names`` through the registry (duplicates are ignored).
 
     Raises:
@@ -95,7 +131,7 @@ def resolve_forwarders(
     and training starts without it.
     """
     reg = registry if registry is not None else default_registry
-    found: list[Forwarder] = []
+    found: list[Any] = []
     for name in dict.fromkeys(names):
         factory = reg.get(name)
         check_requires(name, factory)
@@ -104,21 +140,36 @@ def resolve_forwarders(
         except CvpilotError:
             raise
         except Exception as exc:  # noqa: BLE001  # plugin boundary: isolate, count, log once
-            get_logger("cvpilot.forward").warning(
-                "forward_failed",
-                forwarder=name,
+            get_logger(delivery.logger).warning(
+                delivery.failed_event,
+                **{delivery.label: name},
                 reason="construct_failed",
                 error_type=type(exc).__name__,
             )
     return found
 
 
+def resolve_channels(
+    names: Sequence[str], *, allow_insecure: bool = False, allowed_hosts: Sequence[str] = ()
+) -> list[Channel]:
+    """Instantiate the alert channels ``names`` through the ``channels`` registry; the errors are
+    those of ``resolve_forwarders``."""
+    found: list[Channel] = resolve_forwarders(
+        names,
+        allow_insecure=allow_insecure,
+        allowed_hosts=allowed_hosts,
+        registry=channels,
+        delivery=NOTIFY,
+    )
+    return found
+
+
 class _Worker:
-    def __init__(self, adapter: Forwarder, fan: Fanout, name: str) -> None:
+    def __init__(self, adapter: Forwarder | Channel, fan: Fanout, name: str) -> None:
         self.adapter = adapter
         self.name = name
         self._fan = fan
-        self.queue: queue.Queue[tuple[MetricPoint, ...]] = queue.Queue(maxsize=fan.queue_batches)
+        self.queue: queue.Queue[Batch] = queue.Queue(maxsize=fan.queue_batches)
         self.stats = ForwarderStats()
         self.busy_since: float | None = None
         self.pending_points = 0
@@ -143,29 +194,30 @@ class _Worker:
             first = not self._logged
             self._logged = True
         if first:
+            d = self._fan.delivery
             fields: dict[str, Any] = {
-                "forwarder": self.name,
+                d.label: self.name,
                 "run_id": self._fan.meta.run_id,
-                "n_points": n_points,
+                f"n_{d.unit}": n_points,
                 "reason": reason,
             }
             if exc is not None:
                 fields["error_type"] = type(exc).__name__
-            get_logger("cvpilot.forward").warning("forward_failed", **fields)
+            get_logger(d.logger).warning(d.failed_event, **fields)
 
     def _disable(self, reason: str) -> None:
         with self._lock:
             if self.stats.disabled_reason is None:
                 self.stats.disabled_reason = reason
 
-    def _drop(self, batch: Sequence[MetricPoint]) -> None:
+    def _drop(self, batch: Sequence[Any]) -> None:
         with self._lock:
             self.stats.dropped_batches += 1
             self.stats.dropped_points += len(batch)
 
     # -- training-thread side ---------------------------------------------------------------
 
-    def offer(self, batch: tuple[MetricPoint, ...]) -> None:
+    def offer(self, batch: Batch) -> None:
         busy = self.busy_since
         if (
             self.stats.disabled_reason is None
@@ -259,7 +311,8 @@ class _Worker:
             if self.stats.disabled_reason is not None or not self.opened:
                 self._drop(batch)
             else:
-                self._call(partial(self.adapter.log_points, batch), n_points=len(batch))
+                send = getattr(self.adapter, self._fan.delivery.method)
+                self._call(partial(send, batch), n_points=len(batch))
                 self._sync_adapter_drops()
             with self._lock:
                 self.pending_points -= len(batch)
@@ -273,7 +326,7 @@ class Fanout:
 
     def __init__(
         self,
-        adapters: Sequence[Forwarder],
+        adapters: Sequence[Forwarder | Channel],
         meta: RunMeta,
         repro: Repro,
         *,
@@ -282,7 +335,9 @@ class Fanout:
         call_timeout_s: float | None = None,
         close_timeout_s: float | None = None,
         clock: Callable[[], float] = time.monotonic,
+        delivery: Delivery = FORWARD,
     ) -> None:
+        self.delivery = delivery
         self.queue_batches = QUEUE_BATCHES if queue_batches is None else queue_batches
         if self.queue_batches < 1:
             raise ValueError("queue_batches must be positive")
@@ -315,8 +370,9 @@ class Fanout:
         for worker in self._workers:
             worker.stats.disabled_reason = "forked"
 
-    def submit(self, points: Sequence[MetricPoint]) -> None:
-        """Offer one flushed batch to every forwarder; never blocks, never raises."""
+    def submit(self, points: Sequence[Any]) -> None:
+        """Offer one flushed batch (points, or alerts for a channel fan-out) to every adapter;
+        never blocks, never raises."""
         try:
             if self._closed:
                 return
@@ -326,8 +382,8 @@ class Fanout:
             for worker in self._workers:
                 worker.offer(batch)
         except Exception as exc:  # noqa: BLE001  # the training loop must never see this
-            get_logger("cvpilot.forward").warning(
-                "forward_failed", run_id=self.meta.run_id, reason="submit_failed",
+            get_logger(self.delivery.logger).warning(
+                self.delivery.failed_event, run_id=self.meta.run_id, reason="submit_failed",
                 error_type=type(exc).__name__,
             )  # fmt: skip
 
@@ -349,19 +405,34 @@ class Fanout:
             for worker in self._workers:
                 s = worker.stats
                 if not s.clean:
-                    get_logger("cvpilot.forward").warning(
-                        "forward_summary",
-                        forwarder=worker.name,
+                    u = self.delivery.unit
+                    get_logger(self.delivery.logger).warning(
+                        self.delivery.summary_event,
+                        **{self.delivery.label: worker.name},
                         run_id=self.meta.run_id,
                         failed_calls=s.failed_calls,
                         dropped_batches=s.dropped_batches,
-                        dropped_points=s.dropped_points,
-                        failed_points=s.failed_points,
-                        adapter_dropped_points=s.adapter_dropped_points,
+                        **{
+                            f"dropped_{u}": s.dropped_points,
+                            f"failed_{u}": s.failed_points,
+                            f"adapter_dropped_{u}": s.adapter_dropped_points,
+                        },
                         disabled_reason=s.disabled_reason,
                         abandoned=s.abandoned,
                     )
         return {w.name: w.stats for w in self._workers}
+
+
+def notify_fanout(channels_: Sequence[Channel], meta: RunMeta, repro: Repro, **kw: Any) -> Fanout:
+    """A fan-out that delivers alerts to ``channels_`` with the bounds of ``NOTIFY_*``."""
+    options: dict[str, Any] = {
+        "queue_batches": NOTIFY_QUEUE,
+        "max_queued_points": NOTIFY_QUEUE,
+        "call_timeout_s": NOTIFY_CALL_TIMEOUT_S,
+        "delivery": NOTIFY,
+    }
+    options.update(kw)
+    return Fanout(channels_, meta, repro, **options)
 
 
 _LIVE: weakref.WeakSet[Fanout] = weakref.WeakSet()
