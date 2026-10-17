@@ -314,3 +314,41 @@ def test_every_alert_condition_really_fired_alerts() -> None:
 def test_the_alert_notebook_has_no_filler_left() -> None:
     nb = load(ALERTS_NB)
     assert "filled in after the run" not in "\n".join(source(c) for c in nb["cells"])
+
+
+def test_the_computed_checks_all_hold_and_the_verdicts_are_there() -> None:
+    out = all_output(ALERTS_NB)
+    checks = [ln for ln in out.splitlines() if ln.startswith("CHECK:")]
+    assert len(checks) >= 6, checks
+    assert not [ln for ln in checks if "False" in ln], checks
+    verdicts = [ln for ln in out.splitlines() if ln.startswith("VERDICT:")]
+    assert len(verdicts) >= 3
+    assert any("cannot resolve a difference smaller than" in ln for ln in verdicts)
+
+
+def test_the_condition_order_is_rotated_so_the_baseline_is_not_always_first() -> None:
+    out = all_output(ALERTS_NB)
+    positions = [
+        int(ln.split()[-1])
+        for ln in out.splitlines()
+        if ln.startswith("no alerts at all") and re.search(r"\s\d+\s+\d+\s", ln) and "ms" not in ln
+    ]
+    assert len(positions) >= 3 and len(set(positions)) >= 2, positions
+
+
+def test_the_per_call_cost_was_measured_while_alerts_really_fired_and_with_a_full_queue() -> None:
+    out = all_output(ALERTS_NB)
+    assert "alerts queued" in out and "after it overflowed" in out
+    queued = [int(m) for m in re.findall(r"alerts queued\s+(\d+)", out)]
+    assert queued and all(n >= 1 for n in queued)
+    dropped = re.search(r"dropped because the queue was full or the call was stuck: (\d+)", out)
+    assert dropped is not None and int(dropped.group(1)) >= 1
+    code = all_code(ALERTS_NB)
+    assert '"rule": "nan_loss"' in code.split("ALERTS_BENCH")[1][:300]
+
+
+def test_the_prose_carries_no_hand_typed_measurement() -> None:
+    prose = "\n".join(source(c) for c in load(ALERTS_NB)["cells"] if c["cell_type"] == "markdown")
+    for phrase in ("four steps", "12 logged", "0.02", "about five seconds", "at most about five"):
+        assert phrase not in prose, phrase
+    assert "filled in after the run" not in prose
