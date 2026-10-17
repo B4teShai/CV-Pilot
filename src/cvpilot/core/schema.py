@@ -13,7 +13,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, BinaryIO, Literal, Protocol
+from typing import TYPE_CHECKING, Any, BinaryIO, Literal, Protocol, get_args
 
 from pydantic import (
     AwareDatetime,
@@ -40,6 +40,13 @@ Task = Literal["detection", "classification"]
 ArtifactKind = Literal[
     "checkpoint", "report", "predictions", "confusion", "config", "env", "image", "diff"
 ]
+
+AlertRule = Literal[
+    "nan_loss", "loss_spike", "no_progress", "eval_regression", "run_failed", "run_preempted"
+]
+ALERT_RULES: tuple[str, ...] = get_args(AlertRule)
+MAX_ALERT_TEXT = 400
+"""Longest alert message; the text is built from constant templates and bounded values."""
 
 ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "resumed"})
 TERMINAL_STATUSES: frozenset[str] = frozenset({"finished", "failed", "preempted"})
@@ -756,6 +763,54 @@ class Forwarder(Protocol):
 
 
 ForwarderFactory = Callable[..., Forwarder]
+
+
+class Alert(_Model):
+    """One alert as delivered: the rule, the run and a plain-text message.
+
+    ``text`` is built by ``cvpilot.alerts`` from a constant template plus sanitised values; a
+    channel puts it into its own payload without interpreting it.
+    """
+
+    rule: AlertRule
+    project: str
+    run_id: str
+    step: StrictInt | None = Field(default=None, ge=0, le=MAX_STEP)
+    text: str = Field(min_length=1, max_length=MAX_ALERT_TEXT)
+
+    @field_validator("project")
+    @classmethod
+    def _project(cls, value: str) -> str:
+        if not is_valid_project(value):
+            raise ValueError("invalid project name")
+        return value
+
+    @field_validator("run_id")
+    @classmethod
+    def _ulid(cls, value: str) -> str:
+        if not is_valid_ulid(value):
+            raise ValueError("must be a valid ULID")
+        return value
+
+
+class Channel(Protocol):
+    """Delivers alerts to a person; adapters register under ``channels``.
+
+    Constructed like a ``Forwarder`` (``allow_insecure``, ``allowed_hosts``); reads the variables
+    that decide where it sends and its credential **once, at construction**, from the
+    environment only. ``open``, ``send`` and ``close`` run on a worker thread owned by the
+    fan-out, never on the training thread; ``send`` raises when delivery failed.
+    """
+
+    name: str
+    requires: tuple[str, ...]
+
+    def open(self, meta: RunMeta, repro: Repro) -> None: ...
+    def send(self, alerts: Sequence[Alert]) -> None: ...
+    def close(self, status: RunStatus) -> None: ...
+
+
+ChannelFactory = Callable[..., Channel]
 
 
 class Hook(Protocol):

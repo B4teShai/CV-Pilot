@@ -189,6 +189,12 @@ class HookNotFoundError(CvpilotError, LookupError):
     event = "hook_missing"
 
 
+class AlertConfigError(CvpilotError, ValueError):
+    """An alert configuration is invalid or unreadable; the message never echoes its values."""
+
+    event = "alert_config_invalid"
+
+
 class RecomputeMismatchError(CvpilotError, ValueError):
     """Stored results differ from a recomputation on trusted ground truth (or cannot be checked)."""
 

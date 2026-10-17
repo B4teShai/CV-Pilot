@@ -133,6 +133,15 @@
     }
   },
   "cvpilot.core.errors": {
+    "AlertConfigError": {
+      "bases": [
+        "CvpilotError",
+        "ValueError"
+      ],
+      "init": "(...)",
+      "kind": "class",
+      "members": {}
+    },
     "BaselineExistsError": {
       "bases": [
         "BaselineRefusedError"
