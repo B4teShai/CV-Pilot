@@ -26,6 +26,7 @@ HEAVY = {
     "wandb",
     "trackio",
     "pytorch_lightning",
+    "transformers",
 }
 
 

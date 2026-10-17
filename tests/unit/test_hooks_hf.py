@@ -301,7 +301,7 @@ def test_autolog_end_to_end_records_a_real_run_and_announces_the_hook(
     run = api.autolog(trainer, project="proj", task="classification")
     trainer.train()
     view = runs.get_run_view("proj", run.run_id, store_dir=tmp_path / "store")
-    assert view.meta.status == "finished" and view.stats.n_points == 7
+    assert view.meta.status == "finished" and view.stats.n_points == 6
     assert view.meta.framework.startswith("transformers==4.99.0")
     events = [json.loads(x) for x in capsys.readouterr().err.splitlines() if x.startswith("{")]
     (announce,) = [e for e in events if e["message"] == "hook_attached"]

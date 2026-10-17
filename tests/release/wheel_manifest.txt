@@ -66,6 +66,7 @@ cvpilot/hooks/__init__.py
 cvpilot/hooks/_guard.py
 cvpilot/hooks/_resume.py
 cvpilot/hooks/_sink.py
+cvpilot/hooks/hf_trainer.py
 cvpilot/hooks/lightning.py
 cvpilot/hooks/ultralytics.py
 cvpilot/logging.py
