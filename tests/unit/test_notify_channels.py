@@ -374,3 +374,14 @@ def test_the_first_party_channels_are_registered_without_importing_anything_else
     for name in ("slack", "telegram", "webhook"):
         factory = registry.channels.get(name)
         assert factory.name == name and factory.requires == ()  # type: ignore[attr-defined]
+
+
+def test_building_a_channel_in_development_mode_warns_once_and_production_does_not(
+    monkeypatch: pytest.MonkeyPatch, server: Listener, logs: Any
+) -> None:
+    slack(monkeypatch, "https://hooks.slack.com" + SLACK_PATH)
+    assert not [r for r in logs.records() if r["message"] == "insecure_dev_mode"]
+    slack(monkeypatch, server.url + SLACK_PATH, allow_insecure=True)
+    warned = [r for r in logs.records() if r["message"] == "insecure_dev_mode"]
+    assert len(warned) == 1 and warned[0]["channel"] == "slack" and warned[0]["level"] == "WARNING"
+    assert "SECRET" not in logs.text() and SLACK_PATH not in logs.text()

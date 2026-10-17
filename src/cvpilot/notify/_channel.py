@@ -67,6 +67,10 @@ class HttpChannel:
         allow_insecure: bool,
         headers: Mapping[str, str] | None = None,
     ) -> None:
+        if allow_insecure:
+            get_logger("cvpilot.notify").warning(
+                "insecure_dev_mode", channel=self.name, reason="http to loopback addresses allowed"
+            )
         self._url = url
         self._allow_insecure = allow_insecure
         self._headers = dict(headers or {})

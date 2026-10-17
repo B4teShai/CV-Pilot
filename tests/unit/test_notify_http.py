@@ -165,6 +165,11 @@ PRIVATE = [
     "2002:7f00:0001::",  # 6to4 of 127.0.0.1
     "2002:a9fe:a9fe::",  # 6to4 of 169.254.169.254
     "2001:0:4136:e378:8000:63bf:3fff:fdd2",  # Teredo
+    "::7f00:1",  # IPv4-compatible (deprecated) form of 127.0.0.1
+    "64:ff9b:1::1",  # local-use NAT64 prefix
+    "100::1",  # discard-only
+    "2001:db8::1",  # documentation
+    "fec0::1",  # site-local
 ]
 PUBLIC = ["93.184.216.34", "8.8.8.8", "2606:4700:4700::1111", "::ffff:8.8.8.8"]
 
@@ -242,3 +247,83 @@ def test_an_unresolvable_name_is_an_ordinary_failure(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(socket, "getaddrinfo", fail)
     with pytest.raises(OSError):  # noqa: PT011
         http.post_json("https://hooks.example/x", {"text": "t"}, attempts=1)
+
+
+# -- bounded name resolution, no leaks, development-mode address policy -------------------------
+
+
+def test_a_resolver_that_stalls_is_cut_off_at_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    release = __import__("threading").Event()
+
+    def stalls(*_a: Any, **_k: Any) -> Any:
+        release.wait(30)  # a resolver that never answers
+        return infos("93.184.216.34")
+
+    monkeypatch.setattr(socket, "getaddrinfo", stalls)
+    started = time.perf_counter()
+    with pytest.raises(OSError):  # noqa: PT011
+        http.post_json("https://hooks.example/x", {"text": "t"}, timeout_s=0.4, attempts=1)
+    assert time.perf_counter() - started < 1.5
+    release.set()
+
+
+def test_resolution_counts_against_the_attempt_deadline_not_in_addition_to_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def slow(*_a: Any, **_k: Any) -> Any:
+        time.sleep(0.3)
+        return infos("93.184.216.34")
+
+    seen: list[float] = []
+
+    def create_connection(address: Any, timeout: float | None = None, **_k: Any) -> Any:
+        seen.append(timeout or 0.0)
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr(socket, "getaddrinfo", slow)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    with pytest.raises(ConnectionRefusedError):
+        http.post_json("https://hooks.example/x", {"text": "t"}, timeout_s=1.0, attempts=1)
+    assert seen and seen[0] < 0.75  # the 0.3 s of resolution was taken off the budget
+
+
+def test_the_stall_limit_and_the_close_wait_cover_one_full_delivery_budget() -> None:
+    from cvpilot.runs import forwarding as fw
+
+    budget = http.MAX_ATTEMPTS * http.TIMEOUT_S + (http.MAX_ATTEMPTS - 1) * http.RETRY_PAUSE_S
+    assert fw.NOTIFY_CALL_TIMEOUT_S > budget
+    assert fw.NOTIFY_CLOSE_TIMEOUT_S >= budget
+
+
+def test_a_failure_after_connecting_still_closes_the_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+
+    class FakeSocket:
+        def shutdown(self, how: int) -> None: ...
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(http, "_connect", lambda *a, **k: FakeSocket())
+
+    def broken(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("cannot build a connection object")
+
+    monkeypatch.setattr(http.http.client, "HTTPConnection", broken)
+    with pytest.raises(RuntimeError):
+        http.post_json("http://127.0.0.1:9/x", {"text": "t"}, allow_insecure=True, attempts=1)
+    assert closed, "the socket was leaked"
+
+
+def test_development_mode_still_requires_loopback_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: infos("93.184.216.34"))
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: 1 / 0)
+    with pytest.raises(http.AddressRefused):
+        http.post_json("http://hooks.example/x", {"text": "t"}, allow_insecure=True)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: infos("10.0.0.5"))
+    with pytest.raises(http.AddressRefused):  # private is not loopback
+        http.post_json("http://hooks.example/x", {"text": "t"}, allow_insecure=True)

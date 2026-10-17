@@ -3,12 +3,15 @@
 Rules (each has a test in ``tests/unit/test_notify_http.py``):
 
 * **https only**; ``http`` is accepted only with ``allow_insecure`` (``CVPILOT_ENV=dev``), which
-  also skips the address policy, so a developer can listen on the loopback interface.
-* **Public addresses only.** The host name is resolved once, every address must be public (not
-  loopback, private, link-local, shared, multicast, reserved, or an IPv4 address embedded in an
-  IPv6 one), and the connection goes to the address that was checked, not to a second lookup:
-  a name that later resolves elsewhere cannot reach an internal service. One refused address
-  refuses the name.
+  swaps the address policy for its opposite: every resolved address must be loopback, so a
+  developer can listen on the local machine and nothing else.
+* **Public addresses only.** The host name is resolved once (in a helper thread joined for the
+  time left of the attempt deadline, so a resolver that never answers cannot stall the worker),
+  every address must be public (an IPv4 address that is globally routable and not multicast, or an
+  IPv6 address inside ``2000::/3`` that is global; mapped, 6to4 and NAT64 forms are judged by the
+  IPv4 address they carry, so ``::7f00:1`` and ``64:ff9b:1::1`` are refused), and the connection
+  goes to the address that was checked, not to a second lookup: a name that later resolves
+  elsewhere cannot reach an internal service. One refused address refuses the name.
 * **No redirects**: a 3xx answer is an error and ``Location`` is never read.
 * **Bounded time**: a total deadline of ``timeout_s`` per attempt, enforced by closing the socket
   (a response dripped one byte at a time cannot outlast it), at most ``MAX_ATTEMPTS`` attempts
@@ -64,27 +67,33 @@ class EndpointUnavailable(DeliveryError):
     """The endpoint is busy or broke the protocol (retried once)."""
 
 
-def _public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+_GLOBAL_UNICAST = ipaddress.ip_network("2000::/3")
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def _unwrap(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """The IPv4 address an IPv6 address carries (mapped, 6to4, NAT64), else the address itself."""
     if isinstance(ip, ipaddress.IPv6Address):
         if ip.ipv4_mapped is not None:
-            return _public(ip.ipv4_mapped)
+            return ip.ipv4_mapped
         if ip.sixtofour is not None:
-            return _public(ip.sixtofour)
-        if ip.teredo is not None:
+            return ip.sixtofour
+        if ip in _NAT64:
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return ip
+
+
+def _public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    ip = _unwrap(ip)
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.teredo is not None or ip not in _GLOBAL_UNICAST:
             return False
-        if ip in ipaddress.ip_network(
-            "64:ff9b::/96"
-        ):  # NAT64: the last 32 bits are an IPv4 address
-            return _public(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
     return ip.is_global and not ip.is_multicast
 
 
-def public_addresses(infos: Sequence[tuple[Any, ...]]) -> list[str]:
-    """The distinct addresses of a ``getaddrinfo`` answer, if every one of them is public.
-
-    Raises:
-        AddressRefused: there is no address, or any address is not public.
-    """
+def _addresses(infos: Sequence[tuple[Any, ...]], *, loopback: bool) -> list[str]:
     out: list[str] = []
     for info in infos:
         text = str(info[4][0]).split("%", 1)[0]
@@ -92,7 +101,10 @@ def public_addresses(infos: Sequence[tuple[Any, ...]]) -> list[str]:
             ip = ipaddress.ip_address(text)
         except ValueError:
             raise AddressRefused("the host resolved to something that is not an address") from None
-        if not _public(ip):
+        if loopback:
+            if not _unwrap(ip).is_loopback:
+                raise AddressRefused("development mode accepts loopback addresses only")
+        elif not _public(ip):
             raise AddressRefused("the host resolves to an address that is not public")
         if text not in out:
             out.append(text)
@@ -101,14 +113,41 @@ def public_addresses(infos: Sequence[tuple[Any, ...]]) -> list[str]:
     return out[:MAX_ADDRESSES]
 
 
+def public_addresses(infos: Sequence[tuple[Any, ...]]) -> list[str]:
+    """The distinct addresses of a ``getaddrinfo`` answer, if every one of them is public.
+
+    Raises:
+        AddressRefused: there is no address, or any address is not public.
+    """
+    return _addresses(infos, loopback=False)
+
+
+def _resolve(host: str, port: int, deadline: float) -> list[tuple[Any, ...]]:
+    """``getaddrinfo`` in a daemon thread, waited for until ``deadline`` at most."""
+    box: list[Any] = []
+
+    def work() -> None:
+        try:
+            box.append(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+        except BaseException as exc:  # noqa: BLE001  # handed to the waiting thread
+            box.append(exc)
+
+    thread = threading.Thread(target=work, name="cvpilot-resolve", daemon=True)
+    thread.start()
+    thread.join(max(0.0, deadline - time.monotonic()))
+    if not box:
+        raise TimeoutError("name resolution did not finish before the deadline")
+    if isinstance(box[0], BaseException):
+        raise box[0]
+    result: list[tuple[Any, ...]] = box[0]
+    return result
+
+
 def _connect(
     host: str, port: int, scheme: str, *, allow_insecure: bool, tls: ssl.SSLContext | None,
     deadline: float,
 ) -> socket.socket:  # fmt: skip
-    if allow_insecure:
-        targets = [host]
-    else:
-        targets = public_addresses(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+    targets = _addresses(_resolve(host, port, deadline), loopback=allow_insecure)
     last: OSError | None = None
     for target in targets:
         remaining = deadline - time.monotonic()
@@ -147,28 +186,31 @@ def _once(
     deadline = time.monotonic() + timeout_s
     sock = _connect(host, port, scheme, allow_insecure=allow_insecure, tls=tls, deadline=deadline)
     expired = threading.Event()
+    timer: threading.Timer | None = None
+    conn: http.client.HTTPConnection | None = None
 
     def on_deadline() -> None:
         expired.set()
         _abort(sock)
 
-    timer = threading.Timer(max(0.0, deadline - time.monotonic()), on_deadline)
-    timer.daemon = True
-    timer.start()
-    conn: http.client.HTTPConnection
-    if scheme == "https":
-        conn = http.client.HTTPSConnection(host, port, timeout=timeout_s, context=tls)
-    else:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout_s)
-    conn.sock = sock
     try:
+        timer = threading.Timer(max(0.0, deadline - time.monotonic()), on_deadline)
+        timer.daemon = True
+        timer.start()
+        if scheme == "https":
+            conn = http.client.HTTPSConnection(host, port, timeout=timeout_s, context=tls)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout_s)
+        conn.sock = sock
         conn.request("POST", path, body, headers=dict(headers))
         status = conn.getresponse().status  # the body is never read
     except http.client.HTTPException:
         raise EndpointUnavailable("the endpoint sent a malformed or oversized answer") from None
     finally:
-        timer.cancel()
-        conn.close()
+        if timer is not None:
+            timer.cancel()
+        if conn is not None:
+            conn.close()
         _abort(sock)
     if expired.is_set():  # a cut-off answer reads as a short one: it is a timeout, not a success
         raise TimeoutError("the delivery deadline passed")
