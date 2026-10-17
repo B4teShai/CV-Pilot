@@ -180,6 +180,8 @@ class AlertConfig(_Spec):
     def _list(cls, value: Any) -> Any:
         if not isinstance(value, (list, tuple)):
             raise ValueError("must be a list of channel names")
+        if not all(isinstance(entry, str) for entry in value):
+            raise ValueError("every channel must be a name")
         if len(set(value)) != len(value):
             raise ValueError("a channel is repeated")
         return value

@@ -90,10 +90,18 @@ def test_a_healthy_run_would_fire_nothing(invoke: Invoke, store_root: Path, tmp_
     assert res.code == 0 and "would fire: nothing" in res.out
 
 
-def test_the_replay_is_deterministic(invoke: Invoke, store_root: Path, tmp_path: Path) -> None:
+def test_the_replay_is_repeatable_and_does_not_change_the_store(
+    invoke: Invoke, store_root: Path, tmp_path: Path
+) -> None:
     run = recorded_run(store_root, [1.0, 1.0, 1.0, 1.0, float("nan")], status="failed")
     args = ("alerts", "check", str(config_file(tmp_path)), "--project", "proj", "--run", run)
-    assert invoke(*args).out == invoke(*args).out
+    files = lambda: sorted(  # noqa: E731
+        (p.relative_to(store_root), p.stat().st_size) for p in store_root.rglob("*") if p.is_file()
+    )
+    before = files()
+    first, second = invoke(*args).out, invoke(*args).out
+    assert first == second and "would fire: nan_loss at step 4" in first
+    assert files() == before
 
 
 def test_a_replay_uses_the_real_comparison_for_the_eval_rule(
@@ -203,3 +211,52 @@ def test_an_unknown_run_exits_1_and_a_malformed_id_exits_2(
 def test_the_check_is_listed_in_the_help_of_the_alerts_group(invoke: Invoke) -> None:
     res = invoke("alerts", "--help")
     assert res.code == 0 and "check" in res.out
+
+
+def test_snapshots_further_apart_than_the_rate_limit_each_get_their_alert_in_step_order(
+    invoke: Invoke, store_root: Path, tmp_path: Path
+) -> None:
+    io = tables.get("parquet")()
+
+    def evaluate(run: Any, folder: str, step: int, **files: Any) -> None:
+        preds, gts, _ = write_eval_files(tmp_path / folder, **files)
+        run.log_eval(
+            load_predictions(preds, "detection", io), load_ground_truth(gts, "detection", io),
+            step=step, class_names=["cat", "dog"], n_resamples=0,
+        )  # fmt: skip
+
+    base = api.init("proj", task="detection", store_dir=store_root)
+    evaluate(base, "b", 0)
+    base.finish()
+    baselines.set_baseline("proj", "prod", base.run_id, store_dir=store_root)
+    bad = api.init("proj", task="detection", store_dir=store_root)
+    evaluate(bad, "x0", 0, broken=10)
+    bad.log({"train/loss": float("nan")}, step=5)
+    evaluate(bad, "x1", 10, broken=10)
+    bad.finish()
+    rules = [
+        {"rule": "nan_loss"},
+        {"rule": "eval_regression", "baseline": "tag:prod", "max_drop": {"mAP50_95": 0.5}},
+    ]
+    cfg = str(config_file(tmp_path, {"rate_limit_s": 60, "rules": rules}))
+    res = invoke("alerts", "check", cfg, "--project", "proj", "--run", bad.run_id)
+    assert res.code == 0, res.err
+    fired = [ln.split(":")[0] + ":" + ln.split(":")[1] for ln in res.out.splitlines()
+             if ln.startswith("would fire")]  # fmt: skip
+    assert fired == [
+        "would fire: eval_regression at step 0",
+        "would fire: nan_loss at step 5",
+        "would fire: eval_regression at step 10",
+    ]
+    assert "carry no recording time" in res.out  # the limit of the replay is stated
+
+
+def test_the_replay_of_a_real_run_differs_when_the_run_differs(
+    invoke: Invoke, store_root: Path, tmp_path: Path
+) -> None:
+    a = recorded_run(store_root, [1.0, 1.0, float("nan")], status="failed")
+    b = recorded_run(store_root, [1.0, 0.9, 0.8], status="finished")
+    path = str(config_file(tmp_path))
+    out_a = invoke("alerts", "check", path, "--project", "proj", "--run", a).out
+    out_b = invoke("alerts", "check", path, "--project", "proj", "--run", b).out
+    assert "would fire: nan_loss" in out_a and "would fire: nothing" in out_b

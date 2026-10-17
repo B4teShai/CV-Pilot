@@ -4,8 +4,15 @@ The stored scalars are shown to a fresh engine in step order with a clock taken 
 recording times (so the rate limit behaves as it would have), every evaluation snapshot of the
 run goes through the real baseline comparison, and the final status is applied last. The engine's
 delivery function only collects: no channel is built here, no event named ``alert_fired`` is
-logged, nothing leaves the process. At most ``MAX_REPLAY_POINTS`` points are replayed; a larger
-run is refused rather than cut short, because a partial replay would look like a clean one.
+logged, nothing leaves the process.
+
+An evaluation snapshot has no recording time. Snapshots are replayed in step order, interleaved
+with the scalars of the steps before them, and each is taken to be logged one rate-limit window
+after the previous event, so two snapshots are never muted by each other in the replay; in a live
+run two evaluations less than a window apart are, and the second sends no alert.
+
+At most ``MAX_REPLAY_POINTS`` points are replayed; a larger run is refused rather than
+cut short, because a partial replay would look like a clean one.
 """
 
 from __future__ import annotations
@@ -70,12 +77,19 @@ def dry_run(
         clock=lambda: now[0],
         store_dir=store_dir,
     )
+    pending = list(snapshots)
+
+    def evaluate_due(up_to: float) -> None:
+        while pending and pending[0].step <= up_to:
+            now[0] += config.rate_limit_s  # a snapshot carries no time of its own
+            engine.on_eval(pending.pop(0))
+
     for step, group in groupby(points, key=lambda p: p.step):
+        evaluate_due(step - 1)
         batch = list(group)
-        now[0] = min(p.wall_time for p in batch)
+        now[0] = max(now[0], min(p.wall_time for p in batch))
         engine.on_points({p.key: p.value for p in batch}, step)
-    for snapshot in snapshots:
-        engine.on_eval(snapshot)
+    evaluate_due(float("inf"))
     engine.on_finish(meta.status)
     return Replay(
         run_id,

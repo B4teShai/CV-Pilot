@@ -74,6 +74,9 @@ MAX_POINTS_PER_CALL = 1000
 MAX_VALUE_CHARS = 64
 _TERMINAL = {"failed": "run_failed", "preempted": "run_preempted"}
 _UNSAFE = re.compile(r"[^A-Za-z0-9 _./:()+%=-]")
+_LINKISH = re.compile(
+    r"://|\.(?=[A-Za-z])"
+)  # a scheme, or a dot that makes ``a.b`` look like a host
 _REASON = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}")
 _KIND = re.compile(r"[a-z][a-z0-9_]{0,39}")
 
@@ -82,8 +85,13 @@ EvalCheck = Callable[[EvalRegressionSpec, EvalSnapshot], "GateResult"]
 
 
 def plain(value: object, limit: int = MAX_VALUE_CHARS) -> str:
-    """``value`` as text made only of ``[A-Za-z0-9 _./:()+%=-]`` and ``?``, cut to ``limit``."""
-    return _UNSAFE.sub("?", safe_text(value, limit))
+    """``value`` as text made only of ``[A-Za-z0-9 _./:()+%=-]`` and ``?``, cut to ``limit``.
+
+    Nothing in the result can be linked by a chat client: ``://`` becomes ``:?/`` and a dot
+    followed by a letter (``evil.example``, ``www.x.org``) becomes ``?``. A slash alone stays
+    (``train/loss`` is the ordinary metric name), as does a dot before a digit (``0.5``)."""
+    text = _UNSAFE.sub("?", safe_text(value, limit))
+    return _LINKISH.sub(lambda m: ":?/" if m.group() == "://" else "?", text)
 
 
 def _number(value: float) -> str:
@@ -96,12 +104,14 @@ def _is_loss(spec_metric: str | None, key: str) -> bool:
 
 @dataclass
 class AlertStats:
-    fired: int = 0
-    """Alerts handed to the delivery function."""
+    queued: int = 0
+    """Alerts handed to the delivery function (queued for the channels, not yet delivered: the
+    channels' own counters, in ``alert_summary``, say what was delivered)."""
     suppressed: int = 0
     """Alerts dropped by the rate limit or the per-run cap."""
     rule_failures: int = 0
     delivery_errors: int = 0
+    """Hand-overs to the delivery function that raised."""
     skipped_points: int = 0
     """Points the engine could not read as a finite or non-finite number under a text key."""
 
@@ -284,30 +294,61 @@ class AlertEngine:
     def _report_once(self, key: str, level: str, event: str, **fields: Any) -> None:
         if key not in self._once:
             self._once.add(key)
-            self._emit(level, event, **fields)
+            self._safe_emit(level, event, **fields)
 
-    def _admit(self, rule: str, *, terminal: bool) -> bool:
-        now = self._clock()
-        last = self._last_sent.get(rule)
-        window = self._config.rate_limit_s
-        limited = last is not None and now - last < window
-        capped = not terminal and self._n_sent >= MAX_ALERTS_PER_RUN
-        if limited or capped:
-            self.stats.suppressed += 1
-            self._report_once(
-                f"suppressed:{rule}",
-                "info",
-                "alert_suppressed",
-                rule=rule,
-                reason="run_cap" if capped and not limited else "rate_limit",
-            )
+    def _safe_emit(self, level: str, event: str, **fields: Any) -> None:
+        try:
+            self._emit(level, event, **fields)
+        except Exception:  # noqa: BLE001, S110  # a broken logger must not stop an alert
+            pass
+
+    def summary(self) -> dict[str, int]:
+        """Counters for the ``alert_summary`` event written when the run ends."""
+        stats = self.stats
+        return {
+            "queued": stats.queued,
+            "suppressed": stats.suppressed,
+            "rule_failures": stats.rule_failures,
+            "submit_errors": stats.delivery_errors,
+            "skipped_points": stats.skipped_points,
+        }
+
+    def _blocked(self, key: str, *, terminal: bool) -> str | None:
+        """Why an alert with this rate key may not go out now (``rate_limit``, ``run_cap``), or
+        None. Nothing is recorded."""
+        last = self._last_sent.get(key)
+        if last is not None and self._clock() - last < self._config.rate_limit_s:
+            return "rate_limit"
+        if not terminal and self._n_sent >= MAX_ALERTS_PER_RUN:
+            return "run_cap"
+        return None
+
+    def _suppress(self, rule: str, reason: str) -> None:
+        self.stats.suppressed += 1
+        self._report_once(
+            f"suppressed:{rule}:{reason}", "info", "alert_suppressed", rule=rule, reason=reason
+        )
+
+    def _admit(self, rule: str, *, terminal: bool, key: str | None = None) -> bool:
+        key = key or rule
+        reason = self._blocked(key, terminal=terminal)
+        if reason is not None:
+            self._suppress(rule, reason)
             return False
-        self._last_sent[rule] = now
+        self._last_sent[key] = self._clock()
         self._n_sent += 1
         return True
 
-    def _fire(self, rule: str, step: int | None, message: str, *, terminal: bool = False) -> None:
-        if not self._admit(rule, terminal=terminal):
+    def _fire(
+        self,
+        rule: str,
+        step: int | None,
+        message: str,
+        *,
+        terminal: bool = False,
+        key: str | None = None,
+    ) -> None:
+        if not self._admit(rule, terminal=terminal, key=key):
             return
         text = f"[{self._project}] {message} (run {self._run_id})."
         try:
@@ -318,9 +359,9 @@ class AlertEngine:
                 step=step,
                 text=text[:MAX_ALERT_TEXT],
             )
-            self._emit("info", "alert_fired", rule=rule, step=step, project=self._project)
+            self._safe_emit("info", "alert_fired", rule=rule, step=step, project=self._project)
             self._deliver(alert)
-            self.stats.fired += 1
+            self.stats.queued += 1
         except Exception as exc:  # noqa: BLE001  # delivery must never reach the training loop
             self.stats.delivery_errors += 1
             self._report_once(
@@ -342,7 +383,12 @@ class AlertEngine:
         )  # fmt: skip
         if alert:
             reason = type(exc).__name__ if _REASON.fullmatch(type(exc).__name__) else "error"
-            self._fire(rule, step, f"Alert rule {rule} could not be evaluated ({reason})")
+            self._fire(
+                rule,
+                step,
+                f"Alert rule {rule} could not be evaluated ({reason})",
+                key=f"rule_failed:{rule}",
+            )
 
     # -- events ---------------------------------------------------------------------------
 
@@ -366,7 +412,10 @@ class AlertEngine:
                 and isinstance(value, (int, float))
                 and not isinstance(value, bool)
             ):
-                clean[key] = float(value)
+                try:
+                    clean[key] = float(value)
+                except OverflowError:  # an int too large for a float: this value only
+                    self.stats.skipped_points += 1
             else:
                 self.stats.skipped_points += 1
         if len(points) > MAX_POINTS_PER_CALL:
@@ -389,6 +438,10 @@ class AlertEngine:
         if spec is None:
             return
         step = getattr(snapshot, "step", None)
+        reason = self._blocked("eval_regression", terminal=False)
+        if reason is not None:  # the comparison is expensive: do not make it for a muted alert
+            self._suppress("eval_regression", reason)
+            return
         try:
             result = self._check_eval(spec, snapshot)
         except Exception as exc:  # noqa: BLE001  # a comparison that cannot be made is an alert

@@ -131,6 +131,9 @@ BAD: list[tuple[str, Any]] = [
         "too many channels",
         {"channels": [f"c{i}" for i in range(9)], "rules": [{"rule": "nan_loss"}]},
     ),
+    ("channel entry a list", {"channels": [["a"]], "rules": [{"rule": "nan_loss"}]}),
+    ("channel entry a dict", {"channels": [{"a": 1}], "rules": [{"rule": "nan_loss"}]}),
+    ("channel entry a number", {"channels": [1], "rules": [{"rule": "nan_loss"}]}),
     ("channels a string", {"channels": "slack", "rules": [{"rule": "nan_loss"}]}),
 ]
 

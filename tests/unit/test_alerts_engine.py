@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -293,7 +294,7 @@ def test_hostile_input_to_the_engine_is_counted_not_raised() -> None:
     h.engine.on_points({"loss": float("nan")}, -5)
     h.engine.on_points({"loss": float("nan")}, "x")  # type: ignore[arg-type]
     h.engine.on_finish("exploded")
-    assert h.sent == [] or all(a.step is None or a.step >= 0 for a in h.sent)
+    assert h.sent == [] and h.engine.stats.skipped_points == 5 and h.engine.stats.queued == 0
 
 
 # -- bounds ---------------------------------------------------------------------------------
@@ -458,3 +459,104 @@ def test_the_engine_accepts_only_a_validated_config() -> None:
             run_id=RUN,
             deliver=deliver,
         )
+
+
+# -- fix wave: links, failure keys, emit isolation, suppression reports, overflow, eval gating ----
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["loss http://evil.example/x", "loss evil.com/login", "loss www.evil.org", "loss ftp://h"],
+)
+def test_a_metric_name_cannot_carry_a_clickable_link(name: str) -> None:
+    h = make([{"rule": "nan_loss"}])
+    h.engine.on_points({name: float("nan")}, 1)
+    body = h.sent[0].text
+    assert "://" not in body and not re.search(r"\.[A-Za-z]", body.split(" (run ")[0]), body
+
+
+def test_the_plain_name_of_an_ordinary_metric_is_still_readable() -> None:
+    assert eng.plain("train/loss") == "train/loss"
+    assert eng.plain("metrics/mAP50-95(B)") == "metrics/mAP50-95(B)"
+
+
+def test_a_failed_rule_has_its_own_rate_key_and_does_not_use_up_the_real_alerts_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    h = make([{"rule": "loss_spike", "factor": 2, "window": 2}], rate_limit_s=60)
+    spike = h.engine._rules[0]
+    real = spike.feed
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(spike, "feed", boom)
+    h.engine.on_points({"loss": 1.0}, 0)
+    assert "could not be evaluated" in h.sent[0].text
+    monkeypatch.setattr(spike, "feed", real)  # the bug is fixed; the real rule works at once
+    for step, value in enumerate([1.0, 1.0, 9.0], start=1):
+        h.engine.on_points({"loss": value}, step)
+    assert [a.rule for a in h.sent] == ["loss_spike", "loss_spike"]
+    assert "jumped to" in h.sent[1].text
+
+
+def test_an_emit_function_that_raises_cannot_break_the_engine() -> None:
+    sent: list[Alert] = []
+
+    def emit(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("logging is broken")
+
+    engine = eng.AlertEngine(
+        parse_alert_config({"rules": [{"rule": "nan_loss"}, {"rule": "run_failed"}]}),
+        project="proj", run_id=RUN, deliver=sent.append, emit=emit, clock=Clock(),
+    )  # fmt: skip
+    engine.on_points({"loss": float("nan")}, 1)
+    engine.on_points({"loss": float("nan")}, 2)  # also the suppression report
+    engine.on_finish("failed")
+    assert [a.rule for a in sent] == ["nan_loss", "run_failed"]
+
+
+def test_every_kind_of_suppression_is_reported_once_including_the_run_cap() -> None:
+    h = make([{"rule": "nan_loss"}, {"rule": "no_progress", "patience": 2}], rate_limit_s=1)
+    for step in range(3):
+        h.engine.on_points({"loss": float("nan")}, step)  # rate limited
+    for step in range(10 * eng.MAX_ALERTS_PER_RUN):
+        h.clock.now += 2
+        h.engine.on_points({"loss": float("nan")}, 10 + step)  # then the per-run cap
+    reasons = sorted((f["rule"], f["reason"]) for f in h.emitted.named("alert_suppressed"))
+    assert reasons == [("nan_loss", "rate_limit"), ("nan_loss", "run_cap")]
+
+
+def test_a_value_too_large_for_a_float_is_skipped_not_fatal() -> None:
+    h = make([{"rule": "nan_loss"}])
+    huge: dict[str, Any] = {"huge_loss": 10**400, "other_loss": float("nan")}
+    h.engine.on_points(huge, 1)
+    assert len(h.sent) == 1 and h.engine.stats.skipped_points == 1
+
+
+def test_an_evaluation_inside_the_rate_limit_window_is_not_compared_again() -> None:
+    calls: list[int] = []
+
+    def check(spec: Any, snapshot: Any) -> GateResult:
+        calls.append(snapshot.step)
+        return GateResult(
+            passed=False, violations=(Violation("headline_drop", "m", "x", 2.0, 0.5),)
+        )
+
+    h = make([EVAL_RULE], check_eval=check)
+    h.engine.on_eval(FakeSnapshot())  # type: ignore[arg-type]
+    h.engine.on_eval(FakeSnapshot())  # type: ignore[arg-type]
+    assert calls == [40] and len(h.sent) == 1 and h.engine.stats.suppressed == 1
+    h.clock.now += 10_000
+    h.engine.on_eval(FakeSnapshot())  # type: ignore[arg-type]
+    assert calls == [40, 40] and len(h.sent) == 2
+
+
+def test_the_summary_says_what_was_queued_suppressed_and_skipped() -> None:
+    h = make([{"rule": "nan_loss"}])
+    h.engine.on_points({"loss": float("nan")}, 1)
+    h.engine.on_points({"loss": float("nan")}, 2)
+    h.engine.on_points({"loss": "x"}, 3)  # type: ignore[dict-item]
+    assert h.engine.summary() == {
+        "queued": 1, "suppressed": 1, "rule_failures": 0, "submit_errors": 0, "skipped_points": 1,
+    }  # fmt: skip

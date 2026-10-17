@@ -79,6 +79,11 @@ def alerts_check(
             f"{found.n_points} points, {found.n_snapshots} evaluation snapshots, "
             f"status {found.status}"
         )
+        if found.n_snapshots:
+            typer.echo(
+                "note: evaluation snapshots carry no recording time; each is replayed one "
+                "rate-limit window after the previous event"
+            )
         for alert in found.alerts:
             where = "" if alert.step is None else f" at step {alert.step}"
             typer.echo(f"would fire: {alert.rule}{where}: {alert.text}")
