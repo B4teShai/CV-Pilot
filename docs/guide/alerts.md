@@ -88,7 +88,7 @@ cvpilot.autolog(trainer, project="crops", task="classification", alerts="alerts.
 trainer.train()
 ```
 
-`pip install "cvpilot[hf]"`. The hook records the training log under `train/`, the evaluation
+`pip install "cvpilot[hf]"`. **One setting matters for `nan_loss`:** by default the `Trainer` replaces a NaN training loss with an earlier value before any callback sees it (`logging_nan_inf_filter=True`), so the alert then comes only from the evaluation loss at the end of the epoch. Set `logging_nan_inf_filter=False` in `TrainingArguments` to have the training loss watched at every step. The hook records the training log under `train/`, the evaluation
 metrics under `eval/`, a save as an event with the step, and the end of training. An exception in
 `train()` marks the run failed. There is no resume helper for this framework: it resumes from a
 directory that includes pickled state, which CV-Pilot's single-file verification does not cover. See

@@ -115,6 +115,7 @@ Option B, with these rules (each has a test):
 - The loopback listener of tests and notebooks needs the development setting; production refuses http.
 - Slack and Telegram delivery was checked against a local listener and by unit tests; no real account
   was used.
+- The Hugging Face `Trainer` hides NaN training losses from callbacks by default (`logging_nan_inf_filter`), so `nan_loss` sees them only with that setting off; the evaluation loss is not filtered. Found while running notebook 03 and documented in the guide.
 - Metrics logged after `on_train_end` (a manual `trainer.evaluate()` after `train()`) are not recorded.
 
 ## Links
