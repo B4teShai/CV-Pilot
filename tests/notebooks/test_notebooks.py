@@ -261,7 +261,7 @@ def test_the_hub_files_go_through_the_same_checked_fetch() -> None:
     code = all_code(ALERTS_NB)
     assert 'fetch(f"{HF_BASE}/model.safetensors", "resnet18-model.safetensors")' in code
     assert 'fetch(f"{HF_BASE}/config.json", "resnet18-config.json")' in code
-    assert "blob == GIT_BLOB_ID" in code
+    assert "blob != GIT_BLOB_ID" in code
     out = all_output(ALERTS_NB)
     assert out.count("(matches the pin)") >= 4
 
