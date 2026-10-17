@@ -23,6 +23,27 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   status moved into the docs (`docs/reference/settings.md`, `docs/status.md`, the guide pages). A new
   overview diagram replaces the architecture diagrams in the README.
 
+### Fixed (alerts, before their first release)
+
+- A name-resolution stall can no longer hold an alert worker: resolution runs inside the 5 second
+  attempt deadline. A stuck delivery only drops the alerts that arrive while it lasts and the channel
+  recovers; the end-of-run alert is no longer lost to an earlier stall.
+- `finish` evaluates the `run_failed` alert before the final flush, so a store that cannot be written
+  no longer silences it; an uncaught exception outside a `with` block now sends it from the exit handler.
+- `finish` waits up to 12 s for alert channels after up to 5 s for forwarders (one full delivery
+  budget), and the docs now give that worst case.
+- Metric names in messages cannot be links (`://`, dot before a letter); IPv6 addresses are allowed
+  only inside `2000::/3` (after unwrapping mapped, 6to4 and NAT64 forms); development mode accepts
+  loopback addresses only and logs `insecure_dev_mode`; a socket cannot leak when a connection object
+  fails to build; a channel that fails to construct stops `init`.
+- A failed rule uses its own rate key and cannot use up the real alert's window; a broken logger or a
+  value too large for a float cannot stop the rules; a non-string channel entry is a configuration error.
+- Every suppression kind is reported once (including the per-run cap) and `finish` writes `alert_summary`.
+- `eval_regression` is not compared again while its alert is muted. The dry run interleaves snapshots
+  with scalars by step and says that snapshots carry no time.
+- Hugging Face hook: only rank zero from the first callback; interrupts and exits mark the run
+  preempted; custom evaluation prefixes (`val_`, `test_`) are recorded once under `eval/`.
+
 ### Added
 
 - Alerts, in the training process and without a server (ADR-0009): `cvpilot.init(alerts=...)` or

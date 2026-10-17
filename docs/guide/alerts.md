@@ -52,16 +52,17 @@ Every address must be `https`, on port 443 (or listed), without credentials in t
 name a public DNS host: an address written as an IP number, `localhost` and anything that resolves to
 a private or loopback address is refused. `CVPILOT_FORWARD_HOSTS` restricts the hosts, as for the
 trackers. Redirects are never followed. A message is a fixed sentence with the run id, the step and
-the metric or class name cut down to plain characters. Without any channel an alert is only logged
+the metric or class name cut down to plain characters (no `://`, and no dot before a letter, so a name cannot become a link). Without any channel an alert is only logged
 (the event `alert_fired`).
 
 ## Never in the way of training
 
-Alerts are checked on the calling thread in microseconds and delivered by background threads. A
+The metric rules are checked on the calling thread in microseconds; `eval_regression` runs the full, verified baseline comparison once per `log_eval` snapshot (and not at all while its alert is muted by the rate limit); delivery is done by background threads. A
 closed port, an endpoint that never answers and a redirect each cost only the alerts (counted, and
 logged once as `alert_delivery_failed`). At most one alert per rule and run goes out per
-`rate_limit_s`, and at most 20 per run. When a run ends, `finish` waits at most five seconds for the
-channels. Only rank zero of a distributed job alerts.
+`rate_limit_s`, and at most 20 per run. When a run ends, `finish` waits up to 5 seconds for tracker forwarders and then up to 12 seconds for the alert channels (one full delivery budget: two 5 second attempts and the pause), so the worst case at the end of a run is about 17 seconds, and only with dead endpoints. A stuck delivery only drops the alerts that arrive while it lasts (counted); the channel works again as soon as it returns, so the end-of-run alert is not lost. Only rank zero of a distributed job alerts. Every suppressed alert is counted, the first suppression of each rule and reason is logged (`alert_suppressed`, reason `rate_limit` or `run_cap`), and `finish` writes one `alert_summary` event with how many alerts were queued, suppressed, delivered, failed and dropped.
+
+`run_failed` is sent when the run ends as failed: `finish("failed")`, an exception inside a `with` block or a hook, or an uncaught exception that ends the process (it is sent from the exit handler, within the channel wait above, and the run itself stays `running` as for any run that was never finished). A process that ends with `sys.exit`, is killed or loses its machine sends nothing: no code runs to say so.
 
 ## Try a configuration without sending anything
 
@@ -76,8 +77,7 @@ configuration or a channel that cannot be built.
 
 ## Development and tests
 
-Production refuses plain http. To receive alerts on your own machine set `CVPILOT_ENV=dev`, which
-allows `http://127.0.0.1:PORT/...` endpoints. The notebook `notebooks/03_alerts_and_hf_trainer.ipynb`
+Production refuses plain http. To receive alerts on your own machine set `CVPILOT_ENV=dev`, which allows `http://` endpoints **that resolve to loopback addresses** (`127.0.0.1`, `::1`) and nothing else; each channel logs one `insecure_dev_mode` warning when it is built. The notebook `notebooks/03_alerts_and_hf_trainer.ipynb`
 does exactly that with a local listener and shows the messages it received.
 
 ## Hugging Face Trainer
@@ -88,8 +88,8 @@ cvpilot.autolog(trainer, project="crops", task="classification", alerts="alerts.
 trainer.train()
 ```
 
-`pip install "cvpilot[hf]"`. **One setting matters for `nan_loss`:** by default the `Trainer` replaces a NaN training loss with an earlier value before any callback sees it (`logging_nan_inf_filter=True`), so the alert then comes only from the evaluation loss at the end of the epoch. Set `logging_nan_inf_filter=False` in `TrainingArguments` to have the training loss watched at every step. The hook records the training log under `train/`, the evaluation
+`pip install "cvpilot[hf]"`. **One setting matters for `nan_loss`:** by default the `Trainer` replaces a NaN training loss with the average of the earlier losses since the last log (`logging_nan_inf_filter=True`; that is 0.0 when it logs every step) before any callback sees it, so the alert then comes only from the evaluation loss at the end of the epoch. Set `logging_nan_inf_filter=False` in `TrainingArguments` to have the training loss watched at every step. The hook records the training log under `train/`, the evaluation
 metrics under `eval/`, a save as an event with the step, and the end of training. An exception in
-`train()` marks the run failed. There is no resume helper for this framework: it resumes from a
+`train()` marks the run failed; `KeyboardInterrupt` and `SystemExit` mark it preempted. Evaluation metrics are recognised by the usual prefixes (`eval_`, `val_`, `valid_`, `validation_`, `test_`) and recorded once, under `eval/`. There is no resume helper for this framework: it resumes from a
 directory that includes pickled state, which CV-Pilot's single-file verification does not cover. See
 [ADR-0009](../adr/0009-alerts-and-hf-hook.md) for what is deliberately not built.

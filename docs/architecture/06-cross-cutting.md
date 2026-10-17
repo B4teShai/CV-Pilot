@@ -50,6 +50,8 @@ Events this project emits (constant `message` values; fields are `snake_case`):
 | `forward_summary` | WARN | `forwarder`, `run_id`, `failed_calls`, `failed_points`, `dropped_batches`, `dropped_points`, `adapter_dropped_points`, `disabled_reason`, `abandoned` | `runs/forwarding.py` at finish, only when something went wrong | built |
 | `sync_batch_sent`, `sync_batch_failed`, `sync_outbox_full`, `sync_schema_mismatch` | DEBUG / WARN | `run_id`, `seq_from`, `seq_to`, `status_code`, `retry_in_s`, `outbox_size` | `sync/` | planned |
 | `alert_fired`, `alert_suppressed`, `alert_rule_failed`, `alert_keys_capped`, `alert_points_capped`, `alert_engine_failed`, `alert_skipped_rank` | INFO / INFO / WARN / WARN / WARN / WARN / INFO | `rule`, `step`, `project`, `reason`, `error_type`, `limit` (never a message text, URL or credential) | `alerts/`, `runs/`, `api.py` | built |
+| `alert_summary` | INFO | `run_id`, `queued`, `suppressed`, `rule_failures`, `submit_errors`, `skipped_points`, `delivered`, `delivery_failed`, `dropped` | `runs/` at finish | built |
+| `insecure_dev_mode` | WARN | `channel`, `reason` | `notify/` when a channel is built with `CVPILOT_ENV=dev` | built |
 | `alert_delivered` | INFO | `channel`, `rule`, `run_id` | `notify/` | built |
 | `alert_delivery_failed`, `alert_delivery_summary` | WARN | `channel`, `run_id`, `reason`, `error_type`, `n_alerts`; the summary: `failed_calls`, `failed_alerts`, `dropped_batches`, `dropped_alerts`, `disabled_reason`, `abandoned` | `runs/forwarding.py` (the shared fan-out) | built |
 | `hook_checkpoint_saved` | INFO | `hook`, `step` | `hooks/hf_trainer.py` | built |

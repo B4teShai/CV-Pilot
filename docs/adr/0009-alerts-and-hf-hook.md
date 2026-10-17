@@ -67,19 +67,30 @@ Option B, with these rules (each has a test):
    number in any notation or `localhost`, and certificate-authority overrides refused. The secret
    lives in one private attribute: not in `repr`, not in an error, not in a log event, not picklable.
 6. **One outbound call.** `notify/_http.py`: https only; the name is resolved once and every address
-   must be public (loopback, private, link-local, shared, multicast, reserved and IPv4 embedded in
-   IPv6 are refused, one bad address refuses the name) and the connection goes to the checked
+   must be public (an IPv4 address that is globally routable and not multicast, or an IPv6 address
+   inside `2000::/3`; mapped, 6to4 and NAT64 forms are judged by the IPv4 address they carry; one bad
+   address refuses the name; resolution runs in a helper thread inside the attempt deadline, so a
+   resolver that never answers cannot stall the worker) and the connection goes to the checked
    address, so a rebinding name cannot reach an internal service; no redirect is followed; only the
    status line and headers are read (a huge answer costs nothing); a total deadline of 5 s per
    attempt enforced by closing the socket (a slowly dripped answer cannot outlast it, and a cut-off
    answer is a timeout, not a success); at most two attempts (connection errors, 429 and 5xx).
-   Messages never contain the URL. Plain http to a loopback listener is allowed only with
-   `CVPILOT_ENV=dev`, which also skips the address policy.
+   Messages never contain the URL. Plain http is allowed only with `CVPILOT_ENV=dev`, which
+   replaces the address policy by its opposite (every resolved address must be loopback) and logs one
+   `insecure_dev_mode` warning per channel.
 7. **Never blocks, never raises.** The engine runs on the calling thread (cheap, bounded, wrapped);
    delivery runs on the channels' daemon workers behind a queue of 16 alerts; a call longer than 20 s
-   marks the channel stalled; failures are counted and logged once by exception type
-   (`alert_delivery_failed`), with `alert_delivery_summary` at the end. `finish` waits for the
-   channels at most 5 s (the existing close bound), after the forwarders. Only rank zero alerts.
+   marks the channel stalled, which only drops the alerts that arrive while that call lasts (the
+   channel recovers when it returns, so a later alert such as `run_failed` is not lost); a channel
+   that fails to construct stops `init` (fail closed); failures are counted and logged once by exception type
+   (`alert_delivery_failed`), with `alert_delivery_summary` at the end. `finish` waits up to 5 s for the
+   forwarders and then up to 12 s for the channels (one full delivery budget, so the end-of-run
+   alert is not abandoned in the middle of its retry); worst case about 17 s, only with dead
+   endpoints. The alert for a failed run is evaluated before the final flush, so a store that cannot
+   be written does not silence it, and an uncaught exception that ends the process sends it from the
+   exit handler. Only rank zero alerts. Every suppression is counted and the first of each rule and
+   reason is logged; `finish` writes one `alert_summary` event (queued, suppressed, delivered,
+   delivery_failed, dropped).
 8. **Dry run.** `cvpilot alerts check CONFIG [--project P --run RUN]` validates the file, builds the
    channels from the environment without sending, and replays a recorded run (stored scalars, the real
    baseline comparison for every snapshot, the final status) with a clock taken from the recording,
@@ -98,6 +109,7 @@ Option B, with these rules (each has a test):
 - **Per-user or per-rule routing**, escalation and acknowledgement: every rule goes to every channel.
 - **Alert history storage**: alerts are logged events, not stored rows; nothing can be tampered with.
 - **A templating language** or user-written rules (no code in the configuration).
+- **An alert for `sys.exit`, a kill or a lost machine**: nothing runs to send it.
 - **A hung-process alert** (no metric logged for N minutes): it cannot be seen from inside a hung
   process and a watchdog thread would be a new mechanism; the plateau rule is the in-process signal.
 - **GPU utilisation, `new_best` and `resumed` rules** of the first sketch.
@@ -109,13 +121,14 @@ Option B, with these rules (each has a test):
 
 ## Consequences
 
-- A dead, slow or hostile channel costs alerts (counted), never training time beyond the 5 s wait at
+- A dead, slow or hostile channel costs alerts (counted), never training time beyond the bounded wait at
   `finish`. The notebook `03_alerts_and_hf_trainer.ipynb` measures the step time with and without
   dead channels on a real `Trainer` run.
 - The loopback listener of tests and notebooks needs the development setting; production refuses http.
 - Slack and Telegram delivery was checked against a local listener and by unit tests; no real account
   was used.
-- The Hugging Face `Trainer` hides NaN training losses from callbacks by default (`logging_nan_inf_filter`), so `nan_loss` sees them only with that setting off; the evaluation loss is not filtered. Found while running notebook 03 and documented in the guide.
+- The Hugging Face `Trainer` replaces NaN training losses by the average of the earlier losses since the last log (0.0 when it logs every step) before callbacks see them (`logging_nan_inf_filter`), so `nan_loss` sees them only with that setting off; the evaluation loss is not filtered. Found while running notebook 03 and documented in the guide.
+- The dry run has no recording time for evaluation snapshots: each is replayed one rate-limit window after the previous event, in step order, and the command says so.
 - Metrics logged after `on_train_end` (a manual `trainer.evaluate()` after `train()`) are not recorded.
 
 ## Links
