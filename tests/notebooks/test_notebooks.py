@@ -12,7 +12,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOKS = ROOT / "notebooks"
-NAMES = ("01_tutorial.ipynb", "02_edge_cases.ipynb")
+NAMES = ("01_tutorial.ipynb", "02_edge_cases.ipynb", "03_alerts_and_hf_trainer.ipynb")
+ALERTS_NB = NAMES[2]
 MAX_BYTES = 1_500_000
 MAX_PNG = 8
 HEX64 = re.compile(r"\b[0-9a-f]{64}\b")
@@ -228,3 +229,88 @@ def test_a_notebook_without_any_download_cell_is_rejected() -> None:
     for cell in code_cells(nb):
         cell["source"] = source(cell).replace("urlopen", "open_url")
     assert download_problems(nb) == ["no download cell"]
+
+
+# -- notebook 03: the Hugging Face model pin, the alert messages and the step-time section ------
+
+HEX40 = re.compile(r"\b[0-9a-f]{40}\b")
+
+
+def all_code(name: str) -> str:
+    return "\n".join(source(c) for c in code_cells(load(name)))
+
+
+def all_output(name: str) -> str:
+    return "\n".join(output_text(c) for c in code_cells(load(name)))
+
+
+def test_the_hub_model_is_pinned_to_a_commit_and_a_digest_and_loaded_safely() -> None:
+    code = all_code(ALERTS_NB)
+    assert 'HF_REVISION = "65a5785d9156231087c481e0c7dd33a5ff6f7e3e"' in code
+    assert "/resolve/{HF_REVISION}" in code and "main" not in code.split("HF_BASE")[1][:80]
+    assert "1cf00ee468998c23d084361b02cffadabacb5074105564c596b8079f77ecb126" in code
+    assert "11a01bcc873444bb433140e5f30f3687356641ed923266d738eef1c3438f6d22" in code
+    assert "use_safetensors=True" in code and "trust_remote_code=False" in code
+    assert "trust_remote_code=True" not in code and "use_safetensors=False" not in code
+    assert 'HF_HUB_OFFLINE="1"' in code
+    assert "pytorch_model.bin" not in code and "tf_model.h5" not in code
+    assert HEX40.search(code)
+
+
+def test_the_hub_files_go_through_the_same_checked_fetch() -> None:
+    code = all_code(ALERTS_NB)
+    assert 'fetch(f"{HF_BASE}/model.safetensors", "resnet18-model.safetensors")' in code
+    assert 'fetch(f"{HF_BASE}/config.json", "resnet18-config.json")' in code
+    assert "blob == GIT_BLOB_ID" in code
+    out = all_output(ALERTS_NB)
+    assert out.count("(matches the pin)") >= 4
+
+
+def test_production_refuses_http_and_development_allows_a_local_listener() -> None:
+    out = all_output(ALERTS_NB)
+    assert "must be an https URL" in out and "exit code: 2" in out
+    assert "channel webhook: ready" in out and "nothing was sent" in out
+
+
+def test_the_received_alert_messages_are_in_the_outputs() -> None:
+    out = all_output(ALERTS_NB)
+    assert "Loss train/loss is NaN at step 8" in out
+    assert "has not improved for 12 logged values" in out
+    assert "worse than baseline tag:prod: headline_drop on mAP50_95" in out
+    assert "rule: nan_loss" in out and "mrkdwn: False" in out
+    assert "equal candidate" in out and "alerts received: 0" in out
+
+
+def test_the_step_time_table_covers_every_condition_with_at_least_three_repeats() -> None:
+    out = all_output(ALERTS_NB)
+    for label in (
+        "no alerts at all",
+        "healthy channel",
+        "closed port",
+        "never answers",
+        "redirects",
+    ):
+        rows = [
+            ln
+            for ln in out.splitlines()
+            if ln.startswith(label) and re.search(r"\s\d+\s+\d+\s", ln)
+        ]
+        assert len(rows) >= 3, (label, len(rows))
+    assert "VERDICT:" in out and "ms per step" in out
+
+
+def test_every_alert_condition_really_fired_alerts() -> None:
+    out = all_output(ALERTS_NB)
+    for ln in out.splitlines():
+        match = re.match(
+            r"(closed port|never answers|redirects|healthy channel)"
+            r"\s+\d+\s+\d+\s+[\d.]+\s+[\d.]+\s+(\d+)\s",
+            ln,
+        )
+        if match:
+            assert int(match.group(2)) >= 1, ln
+
+
+def test_the_alert_notebook_has_no_filler_left() -> None:
+    nb = load(ALERTS_NB)
+    assert "filled in after the run" not in "\n".join(source(c) for c in nb["cells"])
