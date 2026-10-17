@@ -352,8 +352,8 @@ run behind `cvpilot alerts check`. Rules: `nan_loss`, `loss_spike`, `no_progress
 
 ```python notest
 engine = AlertEngine(config, project=..., run_id=..., deliver=fanout_submit, clock=time.monotonic)
-engine.on_points({"train/loss": 0.4}, step=10)   # never raises
-engine.on_eval(snapshot)                         # the real baseline comparison
+engine.on_points({"train/loss": 0.4}, step=10)  # never raises
+engine.on_eval(snapshot)  # the real baseline comparison
 engine.on_finish("failed")
 ```
 
@@ -603,12 +603,12 @@ Channel adapters: `webhook`, `slack` (a Slack-style incoming webhook) and `teleg
 under `cvpilot.channels`. An email channel is not built (ADR-0009).
 
 ```python notest
-class Channel(Protocol):     # core/schema.py
+class Channel(Protocol):  # core/schema.py
     name: str
     requires: tuple[str, ...]
 
     def open(self, meta: RunMeta, repro: Repro) -> None: ...
-    def send(self, alerts: Sequence[Alert]) -> None: ...   # raises when delivery failed
+    def send(self, alerts: Sequence[Alert]) -> None: ...  # raises when delivery failed
     def close(self, status: RunStatus) -> None: ...
 ```
 

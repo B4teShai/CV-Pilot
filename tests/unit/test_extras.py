@@ -31,7 +31,9 @@ def test_no_published_extra_is_empty() -> None:
 
 def test_the_hf_extra_brings_the_framework_with_a_verified_lower_bound() -> None:
     (requirement,) = EXTRAS["hf"]
-    assert requirement.startswith("transformers[" + "to" + "rch]>=4.")  # the hook needs the trainer to run
+    assert requirement.startswith(
+        "transformers[" + "to" + "rch]>=4."
+    )  # the hook needs the trainer to run
 
 
 def test_the_remote_extras_bring_their_backend() -> None:
