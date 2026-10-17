@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import os
 import platform
+import sys
 import threading
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
@@ -40,6 +41,8 @@ if TYPE_CHECKING:
 _state_lock = threading.Lock()
 _active: Run | None = None
 _atexit_registered = False
+_uncaught = False
+_hook_installed = False
 
 
 class Run:
@@ -261,6 +264,8 @@ def init(
             channels=alert_channels,
         )
         _active = Run(handle)
+        if alert_config is not None:
+            _install_crash_marker()
         if not _atexit_registered:
             atexit.register(_flush_active_at_exit)
             _atexit_registered = True
@@ -471,13 +476,37 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_forget_active_in_child)
 
 
+def _install_crash_marker() -> None:
+    """Remember that an uncaught exception ended the main thread, so the exit handler can send
+    the ``run_failed`` alert for a run that was never finished (no ``with`` block, no
+    ``finish``). ``sys.exit`` does not pass through here and is not treated as a crash."""
+    global _hook_installed
+    if _hook_installed:
+        return
+    _hook_installed = True
+    previous = sys.excepthook
+
+    def hook(exc_type: type[BaseException], exc: BaseException, tb: TracebackType | None) -> None:
+        global _uncaught
+        _uncaught = True
+        previous(exc_type, exc, tb)
+
+    sys.excepthook = hook
+
+
 def _flush_active_at_exit() -> None:
-    """Best effort at interpreter exit: write buffered points; the status stays ``running``."""
+    """Best effort at interpreter exit: write buffered points; the status stays ``running``.
+    After an uncaught exception the ``run_failed`` alert is sent too (bounded by the channel
+    close timeout)."""
+    global _active
     run = _active
     if run is None:
         return
     try:
-        run.abandon()
+        run.handle.abandon(crashed=_uncaught)
+        with _state_lock:
+            if _active is run:
+                _active = None
     except Exception as exc:  # noqa: BLE001  # exit hook: report, never raise during shutdown
         get_logger("cvpilot.api").warning(
             "exit_flush_failed", run_id=run.run_id, error_type=type(exc).__name__

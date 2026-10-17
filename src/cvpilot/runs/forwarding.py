@@ -50,7 +50,11 @@ from cvpilot.registry import forwarders as default_registry
 NOTIFY_QUEUE = 16
 """Alerts queued per channel (an alert is a batch of one); a full queue drops, counted."""
 NOTIFY_CALL_TIMEOUT_S = 20.0
-"""A channel call running longer than this (two attempts of 5 s each fit) marks it stalled."""
+"""A channel call running longer than this (two attempts of 5 s each, the pause between them and
+name resolution all fit inside it) marks the channel stalled until that call returns."""
+NOTIFY_CLOSE_TIMEOUT_S = 12.0
+"""Longest ``close`` waits for the channels: one full delivery budget (two 5 s attempts and the
+pause), so an alert queued by ``finish`` is not abandoned in the middle of its retry."""
 QUEUE_BATCHES = 256
 """Batches queued per forwarder; a batch holds at most ``FLUSH_POINTS`` (10 000) points."""
 MAX_QUEUED_POINTS = 200_000
@@ -76,14 +80,22 @@ class Delivery:
     """The log field naming the adapter (``forwarder`` or ``channel``)."""
     unit: str
     """What a batch holds, in the log field names (``points`` or ``alerts``)."""
+    fail_closed: bool = False
+    """True: an adapter that fails to construct stops ``init`` (a silent alert path is worse than
+    none); False: it is skipped with one warning (a tracker must not stop training)."""
+    recover: bool = False
+    """False: a stalled adapter is disabled for the rest of the run (trackers). True: it only
+    drops batches while the stuck call lasts and works again when that call returns (channels:
+    one stuck delivery must not silence every later alert, the end-of-run one included)."""
 
 
 FORWARD = Delivery(
     "log_points", "forward_failed", "forward_summary", "cvpilot.forward", "forwarder", "points"
 )
 NOTIFY = Delivery(
-    "send", "alert_delivery_failed", "alert_delivery_summary", "cvpilot.notify", "channel", "alerts"
-)
+    "send", "alert_delivery_failed", "alert_delivery_summary", "cvpilot.notify", "channel",
+    "alerts", recover=True, fail_closed=True,
+)  # fmt: skip
 
 Batch = tuple[Any, ...]
 """Metric points for a forwarder, alerts for a channel."""
@@ -98,6 +110,8 @@ class ForwarderStats:
     """Points in batches whose ``log_points`` call failed."""
     adapter_dropped_points: int = 0
     """Points an adapter itself could not send (for example W&B steps that went backwards)."""
+    sent_batches: int = 0
+    """Batches whose adapter call returned without an error (for a channel: alerts delivered)."""
     disabled_reason: str | None = None
     abandoned: bool = False
 
@@ -140,6 +154,10 @@ def resolve_forwarders(
         except CvpilotError:
             raise
         except Exception as exc:  # noqa: BLE001  # plugin boundary: isolate, count, log once
+            if delivery.fail_closed:  # an alert channel that cannot be built is a stopped init
+                raise CvpilotError(
+                    f"{delivery.label} {name!r} could not be constructed ({type(exc).__name__})"
+                ) from None
             get_logger(delivery.logger).warning(
                 delivery.failed_event,
                 **{delivery.label: name},
@@ -219,11 +237,13 @@ class _Worker:
 
     def offer(self, batch: Batch) -> None:
         busy = self.busy_since
-        if (
-            self.stats.disabled_reason is None
-            and busy is not None
-            and self._fan.clock() - busy > self._fan.call_timeout_s
-        ):
+        stuck = busy is not None and self._fan.clock() - busy > self._fan.call_timeout_s
+        if stuck and self._fan.delivery.recover:
+            # a channel: drop while this one call is stuck, accept again once it returns
+            self._note("stalled", n_points=len(batch))
+            self._drop(batch)
+            return
+        if self.stats.disabled_reason is None and stuck:
             self._disable("stalled")
             self._note("stalled", n_points=len(batch))
         if self.stats.disabled_reason is not None:
@@ -250,11 +270,19 @@ class _Worker:
     # -- worker thread ----------------------------------------------------------------------
 
     def _call(
-        self, fn: Callable[[], None], *, n_points: int = 0, reason: str = "exception"
+        self,
+        fn: Callable[[], None],
+        *,
+        n_points: int = 0,
+        reason: str = "exception",
+        counted: bool = False,
     ) -> bool:
         self.busy_since = self._fan.clock()
         try:
             fn()
+            if counted:
+                with self._lock:
+                    self.stats.sent_batches += 1
             return True
         except Exception as exc:  # noqa: BLE001  # adapter boundary: count, log once, go on
             with self._lock:
@@ -312,7 +340,7 @@ class _Worker:
                 self._drop(batch)
             else:
                 send = getattr(self.adapter, self._fan.delivery.method)
-                self._call(partial(send, batch), n_points=len(batch))
+                self._call(partial(send, batch), n_points=len(batch), counted=True)
                 self._sync_adapter_drops()
             with self._lock:
                 self.pending_points -= len(batch)
@@ -429,6 +457,7 @@ def notify_fanout(channels_: Sequence[Channel], meta: RunMeta, repro: Repro, **k
         "queue_batches": NOTIFY_QUEUE,
         "max_queued_points": NOTIFY_QUEUE,
         "call_timeout_s": NOTIFY_CALL_TIMEOUT_S,
+        "close_timeout_s": NOTIFY_CLOSE_TIMEOUT_S,
         "delivery": NOTIFY,
     }
     options.update(kw)

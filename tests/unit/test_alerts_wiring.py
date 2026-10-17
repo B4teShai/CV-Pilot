@@ -20,6 +20,7 @@ from support import write_eval_files
 
 from cvpilot import api, runs
 from cvpilot.alerts import engine as alert_engine
+from cvpilot.alerts.config import parse_alert_config
 from cvpilot.compare import baselines
 from cvpilot.core.errors import AlertConfigError
 from cvpilot.eval.files import load_ground_truth, load_predictions
@@ -243,22 +244,39 @@ def test_a_dead_channel_never_fails_the_run_or_leaks(
     assert LEAK_MARKER not in json.dumps(out)
 
 
-def test_a_channel_that_never_answers_does_not_slow_log_and_finish_is_bounded(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_channel_that_never_answers_cannot_slow_log_even_with_its_queue_saturated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A fake clock steps past the rate limit on every call, so every NaN is a new alert: the
+    channel's queue fills (16) and overflows (the per-run cap is 20), and no call may wait."""
+    from support import meta_repro
+
+    monkeypatch.setattr(forwarding, "NOTIFY_CLOSE_TIMEOUT_S", 0.3)
     monkeypatch.setattr(forwarding, "CLOSE_TIMEOUT_S", 0.3)
     use_channels(monkeypatch, blocking=BlockingChannel)
-    run = api.init("proj", task="detection", alerts={**CONFIG, "channels": ["blocking"]})
+    meta, repro = meta_repro()
+    ticks = iter(range(10**6))
+    config = parse_alert_config({**CONFIG, "channels": ["blocking"], "rate_limit_s": 1})
+    from cvpilot.registry import channels as channel_registry
+
+    channel = channel_registry.get("blocking")()
+    handle = runs.start_run(
+        meta, repro, store_dir=tmp_path / "s", alerts=config, channels=[channel],
+        clock=lambda: float(next(ticks)) * 2.0,
+    )  # fmt: skip
     worst = 0.0
-    for step in range(300):
+    for step in range(60):
         start = time.perf_counter()
-        run.log({"loss": float("nan")}, step=step)
+        handle.log({"loss": float("nan")}, step=step)
         worst = max(worst, time.perf_counter() - start)
-    assert worst < 0.5
+    assert worst < 0.2
+    worker = handle._notify._workers[0]  # type: ignore[union-attr]
+    assert handle._alerts.stats.queued > 16  # type: ignore[union-attr]
+    assert worker.stats.dropped_batches > 0, "the queue never overflowed: the test proves nothing"
     start = time.perf_counter()
-    run.finish("failed")
+    handle.finish("failed")
     assert time.perf_counter() - start < 2.0
-    RecordingChannel.instances[0].release.set()
+    channel.release.set()
 
 
 def test_an_engine_that_raises_cannot_break_log(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -336,3 +354,93 @@ def test_a_comparison_that_cannot_be_made_alerts_instead_of_staying_silent(
     run.finish()
     (row,) = RecordingChannel.instances[0].sent
     assert row[0] == "eval_regression" and "could not be compared with baseline tag:prod" in row[2]
+
+
+# -- fix wave: terminal alerts survive a failed flush, summaries, crashes outside a with block -----
+
+
+def test_a_failed_flush_in_finish_does_not_swallow_the_run_failed_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cvpilot.core.errors import StoreError
+
+    use_channels(monkeypatch, recording=RecordingChannel)
+    run = api.init("proj", task="detection", alerts=CONFIG)
+
+    def broken_flush() -> None:
+        raise StoreError("disk full")
+
+    healthy_flush = run.handle.flush
+    monkeypatch.setattr(run.handle, "flush", broken_flush)
+    with pytest.raises(StoreError):
+        run.finish("failed")
+    monkeypatch.setattr(run.handle, "flush", healthy_flush)
+    run.abandon()  # the run is still open after the failed finish: release it
+    chan = RecordingChannel.instances[0]
+    deadline = time.time() + 5
+    while time.time() < deadline and not chan.sent:
+        time.sleep(0.02)
+    assert [r for r, _, _ in chan.sent] == ["run_failed"]
+
+
+def test_finish_writes_one_alert_summary_with_queued_suppressed_and_delivered(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    use_channels(monkeypatch, recording=RecordingChannel, failing=FailingChannel)
+    cfg = {**CONFIG, "channels": ["recording", "failing"], "rate_limit_s": 60}
+    run = api.init("proj", task="detection", alerts=cfg)
+    for step in range(5):
+        run.log({"loss": float("nan")}, step=step)
+    run.finish("failed")
+    (summary,) = [e for e in events(capsys) if e["message"] == "alert_summary"]
+    assert summary["queued"] == 2 and summary["suppressed"] == 4  # nan_loss once, run_failed
+    assert summary["delivered"] == 2 and summary["delivery_failed"] == 2
+    assert summary["dropped"] == 0 and summary["rule_failures"] == 0 and summary["run_id"]
+
+
+def test_no_alert_summary_without_alerts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run = api.init("proj", task="detection")
+    run.finish()
+    assert not [e for e in events(capsys) if e["message"] == "alert_summary"]
+
+
+def _crash_run(tmp_path: Path, body: str) -> tuple[Any, int]:
+    import subprocess
+    import sys
+
+    from notify_support import Listener
+
+    listener = Listener()
+    code = (
+        "import cvpilot\n"
+        "cvpilot.init('p', task='detection', alerts={'channels': ['webhook'],"
+        " 'rules': [{'rule': 'run_failed'}]})\n" + body
+    )
+    env = {
+        "PATH": __import__("os").environ["PATH"],
+        "CVPILOT_ENV": "dev",
+        "CVPILOT_STORE_DIR": str(tmp_path / "s"),
+        "CVPILOT_ALERT_WEBHOOK_URL": listener.url + "/hook",
+        "GIT_CEILING_DIRECTORIES": str(tmp_path.parent),
+    }
+    done = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", code], env=env, cwd=tmp_path, capture_output=True, timeout=120,
+        check=False,
+    )  # fmt: skip
+    time.sleep(0.2)
+    received = list(listener.requests)
+    listener.close()
+    return received, done.returncode
+
+
+def test_an_uncaught_exception_outside_a_with_block_still_sends_run_failed(tmp_path: Path) -> None:
+    received, code = _crash_run(tmp_path, "raise RuntimeError('boom')\n")
+    assert code == 1
+    assert [r.json()["rule"] for r in received] == ["run_failed"]
+
+
+def test_a_process_that_simply_ends_without_finishing_sends_nothing(tmp_path: Path) -> None:
+    received, code = _crash_run(tmp_path, "pass\n")
+    assert code == 0 and received == []

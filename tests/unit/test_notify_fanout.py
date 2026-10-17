@@ -169,3 +169,62 @@ def test_channels_resolve_through_their_own_registry(monkeypatch: pytest.MonkeyP
     assert isinstance(chan, Chan)
     with pytest.raises(CvpilotError, match="cvpilot.channels"):
         fw.resolve_channels(["nope"])
+
+
+def test_a_stalled_channel_recovers_when_the_call_finishes_and_later_alerts_still_go_out() -> None:
+    slow, good = Chan(), Chan()
+    slow.release.clear()
+    fan = make(slow, good, call_timeout_s=0.2, close_timeout_s=3)
+    fan.submit([alert(1)])
+    assert slow.entered.wait(5)
+    time.sleep(0.35)  # the call has now run longer than the stall limit
+    fan.submit([alert(2)])  # dropped and counted: the channel is stuck right now
+    slow.release.set()  # the call returns
+    deadline = time.time() + 5
+    while time.time() < deadline and ("send", ["alert 1"]) not in slow.calls:
+        time.sleep(0.02)
+    time.sleep(0.2)
+    fan.submit([alert(3)])  # a later alert, for example the end-of-run one, is not lost
+    stats = fan.close("failed")
+    sent = [rows for kind, rows in slow.calls if kind == "send"]
+    assert ["alert 1"] in sent and ["alert 3"] in sent and ["alert 2"] not in sent
+    assert stats["chan"].dropped_batches == 1 and stats["chan"].disabled_reason is None
+
+
+def test_forwarders_keep_their_permanent_stall_rule() -> None:
+    assert fw.FORWARD.recover is False and fw.NOTIFY.recover is True
+
+
+def test_delivered_batches_are_counted_separately_from_queued_ones() -> None:
+    chan, bad = Chan(), Failing()
+    fan = make(chan, bad)
+    for n in range(3):
+        fan.submit([alert(n)])
+    stats = fan.close("finished")
+    assert stats["chan"].sent_batches == 3 and stats["failing"].sent_batches == 0
+    assert stats["failing"].failed_calls == 3
+
+
+def test_a_channel_that_fails_to_construct_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from importlib.metadata import EntryPoint
+
+    from cvpilot import registry
+    from cvpilot.core.errors import CvpilotError
+
+    class Broken:
+        name = "broken"
+        requires: tuple[str, ...] = ()
+
+        def __init__(self, **_kw: Any) -> None:
+            raise RuntimeError("plugin bug https://hooks.invalid/" + LEAK_MARKER)
+
+    globals()["Broken"] = Broken
+    points = {"broken": EntryPoint("broken", "test_notify_fanout:Broken", "cvpilot.channels")}
+    monkeypatch.setattr(
+        registry.channels, "_lookup",
+        lambda *, group: list(points.values()) if group == "cvpilot.channels" else [],
+    )  # fmt: skip
+    monkeypatch.setattr(registry.channels, "_loaded", {})
+    with pytest.raises(CvpilotError) as info:
+        fw.resolve_channels(["broken"])
+    assert "broken" in str(info.value) and LEAK_MARKER not in str(info.value)

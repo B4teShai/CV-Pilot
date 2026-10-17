@@ -401,6 +401,10 @@ class RunHandle:
             raise InvalidTransitionError(f"run status cannot change to {status}")
         if self._closed:
             raise RunClosedError(f"run {self.run_id} is already finished")
+        # before the flush: a store that cannot be written must not also silence the alert that
+        # says the run failed
+        if self._alerts is not None:
+            self._alert(lambda alerts: alerts.on_finish(status))
         self.flush()
         self._store.compact_metrics(self.run_id)
         self._store.set_status(self.run_id, status, datetime.now(timezone.utc))
@@ -414,22 +418,33 @@ class RunHandle:
             n_points=self._n_flushed,
             duration_ms=round((self._clock() - self._started) * 1000, 1),
         )
-        if self._alerts is not None:
-            self._alert(lambda alerts: alerts.on_finish(status))
-        if self._fanout is not None:
-            self._fanout.close(status)  # waits at most CLOSE_TIMEOUT_S
-        if self._notify is not None:
-            self._notify.close(status)  # waits at most CLOSE_TIMEOUT_S
+        self._close_delivery(status)
         self._store.close()
 
-    def abandon(self) -> None:
-        """Flush what is buffered and release the store without changing the status."""
+    def _close_delivery(self, status: RunStatus) -> None:
+        """Close the forwarders (at most ``CLOSE_TIMEOUT_S``), then the alert channels (at most
+        ``NOTIFY_CLOSE_TIMEOUT_S``), and write ``alert_summary`` when alerts were configured."""
+        if self._fanout is not None:
+            self._fanout.close(status)
+        channel_stats = self._notify.close(status) if self._notify is not None else {}
+        if self._alerts is not None:
+            totals = {
+                "delivered": sum(st.sent_batches for st in channel_stats.values()),
+                "delivery_failed": sum(st.failed_calls for st in channel_stats.values()),
+                "dropped": sum(st.dropped_batches for st in channel_stats.values()),
+            }
+            self.emit("info", "alert_summary", **self._alerts.summary(), **totals)
+
+    def abandon(self, *, crashed: bool = False) -> None:
+        """Flush what is buffered and release the store without changing the status.
+
+        ``crashed`` (the process is ending because of an uncaught exception) also evaluates the
+        ``run_failed`` alert; the status stays ``running``, as for any abandoned run."""
         if not self._closed:
+            if crashed and self._alerts is not None:
+                self._alert(lambda alerts: alerts.on_finish("failed"))
             self.flush()
-            if self._fanout is not None:
-                self._fanout.close(self._status)
-            if self._notify is not None:
-                self._notify.close(self._status)
+            self._close_delivery(self._status)
             self._store.close()
             self._closed = True
 
