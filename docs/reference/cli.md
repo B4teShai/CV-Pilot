@@ -352,3 +352,28 @@ kind is never deleted and at least one is always kept (``--keep-*`` of 0 is refu
 | `--dry-run` | flag |  | Only say what would go. |
 | `--project` | str |  | Project whose run store anchors the digests. |
 | `--require-trust` | one of `any`, `anchored`, `authenticated` |  | any, anchored or authenticated (see the help above). |
+
+## `cvpilot alerts`
+
+```text
+cvpilot alerts [OPTIONS] COMMAND [ARGS]...
+```
+
+Alert rules.
+
+### `cvpilot alerts check`
+
+```text
+cvpilot alerts check [OPTIONS] {config}
+```
+
+Validate CONFIG, check its channels and replay a run against it; nothing is sent.
+
+| Argument | Type | Description |
+|---|---|---|
+| `config` | file | The alert configuration (JSON). |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `--project` | str |  | Project name (default: $CVPILOT_PROJECT). |
+| `--run` | str |  | Replay this recorded run. |

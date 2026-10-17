@@ -45,7 +45,7 @@
     },
     "init": {
       "kind": "function",
-      "signature": "(project: 'str | None' = None, *, task: 'Task', name: 'str | None' = None, config: 'Mapping[str, Any] | None' = None, dataset_uri: 'str | Path | None' = None, seed: 'int | None' = None, framework: 'str | None' = None, resume_from: 'str | None' = None, store_dir: 'str | Path | None' = None, forward_to: 'Sequence[str] | None' = None) -> 'Run'"
+      "signature": "(project: 'str | None' = None, *, task: 'Task', name: 'str | None' = None, config: 'Mapping[str, Any] | None' = None, dataset_uri: 'str | Path | None' = None, seed: 'int | None' = None, framework: 'str | None' = None, resume_from: 'str | None' = None, store_dir: 'str | Path | None' = None, forward_to: 'Sequence[str] | None' = None, alerts: 'str | Path | Mapping[str, Any] | None' = None) -> 'Run'"
     },
     "log": {
       "kind": "function",

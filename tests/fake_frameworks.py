@@ -108,3 +108,64 @@ def make_yolo_trainer(
     )
     trainer.validator = validator  # type: ignore[attr-defined]
     return trainer
+
+
+# -- the Hugging Face ``Trainer`` ---------------------------------------------------------------
+
+HF_PACKAGE = "transformers"
+
+
+def install_fake_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register a fake ``transformers`` module with the base class the hook subclasses."""
+
+    class TrainerCallback:
+        pass
+
+    module = types.ModuleType(HF_PACKAGE)
+    module.TrainerCallback = TrainerCallback  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, HF_PACKAGE, module)
+
+
+class FakeHFTrainer:
+    """Has ``add_callback``/``remove_callback``/``train`` like the framework's ``Trainer``."""
+
+    def __init__(self, *, rank_zero: bool = True, fail_with: BaseException | None = None) -> None:
+        self.callbacks: list[Any] = []
+        self.state = types.SimpleNamespace(
+            global_step=0, epoch=0.0, is_world_process_zero=rank_zero
+        )
+        self.args = object()
+        self.control = object()
+        self.fail_with = fail_with
+        self.train_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def add_callback(self, callback: Any) -> None:
+        self.callbacks.append(callback)
+
+    def remove_callback(self, callback: Any) -> None:
+        self.callbacks.remove(callback)
+
+    def fire(self, event: str, **kwargs: Any) -> None:
+        for callback in list(self.callbacks):
+            getattr(callback, event)(self.args, self.state, self.control, **kwargs)
+
+    def at(self, step: int) -> FakeHFTrainer:
+        self.state.global_step = step
+        return self
+
+    def train(self, *args: Any, **kwargs: Any) -> str:
+        """Like the framework: begin, two logged steps, an evaluation, a save, then end or crash."""
+        self.train_calls.append((args, kwargs))
+        self.fire("on_train_begin")
+        for step in (1, 2):
+            self.at(step).fire("on_log", logs={"loss": 1.0 / step, "epoch": float(step)})
+        self.at(2).fire("on_evaluate", metrics={"eval_loss": 0.5, "eval_accuracy": 0.9})
+        self.fire("on_save")
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.fire("on_train_end")
+        return "output"
+
+
+FakeHFTrainer.__module__ = f"{HF_PACKAGE}.trainer"
+FakeHFTrainer.__name__ = "Trainer"

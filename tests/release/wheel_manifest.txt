@@ -2,6 +2,7 @@ cvpilot/__init__.py
 cvpilot/alerts/__init__.py
 cvpilot/alerts/config.py
 cvpilot/alerts/engine.py
+cvpilot/alerts/replay.py
 cvpilot/api.py
 cvpilot/capture/__init__.py
 cvpilot/capture/env.py
@@ -17,6 +18,7 @@ cvpilot/ckpt/rng.py
 cvpilot/ckpt/serializers.py
 cvpilot/ckpt/state.py
 cvpilot/cli/__init__.py
+cvpilot/cli/alerts_cmds.py
 cvpilot/cli/app.py
 cvpilot/cli/baseline_cmds.py
 cvpilot/cli/ckpt_cmds.py

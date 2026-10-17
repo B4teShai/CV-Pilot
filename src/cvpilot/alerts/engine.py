@@ -56,6 +56,7 @@ from cvpilot.alerts.config import (
     NanLossSpec,
     NoProgressSpec,
 )
+from cvpilot.core.errors import CvpilotError
 from cvpilot.core.schema import MAX_ALERT_TEXT, MAX_STEP, Alert, EvalSnapshot
 from cvpilot.core.text import safe_text
 from cvpilot.logging import get_logger
@@ -394,7 +395,7 @@ class AlertEngine:
             reason = getattr(exc, "reason", None)
             if not (isinstance(reason, str) and _REASON.fullmatch(reason)):
                 reason = type(exc).__name__ if _REASON.fullmatch(type(exc).__name__) else "error"
-            if not hasattr(exc, "reason"):
+            if not isinstance(exc, CvpilotError):  # an expected refusal is not a rule bug
                 self.stats.rule_failures += 1
                 self._report_once(
                     "failed:eval_regression", "warning", "alert_rule_failed",

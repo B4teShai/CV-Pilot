@@ -18,6 +18,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from cvpilot import runs
+from cvpilot.alerts.config import AlertConfig, load_alert_config, parse_alert_config
 from cvpilot.core.errors import (
     CvpilotError,
     HookNotFoundError,
@@ -161,6 +162,7 @@ def init(
     resume_from: str | None = None,
     store_dir: str | Path | None = None,
     forward_to: Sequence[str] | None = None,
+    alerts: str | Path | Mapping[str, Any] | None = None,
 ) -> Run:
     """Start a run and make it the active run of this process.
 
@@ -176,6 +178,11 @@ def init(
         forward_to: forwarder names (``"mlflow"``, ``"wandb"``, ``"trackio"`` or a plugin) that
             receive every logged scalar on worker threads; defaults to ``CVPILOT_FORWARD_TO``.
             A tracker that is down or slow never raises into or blocks the training loop.
+        alerts: alert rules for this run: the path of a JSON file or the same document as a
+            mapping (see the user guide); defaults to the file named by ``CVPILOT_ALERTS``.
+            Alerts are evaluated on ``log``, ``log_eval`` and ``finish`` and delivered by the
+            configured channels on worker threads; a dead or slow channel never raises into or
+            blocks the training loop.
 
     Raises:
         SettingsError: an invalid ``CVPILOT_*`` variable.
@@ -183,8 +190,10 @@ def init(
         InvalidResumeError, RunNotFoundError: ``resume_from`` cannot be resumed or is unknown.
         FileNotFoundError, NotADirectoryError: ``dataset_uri`` is unusable.
         StoreError: the store cannot be created or written.
-        UnknownPluginError, MissingExtraError: a forwarder is not registered or its extra is
-            missing (raised before any run is created).
+        UnknownPluginError, MissingExtraError: a forwarder or channel is not registered or its
+            extra is missing (raised before any run is created).
+        AlertConfigError, ForwardConfigError: the alert configuration is invalid, or a channel's
+            endpoint or credential (from the environment) is missing or unsafe (before any run).
     """
     global _active, _atexit_registered
     settings = load_settings()
@@ -204,6 +213,16 @@ def init(
             names = ()  # only rank zero forwards: one tracker run, one copy of every point
         chosen = runs.resolve_forwarders(
             names, allow_insecure=settings.env == "dev", allowed_hosts=settings.forward_hosts
+        )
+        alert_config = _alert_config(alerts, settings.alerts)
+        alert_channels = (
+            runs.resolve_channels(
+                alert_config.channels,
+                allow_insecure=settings.env == "dev",
+                allowed_hosts=settings.forward_hosts,
+            )
+            if alert_config is not None
+            else []
         )
         run_id = new_run_id()
         captured = capture_repro(
@@ -233,13 +252,35 @@ def init(
                 schema_version=SCHEMA_VERSION,
             )
         handle = runs.start_run(
-            meta, captured.repro, store_dir=root, git_diff=captured.git_diff, forwarders=chosen
+            meta,
+            captured.repro,
+            store_dir=root,
+            git_diff=captured.git_diff,
+            forwarders=chosen,
+            alerts=alert_config,
+            channels=alert_channels,
         )
         _active = Run(handle)
         if not _atexit_registered:
             atexit.register(_flush_active_at_exit)
             _atexit_registered = True
         return _active
+
+
+def _alert_config(
+    given: str | Path | Mapping[str, Any] | None, from_settings: Path | None
+) -> AlertConfig | None:
+    """The alert configuration of this run (the argument, else ``CVPILOT_ALERTS``), or None.
+
+    Only rank zero alerts: one alert per event, as for the tracker forwarders.
+    """
+    source = given if given is not None else from_settings
+    if source is None:
+        return None
+    if not is_rank_zero():
+        get_logger("cvpilot.api").info("alert_skipped_rank")
+        return None
+    return parse_alert_config(source) if isinstance(source, Mapping) else load_alert_config(source)
 
 
 def _framework_version(requires: Sequence[str]) -> str | None:

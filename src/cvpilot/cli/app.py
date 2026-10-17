@@ -9,6 +9,7 @@ from typing import Annotated, NoReturn
 import typer
 
 from cvpilot import __version__
+from cvpilot.cli.alerts_cmds import alerts_app
 from cvpilot.cli.baseline_cmds import baseline_app
 from cvpilot.cli.ckpt_cmds import ckpt_app
 from cvpilot.cli.eval_cmds import eval_command
@@ -51,6 +52,7 @@ def _root(
 app.add_typer(runs_app, name="runs")
 app.add_typer(baseline_app, name="baseline")
 app.add_typer(ckpt_app, name="ckpt")
+app.add_typer(alerts_app, name="alerts")
 app.command("repro")(repro_command)
 app.command("eval")(eval_command)
 app.command("compare")(compare_command)

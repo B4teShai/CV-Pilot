@@ -39,6 +39,7 @@ _FIELDS: dict[str, tuple[str, Callable[[str], str]]] = {
     "store_dir": ("STORE_DIR", str),
     "forward_to": ("FORWARD_TO", str),
     "forward_hosts": ("FORWARD_HOSTS", str),
+    "alerts": ("ALERTS", str),
     "checkpoint_dir": ("CHECKPOINT_DIR", str),
     "checkpoint_remote": ("CHECKPOINT_REMOTE", str),
     "ckpt_require_trust": ("CKPT_REQUIRE_TRUST", str.lower),
@@ -129,6 +130,7 @@ class Settings(BaseModel, frozen=True):
     store_dir: Path | None = None
     forward_to: tuple[str, ...] = ()
     forward_hosts: tuple[str, ...] = ()
+    alerts: Path | None = None
     checkpoint_dir: Path | None = None
     checkpoint_remote: str | None = None
     ckpt_require_trust: Literal["authenticated", "anchored", "any"] | None = None
@@ -169,6 +171,19 @@ class Settings(BaseModel, frozen=True):
         if path.exists() and not path.is_dir():
             raise ValueError("must be a directory")
         return path
+
+    @field_validator("alerts", mode="before")
+    @classmethod
+    def _alerts_file(cls, value: Any) -> Path | None:
+        if value is None:
+            return None
+        text = str(value)
+        if not text.strip() or "\x00" in text:
+            raise ValueError("must be a non-empty path")
+        try:
+            return Path(text).expanduser().resolve()
+        except (RuntimeError, OSError) as exc:
+            raise ValueError("path cannot be resolved") from exc
 
     @property
     def effective_log_level(self) -> Level:

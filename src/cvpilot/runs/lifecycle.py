@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
+from cvpilot.alerts.engine import AlertEngine
 from cvpilot.core.errors import (
     DuplicateMetricError,
     InvalidResumeError,
@@ -33,8 +34,10 @@ from cvpilot.core.errors import (
 )
 from cvpilot.core.schema import (
     MAX_STEP,
+    Alert,
     Artifact,
     ArtifactKind,
+    Channel,
     CheckpointKind,
     CheckpointManifest,
     Forwarder,
@@ -46,11 +49,12 @@ from cvpilot.core.schema import (
     is_terminal,
 )
 from cvpilot.logging import bind_request_id, ensure_configured, get_logger
-from cvpilot.runs.forwarding import Fanout
+from cvpilot.runs.forwarding import Fanout, notify_fanout
 from cvpilot.runs.queries import open_existing, open_store
 from cvpilot.settings import load_settings
 
 if TYPE_CHECKING:
+    from cvpilot.alerts.config import AlertConfig
     from cvpilot.core.schema import EvalSnapshot
     from cvpilot.eval import AnnotationTable, PredictionTable
 
@@ -109,6 +113,8 @@ class RunHandle:
         flush_interval_s: float = FLUSH_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
         fanout: Fanout | None = None,
+        alerts: AlertEngine | None = None,
+        notify: Fanout | None = None,
     ) -> None:
         if flush_points < 1:
             raise ValueError("flush_points must be positive")
@@ -129,6 +135,8 @@ class RunHandle:
         self._seq = itertools.count(1)
         self._status: RunStatus = meta.status
         self._fanout = fanout
+        self._alerts = alerts
+        self._notify = notify
         self._orphaned = False
         _HANDLES.add(self)
 
@@ -158,6 +166,8 @@ class RunHandle:
         self._closed = True
         self._buffer = []
         self._fanout = None
+        self._alerts = None
+        self._notify = None
         _ORPHANED_STORES.append(self._store)
 
     def _closed_error(self) -> RunClosedError:
@@ -242,8 +252,20 @@ class RunHandle:
                 len(self._buffer) >= self._flush_points
                 or self._clock() - self._last_flush >= self._flush_interval_s
             )
+        if self._alerts is not None:
+            self._alert(lambda alerts: alerts.on_points({p.key: p.value for p in batch}, step_i))
         if due:
             self.flush()
+
+    def _alert(self, call: Callable[[AlertEngine], None]) -> None:
+        """Run one engine call; the engine does not raise, and nothing may reach the caller."""
+        alerts = self._alerts
+        if alerts is None:
+            return
+        try:
+            call(alerts)
+        except Exception as exc:  # noqa: BLE001  # the training loop must never see an alert bug
+            self.emit("warning", "alert_engine_failed", error_type=type(exc).__name__)
 
     def flush(self) -> None:
         """Write the buffered points as one batch. Points are kept if the write fails."""
@@ -304,7 +326,7 @@ class RunHandle:
             raise self._closed_error()
         from cvpilot.eval.record import record_eval  # numpy is only needed once eval is used
 
-        return record_eval(
+        snapshot = record_eval(
             self._store,
             self.meta,
             preds,
@@ -318,6 +340,9 @@ class RunHandle:
             emit=self.emit,
             provenance=provenance,
         )
+        if self._alerts is not None:
+            self._alert(lambda alerts: alerts.on_eval(snapshot))
+        return snapshot
 
     # -- checkpoints (what ``cvpilot.ckpt`` needs from a run) ---------------------
 
@@ -389,8 +414,12 @@ class RunHandle:
             n_points=self._n_flushed,
             duration_ms=round((self._clock() - self._started) * 1000, 1),
         )
+        if self._alerts is not None:
+            self._alert(lambda alerts: alerts.on_finish(status))
         if self._fanout is not None:
             self._fanout.close(status)  # waits at most CLOSE_TIMEOUT_S
+        if self._notify is not None:
+            self._notify.close(status)  # waits at most CLOSE_TIMEOUT_S
         self._store.close()
 
     def abandon(self) -> None:
@@ -399,6 +428,8 @@ class RunHandle:
             self.flush()
             if self._fanout is not None:
                 self._fanout.close(self._status)
+            if self._notify is not None:
+                self._notify.close(self._status)
             self._store.close()
             self._closed = True
 
@@ -413,11 +444,16 @@ def start_run(
     flush_interval_s: float = FLUSH_INTERVAL_S,
     clock: Callable[[], float] = time.monotonic,
     forwarders: Sequence[Forwarder] = (),
+    alerts: AlertConfig | None = None,
+    channels: Sequence[Channel] = (),
 ) -> RunHandle:
     """Persist a new run (and its diff artifact) and return its handle.
 
     ``forwarders`` (already resolved, see ``resolve_forwarders``) receive every flushed batch on
     their own worker threads; see ``cvpilot.runs.forwarding`` for the isolation guarantees.
+    ``alerts`` (a validated configuration) turns on the alert rules for this run; ``channels``
+    (already resolved, see ``resolve_channels``) receive each alert the same way. Without
+    channels an alert is only logged (``alert_fired``).
     """
     store = open_store(meta.project, store_dir)
     try:
@@ -431,6 +467,29 @@ def start_run(
     if forwarders:
         fanout = Fanout(forwarders, meta, repro)
         fanout.start()
+    notify: Fanout | None = None
+    if alerts is not None and channels:
+        notify = notify_fanout(channels, meta, repro)
+        notify.start()
+    handle: RunHandle
+
+    def deliver(alert: Alert) -> None:
+        if notify is not None:
+            notify.submit((alert,))
+
+    engine = (
+        None
+        if alerts is None
+        else AlertEngine(
+            alerts,
+            project=meta.project,
+            run_id=meta.run_id,
+            deliver=deliver,
+            emit=lambda level, event, **fields: handle.emit(level, event, **fields),
+            clock=clock,
+            store_dir=store_dir,
+        )
+    )
     handle = RunHandle(
         meta,
         store,
@@ -438,6 +497,8 @@ def start_run(
         flush_interval_s=flush_interval_s,
         clock=clock,
         fanout=fanout,
+        alerts=engine,
+        notify=notify,
     )
     handle.emit(
         "info",
