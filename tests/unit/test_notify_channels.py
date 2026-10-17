@@ -28,8 +28,8 @@ from cvpilot.settings import Settings
 
 RUN = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 SLACK_PATH = "/services/T0000/B0000/SLACKSECRET0123456789"
-TG_TOKEN = "123456789:AAH-secret_TOKEN-0123456789abcdefghijk"  # noqa: S105  # shaped like one
-WEBHOOK_TOKEN = "whtok-0123456789abcdef"  # noqa: S105
+TG_BOT = "123456789:AAH-secret_TOKEN-0123456789abcdefghijk"  # noqa: S105  # shaped like one
+HOOK_BEARER = "whtok-0123456789abcdef"  # noqa: S105
 ENV_VARS = (
     "CVPILOT_ALERT_WEBHOOK_URL",
     "CVPILOT_ALERT_WEBHOOK_TOKEN",
@@ -184,7 +184,7 @@ def test_the_webhook_posts_the_alert_fields_and_the_bearer_token(
     monkeypatch: pytest.MonkeyPatch, server: Listener
 ) -> None:
     monkeypatch.setenv("CVPILOT_ALERT_WEBHOOK_URL", server.url + "/hook")
-    monkeypatch.setenv("CVPILOT_ALERT_WEBHOOK_TOKEN", WEBHOOK_TOKEN)
+    monkeypatch.setenv("CVPILOT_ALERT_WEBHOOK_TOKEN", HOOK_BEARER)
     WebhookChannel(allow_insecure=True).send([alert()])
     (got,) = server.requests
     assert got.json() == {
@@ -195,7 +195,7 @@ def test_the_webhook_posts_the_alert_fields_and_the_bearer_token(
         "step": 1,
         "text": "[proj] Loss loss is NaN at step 1 (run X).",
     }
-    assert got.headers["authorization"] == f"Bearer {WEBHOOK_TOKEN}"
+    assert got.headers["authorization"] == f"Bearer {HOOK_BEARER}"
 
 
 def test_the_webhook_sends_no_authorization_without_a_token(
@@ -236,11 +236,11 @@ def test_the_slack_text_is_escaped_and_never_interpreted(
 def test_telegram_sends_plain_text_to_the_bot_api_path(
     monkeypatch: pytest.MonkeyPatch, server: Listener
 ) -> None:
-    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_TOKEN)
+    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_BOT)
     monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_CHAT", "-1001234567890")
     TelegramChannel(allow_insecure=True, base_url=server.url).send([alert("*bold* <b>x</b> _y_")])
     (got,) = server.requests
-    assert got.path == f"/bot{TG_TOKEN}/sendMessage"
+    assert got.path == f"/bot{TG_BOT}/sendMessage"
     assert got.json() == {
         "chat_id": -1001234567890,
         "text": "*bold* <b>x</b> _y_",
@@ -252,7 +252,7 @@ def test_telegram_sends_plain_text_to_the_bot_api_path(
 def test_a_telegram_channel_name_stays_a_string(
     monkeypatch: pytest.MonkeyPatch, server: Listener
 ) -> None:
-    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_TOKEN)
+    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_BOT)
     monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_CHAT", "@my_alert_channel")
     TelegramChannel(allow_insecure=True, base_url=server.url).send([alert()])
     assert server.requests[0].json()["chat_id"] == "@my_alert_channel"
@@ -260,7 +260,7 @@ def test_a_telegram_channel_name_stays_a_string(
 
 @pytest.mark.parametrize(
     "token",
-    ["", "abc", "123:short", "12345678:ok-but/has/slash0123456789abcdefghijkl", TG_TOKEN + "\n"],
+    ["", "abc", "123:short", "12345678:ok-but/has/slash0123456789abcdefghijkl", TG_BOT + "\n"],
 )
 def test_a_malformed_telegram_token_is_refused_without_echoing_it(
     monkeypatch: pytest.MonkeyPatch, token: str
@@ -274,7 +274,7 @@ def test_a_malformed_telegram_token_is_refused_without_echoing_it(
 
 @pytest.mark.parametrize("chat", ["", "abc", "1; DROP", "@a", "12.5", "-", "9" * 40, "@bad name"])
 def test_a_malformed_telegram_chat_is_refused(monkeypatch: pytest.MonkeyPatch, chat: str) -> None:
-    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_TOKEN)
+    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_BOT)
     monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_CHAT", chat)
     with pytest.raises(ForwardConfigError, match="CVPILOT_ALERT_TELEGRAM_CHAT"):
         TelegramChannel()
@@ -283,7 +283,7 @@ def test_a_malformed_telegram_chat_is_refused(monkeypatch: pytest.MonkeyPatch, c
 def test_the_telegram_endpoint_is_fixed_and_a_base_url_is_for_development_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_TOKEN)
+    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_BOT)
     monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_CHAT", "42")
     with pytest.raises(ForwardConfigError):
         TelegramChannel(base_url="https://evil.example")
@@ -299,13 +299,13 @@ def test_the_telegram_endpoint_is_fixed_and_a_base_url_is_for_development_only(
 def test_a_channel_never_shows_its_endpoint_in_repr_or_pickle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_TOKEN)
+    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_BOT)
     monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_CHAT", "42")
     monkeypatch.setenv("CVPILOT_ALERT_WEBHOOK_URL", "https://hooks.example" + SLACK_PATH)
-    monkeypatch.setenv("CVPILOT_ALERT_WEBHOOK_TOKEN", WEBHOOK_TOKEN)
+    monkeypatch.setenv("CVPILOT_ALERT_WEBHOOK_TOKEN", HOOK_BEARER)
     for channel in (TelegramChannel(), WebhookChannel()):
         text = repr(channel) + str(channel)
-        assert "SECRET" not in text and TG_TOKEN not in text and WEBHOOK_TOKEN not in text
+        assert "SECRET" not in text and TG_BOT not in text and HOOK_BEARER not in text
         with pytest.raises(TypeError):
             pickle.dumps(channel)
 
@@ -331,7 +331,7 @@ def test_a_failed_delivery_through_the_fan_out_leaks_nothing(
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     monkeypatch.setattr(_http, "_sleep", lambda s: None)
-    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_TOKEN)
+    monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_TOKEN", TG_BOT)
     monkeypatch.setenv("CVPILOT_ALERT_TELEGRAM_CHAT", "42")
     channel = TelegramChannel(allow_insecure=True, base_url=f"http://127.0.0.1:{port}")
     meta, repro = meta_repro()
