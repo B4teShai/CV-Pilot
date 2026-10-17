@@ -211,3 +211,16 @@ def test_the_loaded_config_is_immutable() -> None:
     assert isinstance(config, AlertConfig)
     with pytest.raises(Exception):  # noqa: B017  # frozen model
         config.rate_limit_s = 1  # type: ignore[misc]
+
+
+def test_the_example_in_the_alerts_guide_is_a_valid_configuration() -> None:
+    import re
+
+    page = (Path(__file__).resolve().parents[2] / "docs" / "guide" / "alerts.md").read_text()
+    block = re.search(r"```json\n(.*?)```", page, re.S)
+    assert block is not None
+    config = parse_alert_config(json.loads(block.group(1)))
+    assert [spec.rule for spec in config.rules] == [
+        "nan_loss", "loss_spike", "no_progress", "eval_regression", "run_failed", "run_preempted",
+    ]  # fmt: skip
+    assert len(block.group(1).strip().splitlines()) <= 10

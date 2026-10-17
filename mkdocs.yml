@@ -40,6 +40,7 @@ nav:
       - Checkpoints and resume: guide/checkpoints.md
       - Gating in CI: guide/gating-ci.md
       - Trust model: guide/trust.md
+      - Alerts: guide/alerts.md
   - Tutorial: tutorial.md
   - What is built and planned: status.md
   - Reference:
@@ -64,6 +65,7 @@ nav:
       - ADR-0006 Checkpoint semantics: adr/0006-checkpoint-semantics.md
       - ADR-0007 Compare and gate: adr/0007-compare-and-gate-semantics.md
       - ADR-0008 Forwarders: adr/0008-forwarders.md
+      - ADR-0009 Alerts and the Hugging Face hook: adr/0009-alerts-and-hf-hook.md
   - Engineering:
       - Overview: engineering/README.md
       - Standards: engineering/standards.md

@@ -62,7 +62,8 @@ steps: 0..2
 - Compare a new model with your current best and fail CI on a drop: `cvpilot gate`, `cvpilot compare`.
 - Run that check on every pull request with the GitHub Action.
 - Send metrics to MLflow, W&B or Trackio: `cvpilot.init(forward_to=["mlflow"])`.
-- Hook into Lightning and Ultralytics training: `cvpilot.autolog`.
+- Hook into Lightning, Hugging Face and Ultralytics training: `cvpilot.autolog`.
+- Get a message when the loss turns NaN, stalls or a model regresses: `cvpilot.init(alerts=...)`, `cvpilot alerts check`.
 - Save crash-proof checkpoints and resume after a kill: `CheckpointManager`, `cvpilot ckpt`.
 
 ## Learn more

@@ -25,6 +25,24 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Added
 
+- Alerts, in the training process and without a server (ADR-0009): `cvpilot.init(alerts=...)` or
+  `CVPILOT_ALERTS` point at a small JSON file with the rules `nan_loss`, `loss_spike`, `no_progress`,
+  `eval_regression` (the real baseline comparison, run when `log_eval` stores a snapshot),
+  `run_failed` and `run_preempted`. Channels `webhook`, `slack` (a Slack-style incoming webhook) and
+  `telegram` (registry `cvpilot.channels`) take their address and credential from environment
+  variables only and deliver over https to public addresses, with no redirects, a 5 second deadline,
+  one retry and the existing bounded queue and isolation of the forwarders; a dead channel never
+  slows or fails training. One alert per rule and run per window, 20 per run. Messages are constant
+  templates with plain-character values. `cvpilot alerts check CONFIG [--project P --run RUN]`
+  validates a configuration and replays a recorded run, sending nothing.
+- A Hugging Face `Trainer` hook (`pip install "cvpilot[hf]"`, `cvpilot.autolog(trainer, ...)`): the
+  training log under `train/`, evaluation metrics under `eval/`, saves as events, the end of training;
+  an exception in `train()` marks the run failed. No resume helper (the trainer resumes from a
+  directory bundle; see ADR-0009). The extra now installs `transformers[torch]>=4.46` (the real
+  smoke test passes on 4.46.0 and 5.20.1).
+- Notebook `03_alerts_and_hf_trainer.ipynb`: a real ResNet-18 from the Hugging Face Hub (pinned commit,
+  SHA-256 checked) fine-tuned on COCO128 crops with the `Trainer`; injected NaN loss and plateau, a real
+  regression, and step times with dead channels, with the received messages.
 - `CheckpointManager.restore(discover=True)` and `restore_latest_valid(discover=True, run_ids=...)`:
   a restarted script on a node without the run store or checkpoint directory finds the earlier
   run's checkpoints on the remote (newest 20 runs, best step first), through the same gate as any

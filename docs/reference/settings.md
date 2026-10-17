@@ -14,6 +14,7 @@ the settings of parts that are not built yet, is in
 | `CVPILOT_STORE_COMMAND_LINE` | `true`, `false` | `true` | `false` stores only the program name and the number of arguments, so `cvpilot repro` cannot re-run the command |
 | `CVPILOT_FORWARD_TO` | `mlflow`, `wandb`, `trackio` (comma separated) | empty | Send metrics to these trackers; same as `init(forward_to=[...])` |
 | `CVPILOT_FORWARD_HOSTS` | host names (comma separated) | empty | Only these hosts may be tracker endpoints |
+| `CVPILOT_ALERTS` | a file | none | The alert configuration (JSON) used when `init` is not given `alerts=`; see [Alerts](../guide/alerts.md) |
 | `CVPILOT_CHECKPOINT_DIR` | a directory | none | Where `CheckpointManager` writes checkpoints |
 | `CVPILOT_CHECKPOINT_REMOTE` | `s3://`, `gs://` or `az://` URL | none | Also copy checkpoints to this bucket |
 | `CVPILOT_CKPT_KEY` | a secret, 32 to 1024 bytes | none | Signs checkpoints so a forged one is refused; see [Trust model](../guide/trust.md) |
@@ -21,14 +22,14 @@ the settings of parts that are not built yet, is in
 | `CVPILOT_CKPT_MIN_STEP` | a step number | none | Refuse a checkpoint older than this step |
 | `CVPILOT_CKPT_ALLOW_PT` | `true`, `false` | `false` | Allow the pickle-based `pt` checkpoint format |
 
-Tracker tokens stay in the tracker's own environment variables. CV-Pilot refuses credentials in
+Alert channels read their address and credential from `CVPILOT_ALERT_WEBHOOK_URL`, `CVPILOT_ALERT_WEBHOOK_TOKEN`, `CVPILOT_ALERT_SLACK_URL`, `CVPILOT_ALERT_TELEGRAM_TOKEN` and `CVPILOT_ALERT_TELEGRAM_CHAT` (environment only, https only, never logged); `CVPILOT_FORWARD_HOSTS` also limits them. Tracker tokens stay in the tracker's own environment variables. CV-Pilot refuses credentials in
 URLs, plain http outside `CVPILOT_ENV=dev` and disabled TLS verification.
 
 ## Extras
 
 `pip install cvpilot` has no deep-learning framework. Add what you use: `cvpilot[safetensors]`
 (checkpoints), `[remote-s3]`, `[remote-gcs]`, `[remote-azure]` or `[remote]` (copy checkpoints to a
-bucket), `[lightning]`, `[ultralytics]` (the Ultralytics package is AGPL-3.0, see
+bucket), `[lightning]`, `[hf]`, `[ultralytics]` (the Ultralytics package is AGPL-3.0, see
 [Install](../guide/install.md)), `[mlflow]`, `[wandb]`, `[trackio]`.
 
 ## Exit codes
@@ -42,6 +43,7 @@ Every command uses the same codes: `0` success, `1` failure, `2` usage or config
 |---|---|---|
 | `runs show`, `repro` | a well-formed run id that is not in the store | a missing or invalid project, a malformed run id |
 | `eval` | invalid inputs, a closed run (add `--allow-closed` to evaluate into a finished run), an unknown run, a snapshot whose digest does not match, or an existing snapshot (snapshots are immutable per set and step) | a bad `--slices`, a step or seed out of range |
+| `alerts check` | the run to replay is not found or cannot be read | an invalid configuration, a channel that cannot be built from the environment, a missing project, a malformed run id |
 | `gate` | the model regressed, or anything could not be verified (see [Gating in CI](../guide/gating-ci.md)) | no threshold given |
 
 `cvpilot doctor` prints `ok` on `stdout` and one JSON log line (`doctor_completed`) on `stderr`.

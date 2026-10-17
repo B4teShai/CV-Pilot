@@ -6,7 +6,7 @@
 
 | Where | What runs | Threads and subprocesses |
 |---|---|---|
-| Training process (built: `api.py`, `runs/`, `eval/`, `ckpt/`, hooks, forwarders, store and capture in-process; planned: alerts) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training and the hook callbacks; `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; `cvpilot-spot-poll` daemon thread (built, off by default): asks the instance metadata service for a preemption notice, at most once per second per source, retries a failing service with backoff and logs it, and says why it stopped; signal handlers for SIGTERM/SIGUSR1 set a flag only (built). No subprocess except `git` once at `init`. |
+| Training process (built: `api.py`, `runs/`, `eval/`, `ckpt/`, hooks, forwarders, store and capture in-process; alert rules in-process) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training, the hook callbacks and the alert rules (microseconds per `log` call); `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-forward-<channel>` daemon thread per alert channel (built, same fan-out);  `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; `cvpilot-spot-poll` daemon thread (built, off by default): asks the instance metadata service for a preemption notice, at most once per second per source, retries a failing service with backoff and logs it, and says why it stopped; signal handlers for SIGTERM/SIGUSR1 set a flag only (built). No subprocess except `git` once at `init`. |
 | `cvpilot` CLI (built: `--version`, `doctor`, `runs`, `repro`, `eval`, `baseline`, `compare`, `gate`, `ckpt`) | one command per invocation, single-threaded except `eval`, whose bootstrap uses up to 4 worker threads | none; `compare` and `gate` do no resampling (they read the intervals stored in the snapshots), so they use no thread pool |
 | Server container (planned) | Uvicorn with one FastAPI worker per CPU, websocket broadcaster, alert delivery worker | each worker is a process; alert delivery is an asyncio task; SQLite requires one worker, Postgres allows several |
 | CI runner (built) | `cvpilot gate` as a step, or the composite action `action.yml` that wraps it; the exit code gates the job | same as CLI; the action starts one `bash` |
@@ -63,12 +63,12 @@ variable; default. There is no configuration file.
 | `CVPILOT_FORWARD_TO` | comma-separated forwarder names `[a-z][a-z0-9_-]{0,31}`, at most 8, no repeats | empty | `init()` default `forward_to`; an unknown name or a missing extra fails `init()` before a run exists | built (`settings.py` parses it, `init` passes it to the fan-out; tests run it through the real `init` path) |
 | `CVPILOT_FORWARD_HOSTS` | comma-separated lower-case host names (no wildcards), at most 32 | empty (no restriction) | forwarders: only these hosts may be tracker endpoints; Trackio refuses to run with it set | built (parsed in `settings.py`, passed to every adapter by `init`; tests cover the real path) |
 | `RANK`, `LOCAL_RANK` | integers set by a distributed launcher | unset | `init`: a non-zero value starts no forwarder (`forward_skipped_rank`) | built |
-| `CVPILOT_ALERT_CHANNELS` | comma-separated channel names | empty | client-side alert delivery | planned |
+| `CVPILOT_ALERTS` | path of a JSON file | none | `init()` default `alerts`; an invalid file, an unknown channel or a channel with a missing or unsafe address fails `init()` before a run exists | built |
+| `CVPILOT_ALERT_WEBHOOK_URL`, `CVPILOT_ALERT_WEBHOOK_TOKEN` | https URL; bearer token of 8 to 512 safe characters | none | `webhook` channel | built, secret |
+| `CVPILOT_ALERT_SLACK_URL` | https URL | none | `slack` channel (the URL is the credential) | built, secret |
+| `CVPILOT_ALERT_TELEGRAM_TOKEN`, `CVPILOT_ALERT_TELEGRAM_CHAT` | bot token; numeric chat id or `@name` | none | `telegram` channel | built, secret |
 | `CVPILOT_SERVER_DATABASE_URL` | SQLAlchemy URL | `sqlite:////data/cvpilot.sqlite` | server only | planned |
 | `CVPILOT_SERVER_TOKEN_HASHES` | path to a file of `project:sha256(token)` lines | `/data/tokens` | server only | planned |
-| `CVPILOT_TELEGRAM_BOT_TOKEN`, `CVPILOT_TELEGRAM_CHAT_ID` | string | none | Telegram channel | planned, secret |
-| `CVPILOT_SLACK_WEBHOOK_URL`, `CVPILOT_WEBHOOK_URL` | URL | none | Slack and generic webhook channels | planned, secret |
-| `CVPILOT_SMTP_URL` | `smtp[s]://user:pass@host:port` | none | SMTP channel | planned, secret |
 
 ## Secrets
 
@@ -76,14 +76,13 @@ variable; default. There is no configuration file.
 |---|---|---|
 | `CVPILOT_TOKEN` (project token) | environment of the training process and CI (CI secret store), the `Authorization` header over TLS | logs, `Repro.command_line`, `Repro.config`, reports, the run store, URLs, `doctor` output |
 | Server token hashes | the file named by `CVPILOT_SERVER_TOKEN_HASHES` (SHA-256 of the token only) | the server database in clear text, logs, HTTP responses |
-| Telegram bot token, Slack and webhook URLs, SMTP URL | environment of the process that delivers alerts (server, or training process for client-side delivery) | logs, alert messages, share links, the run store |
+| Telegram bot token, Slack and webhook URLs and token | environment of the training process (client-side delivery), read once when the channel is built | logs, alert messages, error text, `repr`, the run store, the alert configuration file |
 | Tracker credentials (`MLFLOW_TRACKING_TOKEN`, `WANDB_API_KEY`, the tracker's own variables) | the training process's environment, read by the tracker SDK only | CV-Pilot configuration, logs (exception text of an adapter is never logged, only its type), the run store, URLs |
 | Cloud credentials for fsspec | the backend's own mechanism (instance role, `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`) | CV-Pilot configuration, logs, manifests |
 | Share links | server database (random 32-byte token, expiry ≤ 7 days) | logs |
 
 Key-based redaction in `logging.py` already covers keys ending in `token`, `password`,
-`api_key`, `jwt`, `authorization`. The alerts package adds the suffixes `webhook_url`,
-`smtp_url` and `chat_id` to the redaction list before any channel is registered. Free-text
+`api_key`, `jwt`, `authorization`. The alert channels never put a URL or a token into a field at all (events carry the channel name, the rule and the run id), so redaction by key is a second line of defence. Free-text
 fields are never used for secrets.
 
 ## Optional extras
@@ -95,10 +94,10 @@ fields are never used for secrets.
 | `cvpilot[remote-s3]`, `cvpilot[remote-gcs]`, `cvpilot[remote-azure]` | checkpoint mirror to object storage for that scheme | `fsspec` and `s3fs`, `gcsfs` or `adlfs` | none |
 | `cvpilot[remote]` | the `fsspec` library only, for a backend you install yourself | `fsspec` | none |
 | `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker (`init(forward_to=["mlflow"])`) | `mlflow-skinny`, `wandb`, `trackio` | none |
+| `cvpilot[hf]` | Hugging Face `Trainer` callback (`autolog(trainer, ...)`): `train/` and `eval/` scalars, saves as events, the end of training | `transformers[torch]` (brings `torch`) | GPU recommended |
 | `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP; `resume_arguments(point)` for the `resume=` target of a verified `pt` file (confusion capture is planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
 
-Planned, and deliberately not published as extras until they install something: the Hugging Face
-and MMEngine hooks, the alert channels (`httpx`) and the server (`fastapi`, `uvicorn`, `sqlalchemy`,
+The alert channels need no extra (they use the standard library). Planned, and deliberately not published as extras until they install something: the MMEngine hook and the server (`fastapi`, `uvicorn`, `sqlalchemy`,
 `asyncpg`). A test fails if a published extra is empty or if the documentation tells you to install
 an extra that does not exist.
 

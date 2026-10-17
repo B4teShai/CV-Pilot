@@ -11,9 +11,9 @@ Every other package is planned and its interface is the contract it will be buil
 | Layer | Packages |
 |---|---|
 | Interface | `cli/` (built), `api.py` (built: `init`, `log`, `log_artifact`, `log_eval`, `finish`) |
-| Application | `runs/` (built, with the forwarder fan-out), `repro` (built), `eval/` (built), `compare/` (baselines, compare, gate built), `ckpt/`, `alerts/` |
+| Application | `runs/` (built, with the forwarder fan-out), `repro` (built), `eval/` (built), `compare/` (baselines, compare, gate built), `ckpt/`, `alerts/` (built) |
 | Domain | `core/schema.py`, `core/hashing.py` (built); `core/ulid.py`, `core/redact.py`, `core/jsonable.py`, `core/errors.py` (built); `core/metrics.py`, `core/confusion.py` (built) |
-| Infrastructure | `store/`, `capture/`, `forward/`, `hooks/` (built); `sync/`, `remote/`, `notify/`, `server/` |
+| Infrastructure | `store/`, `capture/`, `forward/`, `hooks/`, `notify/` (built); `sync/`, `remote/`, `server/` |
 | Cross-cutting | `logging.py`, `settings.py`, `registry.py` (built) |
 
 Signatures use `Literal` and Pydantic models from `core/schema.py`; `PredictionTable` and
@@ -150,7 +150,7 @@ sets the final status and logs `run_finished`; a run whose process died stays `r
 `recover_run` marks it `failed`. `resume_from` accepts only `preempted` or `failed` parents.
 
 Depends on: `core/`, registry `stores`. Status: built (lifecycle, queries, recovery, resume
-metadata, forwarder fan-out); planned: the outbox and client-side alerts.
+metadata, forwarder fan-out); client-side alert evaluation and the channel fan-out (ADR-0009); planned: the outbox.
 
 ### `eval/`
 
@@ -343,22 +343,22 @@ Depends on: `core/`, the `remotes`, `spot_notices` and `stores` registries (thro
 
 ### `alerts/`
 
-Responsibility: rule engine over the stream of metric points, snapshots and status changes;
-dedupes and rate-limits; hands `Alert` objects to channels. Runs inside the training process
-and inside the server.
+Responsibility: the rule engine that runs inside the training process, evaluates the rules on what a
+run logs, de-duplicates and rate-limits, and hands `Alert` objects (`core/schema.py`) to a delivery
+function. `config.py` validates the JSON configuration (bounded, no code), `engine.py` holds the
+rules and the engine (`on_points`, `on_eval`, `on_finish`; an injected clock), `replay.py` is the dry
+run behind `cvpilot alerts check`. Rules: `nan_loss`, `loss_spike`, `no_progress`,
+`eval_regression` (it is `compare.service.run_gate`), `run_failed`, `run_preempted`.
 
 ```python notest
-class Rule(Protocol):
-    name: str
-    def feed(self, event: RunEvent) -> Alert | None: ...
-
-RULES: Mapping[str, type[Rule]]   # nan_loss, loss_spike, no_progress, gpu_util_below,
-                                  # eval_regression_vs_baseline, new_best, failed, preempted, resumed
-def evaluate(rules: Sequence[Rule], event: RunEvent) -> list[Alert]
-def deliver(alerts: Sequence[Alert], channels: Sequence[str]) -> None   # via `channels` registry
+engine = AlertEngine(config, project=..., run_id=..., deliver=fanout_submit, clock=time.monotonic)
+engine.on_points({"train/loss": 0.4}, step=10)   # never raises
+engine.on_eval(snapshot)                         # the real baseline comparison
+engine.on_finish("failed")
 ```
 
-Depends on: `core/schema.py`; `notify/` through the `channels` registry. Status: planned.
+Depends on: `core/`, `compare/` (the gate, imported when a snapshot is checked); the channels are
+reached by `runs/` through the `channels` registry, never imported here. Status: built (ADR-0009).
 
 ### `repro`
 
@@ -496,7 +496,7 @@ Framework adapters. Each adapter implements (`Hook` in `core/schema.py`):
 
 ```python notest
 class Hook(Protocol):
-    name: str  # "lightning", "ultralytics"; planned: "hf", "mmengine", "rfdetr", "torch"
+    name: str  # "lightning", "hf", "ultralytics"; planned: "mmengine", "rfdetr", "torch"
     requires: tuple[str, ...]  # distributions that must be installed; "a|b" means either
     license_notice: str | None  # set for a copyleft framework
 
@@ -508,7 +508,7 @@ class Hook(Protocol):
 | Adapter | Mechanism | Captured | Status |
 |---|---|---|---|
 | `hooks/lightning.py` | `CVPilotLogger` (a Lightning `Logger`, scalars of `self.log`, rank zero only) plus `CVPilotCallback` (`on_fit_start` rank check, `on_fit_end` finishes, `on_exception` marks the run failed), both built when the hook is attached | scalars; hyperparameters are not forwarded | built |
-| `hooks/hf_trainer.py` | `TrainerCallback`: `on_log`, `on_evaluate`, `on_save` | scalars, eval, checkpoints | planned |
+| `hooks/hf_trainer.py` (`cvpilot[hf]`) | `TrainerCallback` built at attach time (`on_train_begin` rank gate, `on_log`, `on_evaluate`, `on_save`, `on_train_end`); `train` is wrapped so an exception marks the run failed | `train/` scalars, `eval/` metrics, a save as an event; no resume helper (the trainer resumes from a directory bundle, see ADR-0009) | built |
 | `hooks/mmengine.py` | MMEngine hook plus `VisBackend` | scalars, COCO metrics, checkpoints | planned |
 | `hooks/rfdetr.py`, `hooks/torch_loop.py` | context manager plus explicit `log_eval` | explicit | planned |
 | `hooks/ultralytics.py` (`cvpilot[ultralytics]`, AGPL-3.0 notice) | `add_callback("on_fit_epoch_end" / "on_train_end")` on the model; reads `trainer.metrics`, the loss items and `validator.metrics.box.maps` with `validator.names` | losses, mAP, per-class AP (`val/AP/<class>`), step = epoch | built; `resume_arguments(point)` gives the `resume=` target for a `pt` file `resume_path` verified here (`hooks/lightning.py` has the same for `ckpt_path`; safetensors files and unverified paths are refused); the confusion matrix and automatic adoption of framework checkpoints are planned |
@@ -599,18 +599,25 @@ Status: built for checkpoints (artifact export is planned).
 
 ### `notify/`
 
-Channel adapters: Telegram Bot API, Slack incoming webhook, generic webhook, SMTP.
+Channel adapters: `webhook`, `slack` (a Slack-style incoming webhook) and `telegram`, registered
+under `cvpilot.channels`. An email channel is not built (ADR-0009).
 
 ```python notest
-class Channel(Protocol):
+class Channel(Protocol):     # core/schema.py
     name: str
     requires: tuple[str, ...]
 
-    def send(self, alert: Alert) -> None: ...
+    def open(self, meta: RunMeta, repro: Repro) -> None: ...
+    def send(self, alerts: Sequence[Alert]) -> None: ...   # raises when delivery failed
+    def close(self, status: RunStatus) -> None: ...
 ```
 
-Depends on: `core/schema.py`; `httpx` from the `[alerts]` extra for HTTP channels, stdlib
-`smtplib` for SMTP. Status: planned.
+Built like a forwarder (`allow_insecure`, `allowed_hosts`), run by the same fan-out
+(`runs/forwarding.py`, `Delivery` = `NOTIFY`). `_http.py` is the one outbound call: https, public
+addresses only (resolved once, connected to the checked address), no redirects, a total deadline,
+status line and headers only. `_channel.py` checks the endpoint with the forwarders' `check_endpoint`
+and keeps the secret in one private attribute. Depends on: `core/`, `forward/_common.py`, the
+standard library only. Status: built.
 
 ### `server/`
 
