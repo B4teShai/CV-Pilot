@@ -157,11 +157,14 @@ def test_an_exception_marks_the_run_failed_and_propagates_unchanged() -> None:
     assert info.value is boom and sink.finished == ["failed"]
 
 
-def test_an_interrupt_marks_the_run_failed_and_is_never_swallowed() -> None:
-    trainer, _, sink, _ = attached(fail_with=KeyboardInterrupt())
-    with pytest.raises(KeyboardInterrupt):
+@pytest.mark.parametrize("stop", [KeyboardInterrupt(), SystemExit(3)])
+def test_an_interrupt_or_exit_marks_the_run_preempted_and_is_never_swallowed(
+    stop: BaseException,
+) -> None:
+    trainer, _, sink, _ = attached(fail_with=stop)
+    with pytest.raises(type(stop)):
         trainer.train()
-    assert sink.finished == ["failed"]
+    assert sink.finished == ["preempted"]  # stopped from outside, not a failure of the training
 
 
 def test_a_second_train_end_or_a_failure_after_the_end_does_not_finish_twice() -> None:
@@ -346,3 +349,28 @@ def test_alerts_work_through_the_hook_path(monkeypatch: pytest.MonkeyPatch) -> N
     (chan,) = RecordingChannel.instances
     assert [(r, s) for r, s, _ in chan.sent] == [("nan_loss", 7)]
     assert "train/loss is NaN at step 7" in chan.sent[0][2]
+
+
+def test_a_custom_evaluation_prefix_is_recorded_once_under_eval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer, _, sink, _ = attached()
+    trainer.fire("on_train_begin")
+    trainer.at(5).fire("on_log", logs={"val_loss": 0.4, "val_accuracy": 0.8, "loss": 1.0})
+    trainer.at(5).fire("on_evaluate", metrics={"val_loss": 0.4, "val_accuracy": 0.8})
+    keys = [k for points, _ in sink.logged for k in points]
+    assert sorted(keys) == ["eval/val_accuracy", "eval/val_loss", "train/loss"]
+    trainer.at(6).fire("on_log", logs={"test_loss": 0.3, "eval_loss": 0.3})
+    trainer.at(6).fire("on_evaluate", metrics={"test_loss": 0.3})
+    keys = [k for points, step in sink.logged for k in points if step == 6]
+    assert keys == ["eval/test_loss"]
+
+
+def test_a_non_zero_rank_logs_nothing_even_before_train_begin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RANK", "1")
+    trainer, _, sink, _ = attached()  # the trainer object itself claims to be rank zero
+    trainer.at(1).fire("on_log", logs={"loss": 1.0})
+    trainer.at(1).fire("on_evaluate", metrics={"eval_loss": 1.0})
+    assert sink.logged == []
