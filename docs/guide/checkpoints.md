@@ -259,11 +259,13 @@ run) and by notebook 04.
 
 Measured in notebook 04 on one machine (macOS arm64, local SSD, Python 3.13), steady state with
 retention on, against `torch.save` of the same state written and `fsync`ed to the same disk:
-ResNet-18 weights (44.8 MB) 53.30 ms against 15.36 ms (3.5 times), YOLO11n weights (10.7 MB) 17.52 ms
-against 11.89 ms (1.5 times). Two SHA-256 passes (while writing, and when the file is read back to
-verify it) are 51 % and 37 % of a save. The 5 % budget of the first design is withdrawn
+ResNet-18 weights (44.8 MB) 52.71 ms against 16.67 ms (3.2 times; 3.2 to 3.5 over repeated runs),
+YOLO11n weights (10.7 MB) 19.34 ms against 12.05 ms (1.6 times; 1.5 to 2.0 over repeated runs, because
+the framework's own save takes only about 12 ms). Two SHA-256 passes (while writing, and when the file is
+read back to verify it) are 56 % and 36 % of a save. These are one machine's numbers, from one macOS
+disk where `fsync` does not reach the platter, and a record rather than a promise. The 5 % budget of the first design is withdrawn
 ([ADR-0010](../adr/0010-real-checkpoint-files-and-mmengine.md)); a save is an operation of
-minutes-apart cadence: at the default interval it is 0.009 % of the wall time for ResNet-18.
+minutes-apart cadence: at the default interval it is 0.009 % of the wall time for ResNet-18 (52.71 ms in 10 minutes).
 
 ## Command line
 

@@ -10,13 +10,21 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 - The strict `.pt` reader refused every file the framework writes (zip data descriptors and a zip64 end
   record, even for a small file), so adopting, verifying or resuming a real Lightning checkpoint, and
   restoring CheckpointManager's own `pt` format with the real framework, could not work. It now accepts
-  exactly that layout and still refuses every deviation (`tests/zip_support.py` builds it byte for byte;
-  a marked test compares it with a file the installed framework wrote).
+  exactly that layout and still refuses every deviation, each by its own check. Real files from 2.6.0
+  and 2.14.1 are kept in `tests/data`, the scanner accepts them and the test builder reproduces them
+  byte for byte; a marked test repeats that with the installed framework.
 - `CheckpointManager.adopt` scans the archive before it stores anything. It used to store, log as saved
   and verified, and only refuse at the restart that needed the file (an Ultralytics `last.pt` pickles the
   model object): a file that cannot be resumed is now refused with the reason.
 - `cvpilot ckpt verify` and `list` honour `CVPILOT_CKPT_ALLOW_PT` (every `pt` checkpoint showed as
   `pt_not_allowed`), and verify scans `pt` archives so it no longer calls valid a file that resume refuses.
+- The reader refused the folder name the framework derives from the file stem, so Lightning's default
+  `epoch=1-step=8.ckpt` (and `my model.pt`) were refused; a state with tied tensors was refused as
+  `unloadable`; `_codecs.encode` is allowed only as `encode(string, 'latin1')`; stored members need equal
+  sizes and a checksum; development builds of the first fixed release and a loader that disagrees with its
+  metadata are refused; pickle-controlled text in messages is plain and short.
+- `adopt` reads the source once into one buffer (a swapped or rewritten file can no longer be stored as
+  verified, and memory is the file once, not twice) and refuses a file over the zip64 limit before reading.
 - A pickle written with protocol 2 that holds a `set` (`__builtin__.set`) passes the scan; the message
   for a file that is not a zip archive (safetensors, JSON) no longer says "raw pickles are refused".
 - The guide's restore snippet converts NumPy arrays before `load_state_dict`.
@@ -25,10 +33,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 ### Changed (checkpoints)
 
 - The save-overhead budget (5 % over `torch.save`) is withdrawn and replaced by measured numbers: on the
-  measured machine a steady-state save of ResNet-18 weights took 53.30 ms against 15.36 ms for
-  `torch.save` of the same state (3.5 times), YOLO11n weights 17.52 ms against 11.89 ms (1.5 times),
-  with two SHA-256 passes taking 51 % and 37 % of a save. `benchmarks/ckpt_save.py` gained a per-phase
-  profile (`profile_state`).
+  measured machine a steady-state save of ResNet-18 weights took 52.71 ms against 16.67 ms for
+  `torch.save` of the same state (3.2 times; 3.2 to 3.5 over my runs), YOLO11n weights 19.34 ms against
+  12.05 ms (1.6 times; the ratio ranged from 1.5 to 2.0 over my runs because the framework's own save
+  takes only about 12 ms), with two SHA-256 passes taking 56 % and 36 % of a save and 0.009 % of the wall
+  time at the default 10-minute interval (ResNet-18). One machine, one disk, macOS (where `fsync` does not
+  reach the platter). `benchmarks/ckpt_save.py` gained a per-phase profile (`profile_state`) with
+  exclusive phase times, interleaved warmed-up timings and the unexplained remainder reported as it is.
 - The status page labels the least-proven checkpoint features **experimental**: the remote mirror
   (never run against a real bucket), the `local_chain_only` level on real files and the cloud preemption
   notices. `anchored` and `authenticated` are proven on a real Lightning file.
@@ -40,6 +51,8 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   truncate, swap), resume comparisons with uninterrupted runs, and the save cost by phase on three real
   model sizes. Ultralytics, MMEngine and Hugging Face resume files are refused by the reader and have no
   verified resume; see the guide and ADR-0010.
+- Logging: fields named like secrets, keys or HMACs are redacted, and the level is written `WARN` as the
+  organisation's standard spells it (it was `WARNING`).
 - An MMEngine hook (`pip install "cvpilot[mmengine]"`, `cvpilot.autolog(runner, ...)`): `train/`
   scalars every `interval` iterations (default 10), `val/` and `test/` metrics, the end of the run, with
   the guard, isolation and rank rules of the other hooks. No resume helper.

@@ -23,7 +23,8 @@ description. The architecture pages mark each component the same way, and the
 | Alert rules (NaN loss, spike, plateau, regression, failed, preempted) and channels (webhook, Slack-style webhook, Telegram) | Built | [Alerts](guide/alerts.md), [ADR-0009](adr/0009-alerts-and-hf-hook.md) |
 | Email alerts, per-user routing, alert history | Not planned for this release | [ADR-0009](adr/0009-alerts-and-hf-hook.md) |
 | Hook for RF-DETR | Planned | [Components](architecture/02-components.md) |
-| Resume helpers for Ultralytics, MMEngine and Hugging Face files | Not built: their files pickle objects or form a folder, see the decision | [ADR-0010](adr/0010-real-checkpoint-files-and-mmengine.md) |
+| Resume helper for Ultralytics (`resume_arguments`) | **Experimental**: built, but the framework's own `last.pt` is refused by the strict scan, so it has not been proven on a real resume |
+| Resume helpers for MMEngine and Hugging Face files | Not built: their files pickle objects or form a folder, see the decision | [ADR-0010](adr/0010-real-checkpoint-files-and-mmengine.md) |
 
 The Lightning, Hugging Face, Ultralytics, MMEngine and tracker integrations are tested with fake trainers and
 fake tracker modules. The four hooks also ran on real training runs (the Hugging Face hook in notebook 03,

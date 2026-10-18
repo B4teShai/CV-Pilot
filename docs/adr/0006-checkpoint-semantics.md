@@ -109,7 +109,8 @@ Option C, implemented by `ckpt/` with the following rules.
    guarantee and stays on; retention reuses what the save verified instead of hashing again. The
    rule is kept as the target, and the measured numbers are in the overview.
    **Amendment (2026-10-18): the 5 % rule is withdrawn.** Measured against `torch.save` of the same
-   state (ResNet-18 weights: 53.30 ms against 15.36 ms, 3.5 times; YOLO11n weights: 1.5 times), two
+   state (ResNet-18 weights: 52.71 ms against 16.67 ms, 3.2 times; YOLO11n weights: 1.6 times, 1.5 to 2.0
+   over repeated runs), two
    SHA-256 passes alone take more than the framework's whole save, so the budget cannot be met while
    the digest and the read-back exist. The measured numbers replace it
    ([ADR-0010](0010-real-checkpoint-files-and-mmengine.md)).

@@ -1,26 +1,24 @@
-"""Checkpoint save overhead: a full ``CheckpointManager.save_now`` against writing the same bytes
-with one ``fsync`` (what ``torch.save`` of the same state costs on the same disk, minus the
-serialisation the two share).
+"""Checkpoint save cost: a steady-state ``CheckpointManager.save_now`` split into phases and set
+against the framework's own save of the same state (written and ``fsync``ed to the same disk)
+and against a plain write of the same bytes.
 
-ADR-0006 sets a budget of 5 % over ``torch.save`` for hashing and the manifest. The save also
-re-reads and re-hashes the file (``verify_after_save``) and records a digest in the run store;
-the numbers below separate those costs so the budget can be judged with and without the
-verification pass. The framework is not installed here, so the baseline is the same bytes written
-with ``open``, ``write`` and ``fsync``.
+The 5 % budget of ADR-0006 over ``torch.save`` is withdrawn (ADR-0010): two SHA-256 passes (while
+writing, and when the file is read back to verify it) cost more than the framework's whole save.
+``profile_state`` is what notebook 04 calls for real model states. Phase times are exclusive (no
+double counting), the three kinds of timing are interleaved in a seeded random order after a
+warm-up, and what the phases do not explain is reported as ``unattributed``, negative included.
 
-Usage: ``python benchmarks/ckpt_save.py [megabytes] [repeats]`` (default 256 MB, 3 repeats).
-
-``profile_state`` is what notebook 04 calls for real model states: where a steady-state save spends
-its time (serialise, write with hash and fsync, manifest, verification re-read, run-store anchor,
-pointer, retention), next to the same bytes written plainly and, when a ``baseline`` is given, next
-to the framework's own ``save`` of the same state on the same disk.
+Usage: ``python benchmarks/ckpt_save.py [megabytes] [rounds]`` (default 64 MB, 9 rounds). With the
+framework installed the comparison is with its own ``save``; without it, only with a plain write.
 """
 
 from __future__ import annotations
 
 import contextlib
 import hashlib
+import importlib
 import os
+import random
 import statistics
 import sys
 import tempfile
@@ -38,8 +36,6 @@ from cvpilot.ckpt.serializers import get_serializer
 from cvpilot.core.hashing import new_run_id
 from cvpilot.core.schema import Repro, RunMeta
 
-keep_last_warmup = 3  # the first saves have fewer files to retain
-
 
 def plain_write(path: Path, data: bytes) -> float:
     started = time.perf_counter()
@@ -52,74 +48,35 @@ def plain_write(path: Path, data: bytes) -> float:
     return elapsed
 
 
-def managed_save(root: Path, store: Path, state: dict[str, np.ndarray], *, verify: bool) -> float:
-    run_id = new_run_id()
-    meta = RunMeta(
-        run_id=run_id, project="bench", name="bench", status="running", task="detection",
-        framework="python==3.12.1", host="h", started_at=datetime.now(timezone.utc),
-        schema_version=1,
-    )  # fmt: skip
-    repro = Repro(
-        run_id=run_id, git_dirty=False, packages_lock_sha256="0" * 64, python_version="3",
-        gpu_names=[], dataset_uri="", dataset_hash="merkle:" + "0" * 64, config={},
-        command_line="bench",
-    )  # fmt: skip
-    run = runs.start_run(meta, repro, store_dir=store)
-    manager = CheckpointManager(
-        run, dir=root, keep_last=1, verify_after_save=verify, install_signal_handlers=False
-    )
-    started = time.perf_counter()
-    manager.save_now(1, model=state)
-    elapsed = time.perf_counter() - started
-    run.finish()
-    return elapsed
-
-
-def steady_saves(
-    root: Path, store: Path, state: dict[str, np.ndarray], *, saves: int = 7, keep_last: int = 3
-) -> list[float]:
-    """Times of consecutive ``save_now`` calls on one manager with retention on: the saves a long
-    job actually pays for (each one also prunes the checkpoints beyond ``keep_last``)."""
-    run_id = new_run_id()
-    meta = RunMeta(
-        run_id=run_id, project="bench", name="bench", status="running", task="detection",
-        framework="python==3.12.1", host="h", started_at=datetime.now(timezone.utc),
-        schema_version=1,
-    )  # fmt: skip
-    repro = Repro(
-        run_id=run_id, git_dirty=False, packages_lock_sha256="0" * 64, python_version="3",
-        gpu_names=[], dataset_uri="", dataset_hash="merkle:" + "0" * 64, config={},
-        command_line="bench",
-    )  # fmt: skip
-    run = runs.start_run(meta, repro, store_dir=store)
-    manager = CheckpointManager(run, dir=root, keep_last=keep_last, install_signal_handlers=False)
-    times: list[float] = []
-    for step in range(1, saves + 1):
-        started = time.perf_counter()
-        manager.save_now(step, model=state)
-        times.append(time.perf_counter() - started)
-    run.finish()
-    return times
-
-
 @contextlib.contextmanager
 def phase_timers(manager: CheckpointManager) -> Iterator[dict[str, float]]:
-    """Accumulate the wall time of each phase of ``save_now`` into the yielded dict, by wrapping the
-    functions each phase runs in (the originals are put back on exit)."""
+    """Accumulate the EXCLUSIVE wall time of each phase of ``save_now`` into the yielded dict: a
+    phase's time does not include the phases it calls, and the pointer, anchor and retention steps
+    own whatever they call (their own writes, hashes and directory syncs are not counted again
+    under another name). The originals are put back on exit."""
     from cvpilot.ckpt import directory, fsops
 
     totals: dict[str, float] = defaultdict(float)
+    stack: list[list[float | str]] = []  # [label, started, time spent in children]
     undo: list[Callable[[], None]] = []
+    owners = ("pointer write", "run-store anchor", "retention")
 
     def wrap(owner: object, name: str, label: Callable[..., str]) -> None:
         original = getattr(owner, name)
 
         def timed(*args: object, **kwargs: object) -> object:
-            started = time.perf_counter()
+            if any(frame[0] in owners for frame in stack):
+                return original(*args, **kwargs)  # inside an owner: its time stays with the owner
+            frame: list[float | str] = [label(*args, **kwargs), time.perf_counter(), 0.0]
+            stack.append(frame)
             try:
                 return original(*args, **kwargs)
             finally:
-                totals[label(*args, **kwargs)] += time.perf_counter() - started
+                stack.pop()
+                elapsed = time.perf_counter() - float(frame[1])
+                totals[str(frame[0])] += elapsed - float(frame[2])
+                if stack:
+                    stack[-1][2] = float(stack[-1][2]) + elapsed
 
         setattr(owner, name, timed)
         undo.append(lambda: setattr(owner, name, original))
@@ -141,114 +98,125 @@ def phase_timers(manager: CheckpointManager) -> Iterator[dict[str, float]]:
             restore()
 
 
+def _repro(run_id: str) -> tuple[RunMeta, Repro]:
+    meta = RunMeta(
+        run_id=run_id, project="bench", name="bench", status="running", task="detection",
+        framework="python==3.12.1", host="h", started_at=datetime.now(timezone.utc),
+        schema_version=1,
+    )  # fmt: skip
+    repro = Repro(
+        run_id=run_id, git_dirty=False, packages_lock_sha256="0" * 64, python_version="3",
+        gpu_names=[], dataset_uri="", dataset_hash="merkle:" + "0" * 64, config={},
+        command_line="bench",
+    )  # fmt: skip
+    return meta, repro
+
+
 def profile_state(
     state: dict[str, object],
     *,
     baseline: Callable[[Path], None] | None = None,
-    repeats: int = 7,
+    repeats: int = 9,
     keep_last: int = 3,
+    warmup: int = 2,
 ) -> dict[str, object]:
     """Median seconds of a steady-state ``save_now`` of ``state`` and of each phase in it, plus the
     plain write of the same bytes and the optional framework ``baseline(path)`` (written, flushed
-    and fsynced like the checkpoint is). The first ``keep_last`` saves are warm-up."""
+    and fsynced like the checkpoint is).
+
+    The three kinds of timing are interleaved in a seeded random order inside every round, so a
+    drifting disk or cache state does not favour one of them, and the first ``warmup`` rounds (and
+    the first ``keep_last`` saves, which have fewer files to retain) are discarded. Phase times are
+    exclusive; ``unattributed`` is what is left of the save after them and is reported as it is,
+    negative included (a negative value means the phases overlap or the timers cost something).
+    """
     data = get_serializer("safetensors").dumps({"model": state})
+    plain: list[float] = []
+    framework: list[float] = []
+    hashes: list[float] = []
+    totals: list[float] = []
+    per_phase: dict[str, list[float]] = defaultdict(list)
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
-        plain = statistics.median(plain_write(base / "plain.bin", data) for _ in range(repeats))
-        framework = None
-        if baseline is not None:
-            samples = []
-            for _ in range(repeats):
-                started = time.perf_counter()
-                baseline(base / "baseline.bin")
-                with (base / "baseline.bin").open("rb") as handle:
-                    os.fsync(handle.fileno())
-                samples.append(time.perf_counter() - started)
-                (base / "baseline.bin").unlink()
-            framework = statistics.median(samples)
-        hashes = []
-        for _ in range(repeats):
-            started = time.perf_counter()
-            hashlib.sha256(data).hexdigest()
-            hashes.append(time.perf_counter() - started)
-        run_id = new_run_id()
-        meta = RunMeta(
-            run_id=run_id, project="bench", name="bench", status="running", task="detection",
-            framework="python==3.12.1", host="h", started_at=datetime.now(timezone.utc),
-            schema_version=1,
-        )  # fmt: skip
-        repro = Repro(
-            run_id=run_id, git_dirty=False, packages_lock_sha256="0" * 64, python_version="3",
-            gpu_names=[], dataset_uri="", dataset_hash="merkle:" + "0" * 64, config={},
-            command_line="bench",
-        )  # fmt: skip
+        meta, repro = _repro(new_run_id())
         run = runs.start_run(meta, repro, store_dir=base / "store")
         manager = CheckpointManager(
             run, dir=base / "ckpt", keep_last=keep_last, install_signal_handlers=False
         )
-        totals: list[float] = []
-        per_phase: dict[str, list[float]] = defaultdict(list)
-        for step in range(1, keep_last + repeats + 1):
-            with phase_timers(manager) as timers:
-                started = time.perf_counter()
-                manager.save_now(step, model=state)
-                whole = time.perf_counter() - started
-            if step > keep_last:
-                totals.append(whole)
-                for name, value in timers.items():
-                    per_phase[name].append(value)
+        discard = max(warmup, keep_last)
+        for step in range(1, discard + repeats + 1):
+            kept = step > discard
+            order = ["plain", "hash", "save"] + (["framework"] if baseline is not None else [])
+            random.Random(step).shuffle(order)  # noqa: S311  # a fixed benchmark order, not security
+            for kind in order:
+                if kind == "plain":
+                    value = plain_write(base / "plain.bin", data)
+                    plain.extend([value] if kept else [])
+                elif kind == "hash":
+                    started = time.perf_counter()
+                    hashlib.sha256(data).hexdigest()
+                    hashes.extend([time.perf_counter() - started] if kept else [])
+                elif kind == "framework" and baseline is not None:
+                    started = time.perf_counter()
+                    baseline(base / "baseline.bin")
+                    with (base / "baseline.bin").open("rb") as handle:
+                        os.fsync(handle.fileno())
+                    elapsed = time.perf_counter() - started
+                    (base / "baseline.bin").unlink()
+                    framework.extend([elapsed] if kept else [])
+                else:
+                    with phase_timers(manager) as timers:
+                        started = time.perf_counter()
+                        manager.save_now(step, model=state)
+                        whole = time.perf_counter() - started
+                    if kept:
+                        totals.append(whole)
+                        for name, value in timers.items():
+                            per_phase[name].append(value)
         run.finish()
     total = statistics.median(totals)
     phases = {name: statistics.median(values) for name, values in per_phase.items()}
-    phases["everything else (state build, manifest, locking, scans)"] = max(
-        0.0, total - sum(phases.values())
-    )
+    phases["unattributed (state build, locking, scans, timer cost)"] = total - sum(phases.values())
     return {
         "bytes": len(data),
         "save_now_s": total,
-        "plain_write_fsync_s": plain,
-        "framework_save_fsync_s": framework,
+        "plain_write_fsync_s": statistics.median(plain),
+        "framework_save_fsync_s": statistics.median(framework) if framework else None,
         "sha256_pass_s": statistics.median(hashes),
         "phases_s": phases,
+        "rounds": repeats,
     }
 
 
-def main(megabytes: int = 256, repeats: int = 3) -> None:
+def main(megabytes: int = 64, repeats: int = 9) -> None:
+    """Profile a synthetic float32 state of ``megabytes`` against ``torch.save`` when the framework
+    is installed (without it the comparison is with a plain write of the same bytes only)."""
     state = {"w": np.random.default_rng(0).random(megabytes * 1024 * 1024 // 4).astype(np.float32)}
-    data = get_serializer("safetensors").dumps({"model": state})
-    with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp)
-        plain = [plain_write(base / "plain.bin", data) for _ in range(repeats)]
-        unverified = [
-            managed_save(base / f"u{i}", base / "store", state, verify=False)
-            for i in range(repeats)
-        ]
-        verified = [
-            managed_save(base / f"v{i}", base / "store", state, verify=True) for i in range(repeats)
-        ]
-        steady = steady_saves(base / "steady", base / "store", state)[keep_last_warmup:]
-    p, u, v = (statistics.median(x) for x in (plain, unverified, verified))
-    # the managed numbers include serialising the state, which the plain write does not
-    serialise = []
-    for _ in range(repeats):
-        started = time.perf_counter()
-        get_serializer("safetensors").dumps({"model": state})
-        serialise.append(time.perf_counter() - started)
-    s = statistics.median(serialise)
-    sys.stdout.write(f"state {megabytes} MB, median of {repeats}\n")
-    sys.stdout.write(f"write + fsync of the same bytes:        {p:.3f} s\n")
-    sys.stdout.write(f"serialise only:                          {s:.3f} s\n")
-    sys.stdout.write(f"save_now, verify_after_save=False:       {u:.3f} s\n")
-    sys.stdout.write(f"save_now, verify_after_save=True:        {v:.3f} s\n")
-    sys.stdout.write(
-        f"save_now in steady state (keep_last=3, retention on): {statistics.median(steady):.3f} s\n"
-    )
-    sys.stdout.write(
-        f"overhead over serialise + plain write, unverified: {(u / (s + p) - 1) * 100:.1f} %\n"
-    )
-    sys.stdout.write(
-        f"overhead over serialise + plain write, verified:   {(v / (s + p) - 1) * 100:.1f} %\n"
-    )
+    baseline: Callable[[Path], None] | None = None
+    try:
+        framework = importlib.import_module("to" + "rch")
+    except ImportError:
+        framework = None
+    if framework is not None:
+        tensors = {"w": framework.from_numpy(state["w"])}
+        baseline = lambda path: framework.save(tensors, path)  # noqa: E731
+    result = profile_state(state, baseline=baseline, repeats=repeats)
+    save, plain, ref = (
+        result["save_now_s"], result["plain_write_fsync_s"], result["framework_save_fsync_s"]
+    )  # fmt: skip
+    sys.stdout.write(f"state {result['bytes']} bytes, median of {result['rounds']} rounds\n")
+    sys.stdout.write(f"save_now (steady state, keep_last=3):  {float(save):.4f} s\n")  # type: ignore[arg-type]
+    sys.stdout.write(f"plain write + fsync of the same bytes: {float(plain):.4f} s\n")  # type: ignore[arg-type]
+    if ref is not None:
+        sys.stdout.write(
+            f"framework save + fsync of the same state: {float(ref):.4f} s "  # type: ignore[arg-type]
+            f"(save_now is {float(save) / float(ref):.2f} times that)\n"  # type: ignore[arg-type]
+        )
+    phases: dict[str, float] = result["phases_s"]  # type: ignore[assignment]
+    for name, seconds in sorted(phases.items(), key=lambda kv: -kv[1]):
+        sys.stdout.write(
+            f"  {name:55s} {1000 * seconds:9.2f} ms {100 * seconds / float(save):6.1f} %\n"
+        )  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

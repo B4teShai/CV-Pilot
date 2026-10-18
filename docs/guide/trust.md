@@ -147,7 +147,9 @@ into a new directory only you can use (mode 0700, the file 0600), checking the S
 while it copies, and returns that path for `resume_arguments`; the hooks' `resume_arguments` take the verified path as it is and recheck the file's identity
 (inode, size, modification time) and SHA-256 immediately before returning it, which narrows the gap
 to the time between that recheck and your framework's open; they do not copy. Call `private_copy`
-first to remove it. The restore path of
+first to remove it. A `pt` checkpoint in a directory that others can write is therefore out of what
+the default helpers protect: use `private_copy`, or keep the directory yours alone (the helpers open the file
+without following links, and `adopt` reads the source once, so what it scans is what it stores). The restore path of
 `CheckpointManager.restore` does not have the gap at all, because the bytes that were hashed are the
 bytes that are parsed. A `pt` file is read once on the way to a resume point: the archive scan runs
 over the bytes whose digest was just checked.

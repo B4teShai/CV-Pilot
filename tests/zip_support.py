@@ -5,8 +5,9 @@ member has the data-descriptor flag (bit 3) with zero checksum and sizes in its 
 16-byte descriptor after the data, a 64-byte aligned data start through an alignment padding
 record in the local extra field, version fields of zero, and a zip64 end record plus locator in
 front of the classic end record even for a few kilobytes. ``framework_archive`` reproduces that
-layout byte for byte (a marked test compares it with a file the installed framework wrote), with
-switches to produce each deviation a hostile archive could use.
+layout: it equals the real files kept in ``tests/data`` (written by 2.6.0 and 2.14.1), which a unit
+test checks byte for byte, and a marked test repeats the comparison with the installed framework. It
+has switches to produce each deviation a hostile archive could use.
 """
 
 from __future__ import annotations
