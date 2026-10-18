@@ -239,8 +239,9 @@ the messages are the reader's own words):
 
 So only Lightning's own files resume through CV-Pilot with verification. For a Hugging Face model the
 verified path is `CheckpointManager` itself: notebook 04 saved the model and AdamW state of a real
-ResNet-18, restored them in a fresh process, got bit-identical weights, two further steps equal to the
-live ones, and refusal of a flipped byte, a truncation and a foreign file. Ultralytics, MMEngine and the
+ResNet-18, restored them and compared tensor by tensor: bit-identical weights and optimizer state, and two
+further steps equal to the live ones. In a fresh process a flipped byte, a truncation and a valid
+foreign file of the same size (caught by the digest) were all refused. Ultralytics, MMEngine and the
 Hugging Face `Trainer` resume from their own files and that resume is not verified by CV-Pilot (the
 notebook shows what they do: the Hugging Face `Trainer` reached identical weights; Ultralytics completed
 the missing epoch but its final-epoch metrics differ from the uninterrupted run: mAP50-95 0.4072
