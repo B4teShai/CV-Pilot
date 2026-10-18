@@ -448,3 +448,10 @@ def test_the_real_file_notebook_never_loads_a_file_before_it_was_checked() -> No
     assert fetch < first_load
     assert not any("torch.load(" in s or "pickle.load" in s for s in codes)
     assert not any("weights_only=False" in s for s in codes)
+
+
+def test_the_authenticated_level_was_exercised_on_the_real_framework_file() -> None:
+    out = all_output(REAL_NB)
+    assert re.search(r"last\s+0+\d+\s+valid\s+authenticated", out)
+    assert "key_changed" in out and "needs the key in CVPILOT_CKPT_KEY" in out
+    assert "the key never appears in any output: True" in out
