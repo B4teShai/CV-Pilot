@@ -12,8 +12,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOKS = ROOT / "notebooks"
-NAMES = ("01_tutorial.ipynb", "02_edge_cases.ipynb", "03_alerts_and_hf_trainer.ipynb")
+NAMES = (
+    "01_tutorial.ipynb",
+    "02_edge_cases.ipynb",
+    "03_alerts_and_hf_trainer.ipynb",
+    "04_real_checkpoints.ipynb",
+)
 ALERTS_NB = NAMES[2]
+REAL_NB = NAMES[3]
 MAX_BYTES = 1_500_000
 MAX_PNG = 8
 HEX64 = re.compile(r"\b[0-9a-f]{64}\b")
@@ -352,3 +358,95 @@ def test_the_prose_carries_no_hand_typed_measurement() -> None:
     for phrase in ("four steps", "12 logged", "0.02", "about five seconds", "at most about five"):
         assert phrase not in prose, phrase
     assert "filled in after the run" not in prose
+
+
+# -- notebook 04: real checkpoint files ---------------------------------------------------------
+
+
+def layout_rows(name: str) -> dict[tuple[str, str], tuple[str, str]]:
+    """``(framework, file) -> (outcome, message)`` from the summary table of the notebook."""
+    rows: dict[tuple[str, str], tuple[str, str]] = {}
+    out = output_text(code_cells(load(name))[-1])
+    for ln in out.splitlines():
+        match = re.match(r"(.{32}) (.{52}) (accepted|refused|ADOPTED)\s+(.*)$", ln)
+        if match:
+            rows[(match.group(1).strip(), match.group(2).strip())] = (
+                match.group(3),
+                match.group(4).strip(),
+            )
+    return rows
+
+
+def test_every_computed_check_of_the_real_file_notebook_holds() -> None:
+    out = all_output(REAL_NB)
+    checks = [ln for ln in out.splitlines() if ln.startswith("CHECK:")]
+    assert len(checks) >= 20, len(checks)
+    assert not [ln for ln in checks if not ln.endswith(": True")], checks
+    summary = re.search(r"checks: (\d+), failed: (\d+)", out)
+    assert summary is not None and int(summary.group(1)) == len(checks) and summary.group(2) == "0"
+
+
+def test_the_layout_table_records_what_each_real_file_got_and_the_exact_message() -> None:
+    rows = layout_rows(REAL_NB)
+    assert rows[("Lightning", "last.ckpt")][0] == "accepted"
+    ultra = "ultra" + "lytics"
+    yolo = next(v for (fw, _), v in rows.items() if fw == "Ultra" + "lytics")
+    assert yolo[0] == "refused" and ultra + ".nn.tasks.DetectionModel" in yolo[1]
+    hf = {file: v for (fw, file), v in rows.items() if fw == "Hugging Face"}
+    assert any(file.endswith("(the folder)") and v[0] == "refused" for file, v in hf.items())
+    assert any(file.endswith("optimizer.pt") and v[0] == "accepted" for file, v in hf.items())
+    assert any(
+        file.endswith("training_args.bin") and "TrainingArguments" in v[1] for file, v in hf.items()
+    )
+    mm = next(v for (fw, _), v in rows.items() if fw == "MMEngine")
+    assert mm[0] == "refused" and "HistoryBuffer" in mm[1]
+    assert not [k for k, v in rows.items() if v[0] == "ADOPTED"]
+
+
+def test_the_tamper_runs_cover_flip_truncate_and_swap_and_were_all_refused() -> None:
+    out = all_output(REAL_NB)
+    for label in ("flip one byte", "truncate to half", "swap in a foreign checkpoint"):
+        assert re.search(rf"{label}\s+verify exit 1 \|", out), label
+    assert "restored original              verify exit 0" in out
+    assert "CheckpointUntrustedError (checkpoint_missing)" in out
+    assert "resume_path default: None (nothing handed back)" in out
+    assert "a file was returned" not in "\n".join(
+        ln for ln in out.splitlines() if "resume_path default" in ln or "restore in a fresh" in ln
+    )
+
+
+def test_the_real_file_notebook_states_measured_results_for_the_save_overhead() -> None:
+    out = all_output(REAL_NB)
+    verdicts = [ln for ln in out.splitlines() if ln.startswith("VERDICT:") and "torch.save" in ln]
+    assert len(verdicts) == 3
+    for ln in verdicts:
+        percent = int(re.search(r"costs (\d+) % more", ln).group(1))  # type: ignore[union-attr]
+        assert ("is met" in ln) == (percent <= 5), ln
+    for state in ("Lightning tiny classifier", "YOLO11n weights", "ResNet-18 weights"):
+        assert re.search(rf"{state}\s+\d+\s+[\d.]+ms\s+[\d.]+ms", out), state
+    assert "data write (hash + write + fsync)" in out
+
+
+def test_the_real_file_notebook_hooks_ran_on_real_runs() -> None:
+    out = all_output(REAL_NB)
+    assert "status after train(): running; after test(): finished" in out
+    assert "the hook marked the killed " in out and "run failed: True" in out
+
+
+def test_the_real_file_notebook_prose_carries_no_hand_typed_measurement() -> None:
+    prose = "\n".join(
+        source(c) for c in load(REAL_NB)["cells"] if c["cell_type"] == "markdown"
+    )
+    unit = re.compile(r"\b\d[\d,.]*\s?(ms|MB|KB|GB|seconds|minutes|bytes|%|x)\b", re.IGNORECASE)
+    assert not unit.search(prose), unit.search(prose)
+    for phrase in ("47 MB", "a few kilobytes", "identical to the uninterrupted run: True"):
+        assert phrase not in prose, phrase
+
+
+def test_the_real_file_notebook_never_loads_a_file_before_it_was_checked() -> None:
+    codes = [source(c) for c in code_cells(load(REAL_NB))]
+    fetch = next(i for i, s in enumerate(codes) if "urlopen" in s)
+    first_load = min(i for i, s in enumerate(codes) if "YOLO(" in s or "torch.load" in s)
+    assert fetch < first_load
+    assert not any("torch.load(" in s or "pickle.load" in s for s in codes)
+    assert not any("weights_only=False" in s for s in codes)
