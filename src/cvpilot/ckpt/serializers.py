@@ -627,6 +627,7 @@ def _check_loaded(state: Any, data_bytes: int) -> dict[str, Any]:
     shared, so this is an upper bound, not an equality: the residual risk of ``.pt``)."""
     leaves = 0
     needed = 0
+    storages: dict[int, int] = {}
 
     def is_tensor(value: Any) -> bool:
         return callable(getattr(value, "numel", None)) and callable(
@@ -647,11 +648,18 @@ def _check_loaded(state: Any, data_bytes: int) -> dict[str, Any]:
                 walk(item, depth + 1)
         elif is_tensor(value):
             leaves += 1
-            needed += int(value.numel()) * int(value.element_size())
+            storage = getattr(value, "untyped_storage", None)
+            if callable(storage):  # tied or viewed tensors share one storage: count it once
+                shared = storage()
+                key = int(shared.data_ptr())
+                storages[key] = max(storages.get(key, 0), int(shared.nbytes()))
+            else:
+                needed += int(value.numel()) * int(value.element_size())
             if leaves > state_mod.MAX_TENSORS:
                 raise _unloadable("the loaded state holds too many tensors")
 
     walk(state, 0)
+    needed += sum(storages.values())
     if needed > data_bytes + (1 << 20):
         raise _unloadable("the loaded tensors are larger than the archive's tensor data")
     return dict(state)

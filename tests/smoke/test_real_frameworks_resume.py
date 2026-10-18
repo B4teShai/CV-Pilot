@@ -191,3 +191,15 @@ def test_a_flipped_byte_a_truncation_and_a_swapped_file_are_refused(
     stored.write_bytes(good)
     restored = find(tmp_path)
     assert restored is not None and restored.manifest.step == 4
+
+
+def test_tied_weights_that_share_one_storage_load_through_the_serializer(tmp_path: Path) -> None:
+    """Two names for one tensor (a shared embedding) are one storage in the archive; counting each
+    name would exceed the archive's tensor data and refuse a good file as unloadable."""
+    framework = pytest.importorskip(FRAMEWORK)
+    weight = framework.zeros(1024, 1024)  # 4 MB, above the check's 1 MB slack
+    state = {"embed": weight, "head": weight, "view": weight[:10]}
+    path = tmp_path / "tied.pt"
+    framework.save(state, path)
+    loaded = serializers.get_serializer("pt").loads(path.read_bytes())
+    assert set(loaded) == {"embed", "head", "view"}
