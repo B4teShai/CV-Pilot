@@ -282,6 +282,7 @@ _ALLOWED_GLOBALS = frozenset(
         (_T, "Size"),
         ("_codecs", "encode"),
         ("builtins", "set"),
+        ("__builtin__", "set"),  # what protocol 2 (the framework's default) calls it
     }
     | {
         (_T, name)
@@ -368,6 +369,11 @@ def _scan_pickle(data: bytes) -> None:
 _LOCAL = struct.Struct("<4sHHHHHIIIHH")
 _CENTRAL = struct.Struct("<4sHHHHHHIIIHHHHHII")
 _EOCD = struct.Struct("<4sHHHHIIH")
+_Z64_END = struct.Struct("<4sQHHIIQQQQ")
+_Z64_LOCATOR = struct.Struct("<4sIQI")
+_DESCRIPTOR = struct.Struct("<4sIII")
+_FLAG_DESCRIPTOR = 0x008
+_FLAG_UTF8 = 0x800
 _PAD_TAG = 0x4246  # the alignment padding record the framework writes into local headers
 _ZIP64_MARK = 0xFFFFFFFF
 MAX_MEMBER_BYTES = 1 << 36
@@ -419,15 +425,38 @@ def _read_member(data: bytes, start: int, csize: int, usize: int, method: int, c
     return body
 
 
+def _check_zip64_end(data: bytes, end: int, total: int, cd_size: int, cd_offset: int) -> int:
+    """Accept the plain zip64 end record and locator the framework writes in front of the classic
+    end record; return where the central directory must end (the start of that record)."""
+    at = end - _Z64_LOCATOR.size - _Z64_END.size
+    if at < 0:
+        raise _unsafe("the zip64 end record is truncated")
+    z_sig, z_size, _vm, _vn, z_disk, z_cd_disk, z_on_disk, z_total, z_cd_size, z_cd_offset = (
+        _Z64_END.unpack_from(data, at)
+    )
+    l_sig, l_disk, l_offset, l_disks = _Z64_LOCATOR.unpack_from(data, end - _Z64_LOCATOR.size)
+    if (z_sig, z_size, z_disk, z_cd_disk) != (b"PK\x06\x06", _Z64_END.size - 12, 0, 0) or (
+        (z_on_disk, z_total, z_cd_size, z_cd_offset) != (total, total, cd_size, cd_offset)
+        or (l_sig, l_disk, l_offset, l_disks) != (b"PK\x06\x07", 0, at, 1)
+    ):
+        raise _unsafe("the zip64 end record disagrees with the classic end record")
+    return at
+
+
 def scan_pt_archive(data: bytes) -> int:
     """Check a ``.pt`` archive with one strict reader and return its tensor data size in bytes.
 
     The archive is parsed here, not by the loader, with these rules: it starts with a local
     header and ends with an end-of-central-directory record with no comment, so nothing hides
     before, between or after the members; central and local headers must agree on name, method,
-    flags, checksum and sizes; members are stored or deflated, never encrypted, never described
-    by a data descriptor, never zip64 (archives over 4 GiB are refused: use safetensors), with
-    no central extra fields or comments and only alignment padding as local extra; names are
+    flags, checksum and sizes; members are stored or deflated, never encrypted, never zip64
+    (archives over 4 GiB are refused: use safetensors), with no central extra fields or comments
+    and only alignment padding as local extra. Two things the framework's own writer does are
+    accepted, in exactly its form and nothing looser: a member may carry the data-descriptor flag,
+    with zero checksum and sizes in its local header and one 16-byte signed descriptor right after
+    its data that repeats the central directory's values; and a zip64 end record plus locator may
+    sit between the central directory and the classic end record, when it is the plain 56-byte
+    record whose every field equals the classic record's and whose locator points at it. Names are
     ASCII, relative, free of ``..``, backslashes, NUL and drive letters, and unique ignoring
     case; members are contiguous and non-overlapping; counts, sizes and ratios are bounded; the
     single ``data.pkl`` is decompressed here (checksum verified) and its opcode stream scanned,
@@ -450,7 +479,10 @@ def scan_pt_archive(data: bytes) -> int:
         raise _unsafe("multi-disk and zip64 archives are refused")
     if total == 0 or total > MAX_ARCHIVE_MEMBERS:
         raise _unsafe("the archive has no members or too many")
-    if cd_offset + cd_size != n - _EOCD.size:
+    end = n - _EOCD.size
+    if end >= _Z64_LOCATOR.size and data[end - _Z64_LOCATOR.size : end - 16] == b"PK\x06\x07":
+        end = _check_zip64_end(data, end, total, cd_size, cd_offset)
+    if cd_offset + cd_size != end:
         raise _unsafe("bytes lie between the members and the central directory or after it")
     seen: set[str] = set()
     cursor = 0
@@ -467,8 +499,8 @@ def scan_pt_archive(data: bytes) -> int:
         pos += _CENTRAL.size + nlen + elen + clen
         if csig != b"PK\x01\x02" or len(name_raw) != nlen or pos > cd_offset + cd_size:
             raise _unsafe("a central directory record is malformed")
-        if elen or clen or dstart or vneed > 20 or flags & ~0x800:
-            raise _unsafe("a member uses extra fields, comments, zip64, encryption or descriptors")
+        if elen or clen or dstart or vneed > 20 or flags & ~(_FLAG_UTF8 | _FLAG_DESCRIPTOR):
+            raise _unsafe("a member uses extra fields, comments, zip64 or encryption")
         if method not in (0, 8) or _ZIP64_MARK in (csize, usize, offset):
             raise _unsafe("a member is not plainly stored or deflated")
         name = _member_name(name_raw)
@@ -486,16 +518,28 @@ def scan_pt_archive(data: bytes) -> int:
         )
         lname = data[offset + _LOCAL.size : offset + _LOCAL.size + lnlen]
         extra = data[offset + _LOCAL.size + lnlen : offset + _LOCAL.size + lnlen + lelen]
+        described = bool(flags & _FLAG_DESCRIPTOR)
+        local_values = (0, 0, 0) if described else (crc, csize, usize)
         if (
             lsig != b"PK\x03\x04"
             or lname != name_raw
-            or (lflags, lmethod, lcrc, lcsize, lusize) != (flags, method, crc, csize, usize)
+            or (lflags, lmethod) != (flags, method)
+            or (lcrc, lcsize, lusize) != local_values
             or len(extra) != lelen
             or not _local_extra_ok(extra)
         ):
             raise _unsafe("a local header disagrees with the central directory")
         start = offset + _LOCAL.size + lnlen + lelen
         cursor = start + csize
+        if described:
+            if cursor + _DESCRIPTOR.size > cd_offset or _DESCRIPTOR.unpack_from(data, cursor) != (
+                b"PK\x07\x08",
+                crc,
+                csize,
+                usize,
+            ):
+                raise _unsafe("a data descriptor is missing or differs from the central directory")
+            cursor += _DESCRIPTOR.size
         if cursor > cd_offset:
             raise _unsafe("a member runs into the central directory")
         if name == "data.pkl" or name.endswith("/data.pkl"):
@@ -512,6 +556,22 @@ def scan_pt_archive(data: bytes) -> int:
         raise _unsafe("the archive must hold exactly one reasonably sized data.pkl")
     _scan_pickle(pickle_body)
     return data_bytes
+
+
+def check_pt_bytes(data: bytes) -> int:
+    """Everything that must hold before a framework may open these bytes: a loader version whose
+    ``weights_only=True`` is safe, and a clean archive (see ``scan_pt_archive``). Returns the
+    tensor data size.
+
+    Raises:
+        CheckpointCorruptError: reason ``unsafe_loader`` or ``unsafe_archive``.
+    """
+    version = framework_version()
+    if version is None or version < MIN_PT_VERSION:
+        raise CheckpointCorruptError(
+            "the framework is too old for pt files", reason="unsafe_loader"
+        )
+    return scan_pt_archive(data)
 
 
 def _check_loaded(state: Any, data_bytes: int) -> dict[str, Any]:

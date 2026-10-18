@@ -266,14 +266,9 @@ def _first_usable(
 def _check_pt(data: bytes | None) -> None:
     """A pt file goes to a framework's own loader: require a safe version and a clean archive,
     scanned from the very bytes whose SHA-256 was just verified."""
-    version = serializers.framework_version()
-    if version is None or version < serializers.MIN_PT_VERSION:
-        raise CheckpointCorruptError(
-            "the framework is too old for pt files", reason="unsafe_loader"
-        )
     if data is None:  # pragma: no cover  # load="pt" always sets it
         raise CheckpointCorruptError("the file was not read", reason="unloadable")
-    serializers.scan_pt_archive(data)
+    serializers.check_pt_bytes(data)
 
 
 def private_copy(point: ResumePoint) -> Path:

@@ -51,7 +51,7 @@ from cvpilot.ckpt.directory import (
 )
 from cvpilot.ckpt.remote import Mirror
 from cvpilot.ckpt.rng import capture_rng, validate_rng
-from cvpilot.ckpt.serializers import get_serializer
+from cvpilot.ckpt.serializers import check_pt_bytes, get_serializer
 from cvpilot.core.errors import (
     CheckpointCorruptError,
     CheckpointError,
@@ -736,13 +736,20 @@ class CheckpointManager:
         started = time.perf_counter()
         digest = hashlib.sha256()
         size = 0
+        chunks: list[bytes] = []
         for chunk in fsops.iter_regular_file(source, max_bytes=self._max_bytes):
             if size == 0:
                 get_serializer("pt").check(functools.partial(_head, chunk), len(chunk))
             digest.update(chunk)
+            chunks.append(chunk)
             size += len(chunk)
         if size == 0:
             raise CheckpointError("a checkpoint cannot be empty")
+        # the same scan resume runs, now: a file that resume would refuse is never stored (it
+        # would look saved and verified until the restart that needs it); the scan at resume time
+        # stays, because it reads the bytes that were hashed then
+        check_pt_bytes(b"".join(chunks))
+        del chunks
         existing = self._own.existing("last", step)
         if existing is not None and (existing.sha256, existing.size_bytes) == (
             digest.hexdigest(),
