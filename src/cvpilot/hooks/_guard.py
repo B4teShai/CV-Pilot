@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import operator
 from collections.abc import Callable
@@ -58,7 +59,11 @@ def metric_key(raw: object, prefix: str = "") -> str | None:
     if not isinstance(raw, str):
         return None
     text = "".join("_" if ord(c) < 32 or ord(c) == 127 else c for c in prefix + raw).strip()
-    return text[:MAX_KEY_CHARS] if text else None
+    if len(text) > MAX_KEY_CHARS:
+        # cut, but keep two different long keys different: a digest of the whole key ends the name
+        tag = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:8]
+        text = f"{text[: MAX_KEY_CHARS - 9]}~{tag}"
+    return text or None
 
 
 def metric_value(raw: object) -> float | None:

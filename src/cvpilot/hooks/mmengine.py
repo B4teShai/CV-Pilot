@@ -47,6 +47,8 @@ EXTRA = "mmengine"
 DEFAULT_INTERVAL = 10
 MAX_INTERVAL = 100_000
 STAGES = ("train", "val", "test")
+RUNNER_CLASSES = ("Runner", "FlexibleRunner")
+"""The framework's two runner classes: the second does not derive from the first."""
 PRIORITY = "VERY_LOW"
 """The framework's name for the last position in the hook order."""
 
@@ -55,10 +57,24 @@ _NO_PICKLE = (
 )
 
 
+def check_interval(interval: object) -> int:
+    """``interval`` as an int in ``[1, MAX_INTERVAL]``.
+
+    Raises:
+        ValueError: anything else (a zero would divide by zero in every callback).
+    """
+    if isinstance(interval, bool) or not isinstance(interval, int):
+        raise ValueError("interval must be an integer number of iterations")
+    if not 1 <= interval <= MAX_INTERVAL:
+        raise ValueError(f"interval must be between 1 and {MAX_INTERVAL}")
+    return interval
+
+
 class MMEngineCore:
     """Framework-free logic behind the hook."""
 
     def __init__(self, sink: Any, interval: int = DEFAULT_INTERVAL) -> None:
+        interval = check_interval(interval)
         self.sink = sink
         self.interval = interval
         self.guard = Guard(EXTRA)
@@ -99,23 +115,28 @@ class MMEngineCore:
     def test_epoch(self, runner: object, metrics: object) -> None:
         self.guard.run("after_test_epoch", self._record, metrics, runner, "test/")
 
-    def stage_done(self, stage: str) -> None:
+    def stage_done(self, stage: str, runner: object = None) -> None:
         """A stage returned. ``test`` is the last stage of a script, so the run finishes there;
         ``train`` and ``val`` leave it open for the stages that follow, and ``finish_at_exit``
         covers scripts that stop after them."""
         self.completed = True
         if stage == "test":
-            self.guard.run("stage_done", self._finish, "finished", always=True)
+            self.guard.run("stage_done", self._ranked_finish, "finished", runner, always=True)
 
-    def stage_failed(self) -> None:
+    def _ranked_finish(self, status: str, runner: object) -> None:
+        if runner is not None:
+            self._rank(runner)  # the rank gate also holds when no hook callback ran yet
+        self._finish(status)
+
+    def stage_failed(self, runner: object = None) -> None:
         self.failed = True
-        self.guard.run("stage_failed", self._finish, "failed", always=True)
+        self.guard.run("stage_failed", self._ranked_finish, "failed", runner, always=True)
 
-    def stage_interrupted(self) -> None:
+    def stage_interrupted(self, runner: object = None) -> None:
         """``KeyboardInterrupt`` or ``SystemExit`` ended a stage: stopped from outside (a signal, a
         scheduler, a person), which is ``preempted``, not a failure of the training."""
         self.failed = True
-        self.guard.run("stage_interrupted", self._finish, "preempted", always=True)
+        self.guard.run("stage_interrupted", self._ranked_finish, "preempted", runner, always=True)
 
     def _finish(self, status: str) -> None:
         if self.enabled and getattr(self.sink, "status", "running") in ("running", "resumed"):
@@ -178,11 +199,7 @@ class MMEngineHook:
     license_notice: str | None = None
 
     def __init__(self, interval: int = DEFAULT_INTERVAL) -> None:
-        if isinstance(interval, bool) or not isinstance(interval, int):
-            raise ValueError("interval must be an integer number of iterations")
-        if not 1 <= interval <= MAX_INTERVAL:
-            raise ValueError(f"interval must be between 1 and {MAX_INTERVAL}")
-        self.interval = interval
+        self.interval = check_interval(interval)
         self._attached: list[tuple[object, object]] = []
         self._wrapped: list[tuple[object, str, Any, bool]] = []
         self._cores: list[MMEngineCore] = []
@@ -191,7 +208,7 @@ class MMEngineHook:
         """A ``Runner`` of the framework, or an instance of a subclass of one (a subclass in
         another module counts when a class in its ancestry is the framework's ``Runner``)."""
         return callable(getattr(target, "register_hook", None)) and any(
-            cls.__name__ == "Runner" and cls.__module__.split(".")[0] == PACKAGE
+            cls.__name__ in RUNNER_CLASSES and cls.__module__.split(".")[0] == PACKAGE
             for cls in type(target).__mro__
         )
 
@@ -220,12 +237,12 @@ class MMEngineHook:
             try:
                 result = original(*args, **kwargs)
             except (KeyboardInterrupt, SystemExit):
-                core.stage_interrupted()  # guarded: it can never mask the exception
+                core.stage_interrupted(target)  # guarded: it can never mask the exception
                 raise
             except BaseException:
-                core.stage_failed()  # guarded: it can never mask the exception being raised
+                core.stage_failed(target)  # guarded: it can never mask the exception being raised
                 raise
-            core.stage_done(stage)
+            core.stage_done(stage, target)
             return result
 
         setattr(target, stage, run_stage)
@@ -237,7 +254,7 @@ class MMEngineHook:
             if isinstance(registered, list) and hook in registered:
                 registered.remove(hook)
         self._attached.clear()
-        for target, stage, original, had_own in self._wrapped:
+        for target, stage, original, had_own in reversed(self._wrapped):  # last wrapper off first
             if had_own:
                 setattr(target, stage, original)
             else:

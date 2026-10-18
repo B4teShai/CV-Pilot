@@ -67,10 +67,12 @@ def test_matches_a_runner_of_the_framework_and_its_subclasses_only() -> None:
     hook = mm.MMEngineHook()
     assert hook.matches(FakeMMRunner())
 
-    class FlexibleRunner(FakeMMRunner):
-        pass
+    # the framework's FlexibleRunner is NOT a subclass of its Runner (checked against the real
+    # package in tests/smoke/test_real_mmengine.py): it has to match on its own name
+    class FlexibleRunner:
+        register_hook = FakeMMRunner.register_hook
 
-    FlexibleRunner.__module__ = "mmengine.runner.flexible_runner"
+    FlexibleRunner.__module__ = "mmengine.runner._flexible_runner"
     assert hook.matches(FlexibleRunner())
 
     class MyRunner(FakeMMRunner):
@@ -379,3 +381,35 @@ def test_alerts_work_through_the_hook_path(monkeypatch: pytest.MonkeyPatch) -> N
     runner.test()
     (chan,) = RecordingChannel.instances
     assert [(r, s) for r, s, _ in chan.sent] == [("nan_loss", 9)]
+
+
+def test_a_bad_interval_cannot_reach_the_core_and_disable_the_hook_by_division_by_zero() -> None:
+    for interval in (0, -3, True, 1.5, mm.MAX_INTERVAL + 1):
+        with pytest.raises(ValueError, match="interval"):
+            mm.MMEngineCore(RecordingSink(), interval)  # type: ignore[arg-type]
+
+
+def test_attaching_twice_and_detaching_leaves_no_wrapper_behind() -> None:
+    runner = FakeMMRunner()
+    hook = mm.MMEngineHook()
+    hook.attach(runner, RecordingSink())
+    hook.attach(runner, RecordingSink())
+    hook.detach()
+    assert not any(name in vars(runner) for name in ("train", "val", "test"))
+    assert runner.hooks == []
+
+
+def test_a_failure_on_another_rank_does_not_mark_the_run_failed_even_before_the_first_hook() -> (
+    None
+):
+    class EarlyCrash(FakeMMRunner):
+        def train(self) -> str:  # fails before ``before_run`` ever fires
+            raise ValueError("boom")
+
+    EarlyCrash.__module__, EarlyCrash.__name__ = FakeMMRunner.__module__, "Runner"
+    runner = EarlyCrash(rank=1)
+    sink = RecordingSink()
+    mm.MMEngineHook().attach(runner, sink)
+    with pytest.raises(ValueError):
+        runner.train()
+    assert sink.finished == []

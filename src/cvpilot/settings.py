@@ -103,6 +103,9 @@ def parse_hosts(value: Any) -> tuple[str, ...]:
     return tuple(names)
 
 
+_RANK = re.compile(r"-?[0-9]{1,18}")  # ASCII digits only: int() accepts and rejects others oddly
+
+
 def is_rank_zero(environ: Mapping[str, str] | None = None) -> bool:
     """False when ``RANK`` or ``LOCAL_RANK`` names a process other than rank zero.
 
@@ -113,7 +116,7 @@ def is_rank_zero(environ: Mapping[str, str] | None = None) -> bool:
     source = os.environ if environ is None else environ
     for name in ("RANK", "LOCAL_RANK"):
         raw = source.get(name, "").strip()
-        if raw.lstrip("-").isdigit() and int(raw) != 0:
+        if _RANK.fullmatch(raw) and int(raw) != 0:
             return False
     return True
 

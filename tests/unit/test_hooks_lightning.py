@@ -307,3 +307,28 @@ def test_a_hung_tracker_never_delays_the_callbacks(monkeypatch: pytest.MonkeyPat
     assert worst < 0.5
     Recording.instances[0].release.set()
     trainer.callbacks[0].on_teardown(trainer, None, "test")
+
+
+def test_a_metric_key_longer_than_the_limit_stays_distinct_from_its_neighbours() -> None:
+    from cvpilot.hooks._guard import MAX_KEY_CHARS, metric_key
+
+    a, b = "k" * 300 + "a", "k" * 300 + "b"
+    ka, kb = metric_key(a), metric_key(b)
+    assert ka != kb and len(ka or "") <= MAX_KEY_CHARS and len(kb or "") <= MAX_KEY_CHARS
+    assert metric_key(a) == ka  # deterministic
+    assert metric_key("short") == "short"
+
+
+def test_the_relay_remembers_a_bounded_number_of_keys() -> None:
+    from cvpilot.hooks._guard import Guard
+    from cvpilot.hooks._sink import MAX_TRACKED_KEYS, ScalarRelay
+
+    class Sink:
+        def log(self, points: dict[str, float], *, step: int) -> None: ...
+
+    guard = Guard("t")
+    relay = ScalarRelay(Sink(), guard)
+    for step in range(1, 3):
+        for chunk in range(0, MAX_TRACKED_KEYS + 500, 500):
+            relay.log({f"k{chunk + i}": 1.0 for i in range(500)}, step)
+    assert len(relay._last) <= MAX_TRACKED_KEYS and guard.skipped > 0

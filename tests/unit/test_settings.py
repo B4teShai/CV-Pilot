@@ -93,3 +93,11 @@ def test_store_dir_rejects_files_root_empty_and_nul(tmp_path: pytest.TempPathFac
     for bad in ("", "   ", "/", "a\x00b", str(f)):
         with pytest.raises(SettingsError, match="CVPILOT_STORE_DIR"):
             load_settings({"CVPILOT_STORE_DIR": bad})
+
+
+def test_a_rank_value_that_is_not_plain_ascii_digits_counts_as_rank_zero_and_never_raises() -> None:
+    from cvpilot.settings import is_rank_zero
+
+    for raw in ("²", "٣", "1e3", "abc", "0x1", "", " ", "1" * 40, "--1"):
+        assert is_rank_zero({"RANK": raw}) is True, raw
+    assert is_rank_zero({"RANK": " 1 "}) is False and is_rank_zero({"LOCAL_RANK": "-1"}) is False

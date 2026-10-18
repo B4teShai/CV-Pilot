@@ -129,3 +129,13 @@ def test_a_checkpoint_the_framework_wrote_is_refused_by_the_strict_scan(tmp_path
     with pytest.raises(CheckpointCorruptError, match="HistoryBuffer") as info:
         serializers.scan_pt_archive(files[-1].read_bytes())
     assert info.value.reason == "unsafe_archive"
+
+
+def test_the_flexible_runner_is_matched_although_it_is_not_a_runner_subclass() -> None:
+    pytest.importorskip(FRAMEWORK)
+    runners = pytest.importorskip("mmengine.runner")
+    from cvpilot.hooks.mmengine import MMEngineHook
+
+    assert runners.FlexibleRunner.__mro__[1] is object
+    bare = runners.FlexibleRunner.__new__(runners.FlexibleRunner)  # no training set-up needed
+    assert MMEngineHook().matches(bare)
