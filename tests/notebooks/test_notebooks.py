@@ -434,9 +434,7 @@ def test_the_real_file_notebook_hooks_ran_on_real_runs() -> None:
 
 
 def test_the_real_file_notebook_prose_carries_no_hand_typed_measurement() -> None:
-    prose = "\n".join(
-        source(c) for c in load(REAL_NB)["cells"] if c["cell_type"] == "markdown"
-    )
+    prose = "\n".join(source(c) for c in load(REAL_NB)["cells"] if c["cell_type"] == "markdown")
     unit = re.compile(r"\b\d[\d,.]*\s?(ms|MB|KB|GB|seconds|minutes|bytes|%|x)\b", re.IGNORECASE)
     assert not unit.search(prose), unit.search(prose)
     for phrase in ("47 MB", "a few kilobytes", "identical to the uninterrupted run: True"):
