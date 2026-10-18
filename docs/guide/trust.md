@@ -168,6 +168,22 @@ last saw as `CVPILOT_CKPT_MIN_STEP`. `cvpilot ckpt verify --expect-min-step N` c
 against such a number, and `--accept-rollback-to N` accepts a rollback from the store or pointer on
 purpose (logged); neither lowers the operator's own floor.
 
+## Proven on real files, and what is still experimental
+
+Notebook 04 ran the checks below on files written by real training runs (a Lightning `.ckpt`, and a
+real ResNet-18 model and optimizer saved as safetensors), not on files the tests wrote:
+
+* **Proven:** size and SHA-256 verification with refusal of a flipped byte, a truncation and a valid
+  foreign file; the `anchored` level (the run store's digest) and the `authenticated` level (HMAC key:
+  the right key verifies, another key and no key do not, and a flipped byte fails even with the right
+  key); `anchored` raising where the default policy returns nothing; the strict reader's layout.
+* **Experimental (built and unit-tested, never run against the real thing):** the remote mirror to S3,
+  GCS and Azure (tested against an in-memory filesystem only, no real bucket and no real credentials),
+  the AWS and GCP preemption notice pollers (local listeners only), the `local_chain_only` level on
+  real framework files, and the directory lock and hard-link publishing on a network filesystem (the
+  chaos tests kill real processes on a local disk only). Treat their guarantees as design intent
+  until a run on real storage says otherwise.
+
 ## What a forged checkpoint can and cannot do
 
 Even at `local_chain_only` a forged checkpoint can supply weights and training state, so it can
@@ -182,9 +198,13 @@ rolled back on failure, and nothing restored selects a module, attribute or clas
 safetensors is the default and the recommended format. `pt` (a framework's own archive) needs
 `allow_pt_format=True` or `CVPILOT_CKPT_ALLOW_PT=1`, a framework at version 2.6 or newer (an
 earlier `weights_only=True` could be bypassed), an archive that passes a strict in-house reader
-(no hidden bytes, duplicate names, descriptors, zip64 or extra fields; `data.pkl` limited to an
-allow-list of tensor-storage globals and never executed), and is loaded only with
-`weights_only=True`. Residual risk: a flaw in the framework's own restricted unpickler.
+(no hidden bytes, duplicate names, extra fields or archives over 4 GiB; the data descriptors and the
+zip64 end record that the framework's own writer produces are accepted in exactly its form and
+nothing looser; `data.pkl` limited to an allow-list of tensor-storage globals and never executed),
+and is loaded only with `weights_only=True`. Residual risk: a flaw in the framework's own restricted
+unpickler. Files that pickle objects by class (an Ultralytics `last.pt`, an MMEngine `.pth`) do not
+pass the allow-list and are refused: CV-Pilot does not vouch for them, see
+[Checkpoints](checkpoints.md#frameworks-that-write-their-own-files).
 
 ## The gate and the run store
 

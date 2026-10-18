@@ -1,4 +1,4 @@
-"""Infrastructure: framework hooks (Lightning, and the YOLO framework), one module each.
+"""Infrastructure: framework hooks (Lightning, Hugging Face, the YOLO framework, MMEngine).
 
 A hook turns a training framework's callbacks into ``MetricSink`` calls. Rules (tests in
 ``tests/unit/test_hooks_*.py``):

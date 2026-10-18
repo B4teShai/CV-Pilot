@@ -714,16 +714,21 @@ class CheckpointManager:
         return self._save("last", step, state)
 
     def adopt(self, path: str | Path, step: int) -> CheckpointManifest:
-        """Bring a checkpoint file a framework wrote (Lightning ``last.ckpt``, a YOLO
-        ``last.pt``) under verification: it is streamed into the ``last`` timeline as a ``pt``
-        checkpoint with a manifest, a digest in the run store and a mirror upload, so that
-        ``resume_path`` can hand back a file that was verified instead of one that merely
-        exists. The source must be a regular file (never a symlink), within the size limit and
-        a zip archive; its content is scanned again at resume time, before any framework loads it.
+        """Bring a checkpoint file a framework wrote (a Lightning ``last.ckpt``) under
+        verification: it is streamed into the ``last`` timeline as a ``pt`` checkpoint with a
+        manifest, a digest in the run store and a mirror upload, so that ``resume_path`` can hand
+        back a file that was verified instead of one that merely exists. The source must be a
+        regular file (never a symlink), within the size limit and a zip archive whose pickle
+        passes the strict scan
+        (run here, and again at resume time before any framework loads it): a file that pickles
+        objects by class, such as a YOLO ``last.pt`` or an MMEngine ``.pth``, is refused
+        with ``unsafe_archive`` and nothing is stored.
 
         Raises:
             CheckpointFormatError: the ``pt`` format was not opted into (``allow_pt_format``).
             CheckpointError: the source is missing, a symlink, too large or not an archive.
+            CheckpointCorruptError: the archive does not pass the scan (``unsafe_archive``) or
+                the framework is too old to load it safely (``unsafe_loader``).
             CheckpointStepError, CheckpointExistsError: the step does not advance or exists
                 with other content (identical bytes are a no-op).
         """

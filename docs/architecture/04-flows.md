@@ -16,8 +16,7 @@ pinned baseline.
 Preconditions:
 
 - A run was started by `cvpilot.init()` or `cvpilot.autolog()`; the hook for the framework
-  is installed (`cvpilot[ultralytics]`, `cvpilot[lightning]` or `cvpilot[hf]`; the MMEngine
-  hook is planned and has no extra yet).
+  is installed (`cvpilot[ultralytics]`, `cvpilot[lightning]`, `cvpilot[hf]` or `cvpilot[mmengine]`).
 - The validation set is available as `PredictionTable` and `AnnotationTable` at the end of
   a validation epoch, with `class_names` and optional slice metadata columns.
 - For the gate: a baseline is pinned (`cvpilot baseline set prod <run_id> --eval-set ...`)
@@ -87,7 +86,7 @@ above 256, malformed Parquet or an existing snapshot give `EvalInputError`,
 `SliceCardinalityError` or `SnapshotExistsError`, exit 1 with one `error:` line and one
 `command_failed` event, and nothing is stored. Steps 5 to 8 are built: `cvpilot baseline`,
 `cvpilot compare` and `cvpilot gate` (ADR-0007) read only verified snapshots and never trust a
-stored comparison. Forwarders (ADR-0008), alerts (ADR-0009) and the Lightning, Hugging Face and Ultralytics hooks (steps 1 and 2, scalars only; `autolog`) are built; `log_eval` also runs the `eval_regression` rule against the pinned baseline; the outbox is not built, and the
+stored comparison. Forwarders (ADR-0008), alerts (ADR-0009) and the Lightning, Hugging Face, Ultralytics and MMEngine hooks (steps 1 and 2, scalars only; `autolog`) are built; `log_eval` also runs the `eval_regression` rule against the pinned baseline; the outbox is not built, and the
 duplicate-batch failure is raised to the caller without a `metrics_rejected` event.
 `cvpilot runs show` and `cvpilot repro` read the result.
 

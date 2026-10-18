@@ -30,6 +30,7 @@ install.
 | `cvpilot[lightning]` | Lightning | logger and callback for `Trainer` |
 | `cvpilot[hf]` | Hugging Face `transformers` with PyTorch | callback for the `Trainer`; see [Alerts](alerts.md) |
 | `cvpilot[ultralytics]` | Ultralytics | callbacks for YOLO models; **AGPL-3.0**, see below |
+| `cvpilot[mmengine]` | MMEngine | hook for the MMEngine `Runner`: scalars, `val/` and `test/` metrics, the end of the run |
 | `cvpilot[mlflow]`, `[wandb]`, `[trackio]` | the tracker SDK | forward scalars to a tracker |
 
 The Ultralytics package is licensed AGPL-3.0. CV-Pilot never imports it from its own code and

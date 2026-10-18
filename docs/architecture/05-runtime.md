@@ -95,9 +95,10 @@ fields are never used for secrets.
 | `cvpilot[remote]` | the `fsspec` library only, for a backend you install yourself | `fsspec` | none |
 | `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker (`init(forward_to=["mlflow"])`) | `mlflow-skinny`, `wandb`, `trackio` | none |
 | `cvpilot[hf]` | Hugging Face `Trainer` callback (`autolog(trainer, ...)`): `train/` and `eval/` scalars, saves as events, the end of training | `transformers[torch]` (brings `torch`) | GPU recommended |
-| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP; `resume_arguments(point)` for the `resume=` target of a verified `pt` file (confusion capture is planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
+| `cvpilot[mmengine]` | MMEngine `Runner` hook (`autolog(runner, ...)` or `MMEngineHook(interval=...).attach(runner, run)`): `train/` scalars every `interval` iterations, `val/` and `test/` metrics, the end of the run; no resume helper | `mmengine` (needs `torch` and `opencv-python`) | GPU recommended |
+| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP; `resume_arguments(point)` for the `resume=` target of a verified `pt` file (experimental: the framework's own `last.pt` is refused by the strict scan, see ADR-0010; confusion capture is planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
 
-The alert channels need no extra (they use the standard library). Planned, and deliberately not published as extras until they install something: the MMEngine hook and the server (`fastapi`, `uvicorn`, `sqlalchemy`,
+The alert channels need no extra (they use the standard library). Planned, and deliberately not published as extras until they install something: the server (`fastapi`, `uvicorn`, `sqlalchemy`,
 `asyncpg`). A test fails if a published extra is empty or if the documentation tells you to install
 an extra that does not exist.
 

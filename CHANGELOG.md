@@ -5,6 +5,45 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Fixed (checkpoints, found by running the verifier on real framework files, ADR-0010)
+
+- The strict `.pt` reader refused every file the framework writes (zip data descriptors and a zip64 end
+  record, even for a small file), so adopting, verifying or resuming a real Lightning checkpoint, and
+  restoring CheckpointManager's own `pt` format with the real framework, could not work. It now accepts
+  exactly that layout and still refuses every deviation (`tests/zip_support.py` builds it byte for byte;
+  a marked test compares it with a file the installed framework wrote).
+- `CheckpointManager.adopt` scans the archive before it stores anything. It used to store, log as saved
+  and verified, and only refuse at the restart that needed the file (an Ultralytics `last.pt` pickles the
+  model object): a file that cannot be resumed is now refused with the reason.
+- `cvpilot ckpt verify` and `list` honour `CVPILOT_CKPT_ALLOW_PT` (every `pt` checkpoint showed as
+  `pt_not_allowed`), and verify scans `pt` archives so it no longer calls valid a file that resume refuses.
+- A pickle written with protocol 2 that holds a `set` (`__builtin__.set`) passes the scan; the message
+  for a file that is not a zip archive (safetensors, JSON) no longer says "raw pickles are refused".
+- The guide's restore snippet converts NumPy arrays before `load_state_dict`.
+- The real-library smoke tests for Lightning files had never run and had two bugs; they are fixed and run.
+
+### Changed (checkpoints)
+
+- The save-overhead budget (5 % over `torch.save`) is withdrawn and replaced by measured numbers: on the
+  measured machine a steady-state save of ResNet-18 weights took 53.30 ms against 15.36 ms for
+  `torch.save` of the same state (3.5 times), YOLO11n weights 17.52 ms against 11.89 ms (1.5 times),
+  with two SHA-256 passes taking 51 % and 37 % of a save. `benchmarks/ckpt_save.py` gained a per-phase
+  profile (`profile_state`).
+- The status page labels the least-proven checkpoint features **experimental**: the remote mirror
+  (never run against a real bucket), the `local_chain_only` level on real files and the cloud preemption
+  notices. `anchored` and `authenticated` are proven on a real Lightning file.
+
+### Added (checkpoints)
+
+- Notebook 04 (`notebooks/04_real_checkpoints.ipynb`): real Lightning, Ultralytics YOLO11n, Hugging Face
+  `Trainer` and MMEngine runs, the exact refusal messages for each file layout, tamper runs (flip,
+  truncate, swap), resume comparisons with uninterrupted runs, and the save cost by phase on three real
+  model sizes. Ultralytics, MMEngine and Hugging Face resume files are refused by the reader and have no
+  verified resume; see the guide and ADR-0010.
+- An MMEngine hook (`pip install "cvpilot[mmengine]"`, `cvpilot.autolog(runner, ...)`): `train/`
+  scalars every `interval` iterations (default 10), `val/` and `test/` metrics, the end of the run, with
+  the guard, isolation and rank rules of the other hooks. No resume helper.
+
 ### Fixed
 
 - `cvpilot baseline set` (and `cvpilot.compare.baselines.set_baseline`) now refuses a run that is not

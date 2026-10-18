@@ -27,7 +27,7 @@ ckpt = CheckpointManager(
 state = ckpt.restore_latest_valid()  # None on a fresh start
 start = 0
 if state is not None:
-    model.load_state_dict(state["model"])
+    model.load_state_dict({k: torch.from_numpy(v) for k, v in state["model"].items()})
     apply_rng(state["rng"])  # restoring never sets your generators: you do (see Limits)
     start = state["dataloader_state"]["step"] + 1
 for step in range(start, total_steps):
@@ -213,21 +213,57 @@ training.
 
 ## Frameworks that write their own files
 
-`CheckpointManager.adopt(path, step)` brings a file a framework wrote (Lightning's `last.ckpt`, a
-YOLO `last.pt`) under verification, as a `pt` checkpoint. That format needs an explicit opt-in
-(`allow_pt_format=True` or `CVPILOT_CKPT_ALLOW_PT=1`) and a recent framework: see
-[Trust model](trust.md). `cvpilot.hooks.lightning.resume_arguments(point)` returns
-`{"ckpt_path": ...}` and the YOLO hook's `resume_arguments(point)` returns the weights path and
-`{"resume": True}`. They accept only a `pt` checkpoint that `cvpilot.resume_path` (or
-`find_resume_point`) returned in this process, as the path or the `ResumePoint`: never `"last"`, a
-relative name, an arbitrary path or a safetensors file (the default format is CheckpointManager's
-own and no framework can resume from it; restore it with `CheckpointManager.restore` into your
-model). Limits, stated plainly: the strict archive scan accepts plain state dictionaries, so a
-Lightning `last.ckpt` is adopted only if its archive scans clean, and an Ultralytics `last.pt`
-(which pickles the model object) is refused with `unsafe_archive`; when a `pt` file is skipped,
-`resume_point_skipped` and `resume_point_unavailable` say why instead of returning a bare `None`.
-The real-library behaviour is checked by `pytest -m real_libs`, which needs those libraries
-installed and is not part of the default run.
+`CheckpointManager.adopt(path, step)` brings a file a framework wrote under verification, as a `pt`
+checkpoint. That format needs an explicit opt-in (`allow_pt_format=True` or `CVPILOT_CKPT_ALLOW_PT=1`)
+and a recent framework: see [Trust model](trust.md). Before anything is stored, `adopt` runs the same
+scan resume runs, so a file that resume would refuse is refused up front, with the reason, and nothing
+is stored. `cvpilot.hooks.lightning.resume_arguments(point)` returns `{"ckpt_path": ...}`. The helpers
+accept only a `pt` checkpoint that `cvpilot.resume_path` (or `find_resume_point`) returned in this
+process, as the path or the `ResumePoint`: never `"last"`, a relative name, an arbitrary path or a
+safetensors file (the default format is CheckpointManager's own and no framework can resume from it;
+restore it with `CheckpointManager.restore` into your model). The Ultralytics hook has the same kind
+of helper, but Ultralytics' own `last.pt` never passes the scan (below), so it only ever sees other
+files and is **experimental**: it has not been proven on a real Ultralytics resume.
+
+What the strict reader did with the real files of notebook 04 (real short training runs on CPU;
+the messages are the reader's own words):
+
+| File | Result |
+|---|---|
+| Lightning `last.ckpt` from `ModelCheckpoint(save_last=True)` | Accepted. Verified under `anchored` and `authenticated`; a flipped byte, a truncation and a swapped-in valid foreign checkpoint were all refused; the resumed run ended with the same weights as the uninterrupted run. |
+| Ultralytics `last.pt` (and the pretrained `yolo11n.pt`) | Refused: `unsafe_archive: the pickle refers to ultralytics.nn.tasks.DetectionModel`. The file pickles the whole model object. Not verifiable, not resumable through CV-Pilot. |
+| Hugging Face `Trainer` folder `checkpoint-N` | The folder is refused: `checkpoint-N is not a regular file`. Its files: `optimizer.pt` and `scheduler.pt` are accepted (and cannot resume the trainer alone); `model.safetensors`, `config.json` and `trainer_state.json`: `the file is not a zip-archive checkpoint (raw pickles and safetensors files are not adopted)`; `rng_state.pth`: `the pickle refers to numpy._core.multiarray._reconstruct`; `training_args.bin`: `the pickle refers to transformers.training_args.TrainingArguments`. |
+| MMEngine `epoch_N.pth` | Refused: `unsafe_archive: the pickle refers to mmengine.logging.history_buffer.HistoryBuffer`. |
+| A pickled model object or an `os.system` pickle, both written by the framework | Refused when adopted: the message names the global (`torch.nn.modules.linear.Linear`, `posix.system`). |
+| A legacy non-zip `.pt` (`_use_new_zipfile_serialization=False`) | Refused: not a zip archive (covered by the real-library smoke test, not by the notebook). |
+
+So only Lightning's own files resume through CV-Pilot with verification. For a Hugging Face model the
+verified path is `CheckpointManager` itself: notebook 04 saved the model and AdamW state of a real
+ResNet-18, restored them in a fresh process, got bit-identical weights, two further steps equal to the
+live ones, and refusal of a flipped byte, a truncation and a foreign file. Ultralytics, MMEngine and the
+Hugging Face `Trainer` resume from their own files and that resume is not verified by CV-Pilot (the
+notebook shows what they do: the Hugging Face `Trainer` reached identical weights; Ultralytics completed
+the missing epoch but its final-epoch metrics differ from the uninterrupted run: mAP50-95 0.4072
+against 0.4111, box loss 1.170 against 1.291).
+
+When a `pt` file is skipped at resume, `resume_point_skipped` and `resume_point_unavailable` say why
+instead of returning a bare `None`. Under the default policy a file that does not verify is not
+returned (`None` and a warning with the reason, `digest_mismatch` or `size_mismatch`); under `anchored`
+or stricter, where the run store knows the step existed, the same situation raises
+`CheckpointUntrustedError` (`checkpoint_missing`). Verification and `cvpilot ckpt verify` also scan
+`pt` archives, so a command-line verification and a resume agree. The real-library behaviour is
+checked by `pytest -m real_libs` (which needs those libraries installed and is not part of the default
+run) and by notebook 04.
+
+## What a save costs
+
+Measured in notebook 04 on one machine (macOS arm64, local SSD, Python 3.13), steady state with
+retention on, against `torch.save` of the same state written and `fsync`ed to the same disk:
+ResNet-18 weights (44.8 MB) 53.30 ms against 15.36 ms (3.5 times), YOLO11n weights (10.7 MB) 17.52 ms
+against 11.89 ms (1.5 times). Two SHA-256 passes (while writing, and when the file is read back to
+verify it) are 51 % and 37 % of a save. The 5 % budget of the first design is withdrawn
+([ADR-0010](../adr/0010-real-checkpoint-files-and-mmengine.md)); a save is an operation of
+minutes-apart cadence: at the default interval it is 0.009 % of the wall time for ResNet-18.
 
 ## Command line
 
