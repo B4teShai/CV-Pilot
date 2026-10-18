@@ -143,3 +143,44 @@ def test_random_streams_the_scan_accepts_never_resolve_to_a_disallowed_global() 
         assert all(g in ALLOWED for g in resolved), (ops, resolved)
     assert accepted > 50 and refused > 50  # both outcomes were exercised
     assert struct.calcsize("<I") == 4
+
+
+def test_a_byte_string_pickled_by_protocol_2_still_passes() -> None:
+    import pickle
+
+    from zip_support import framework_archive
+
+    data = pickle.dumps({"rng": b"\x00\xff" * 100}, protocol=2)
+    assert b"_codecs" in data
+    serializers.scan_pt_archive(framework_archive({"archive/data.pkl": data}))
+
+
+def test_a_codec_call_that_could_multiply_memory_is_refused() -> None:
+    """``_codecs.encode`` is reachable by the framework's loader with any arguments, so a nested
+    hex or base64 encode could grow memory before the loader finishes; only latin1 is allowed."""
+    import codecs
+    import pickle
+
+    from zip_support import framework_archive
+
+    class Encode:
+        def __init__(self, arg: object, codec: str) -> None:
+            self.arg, self.codec = arg, codec
+
+        def __reduce__(self) -> tuple[object, ...]:
+            return (codecs.encode, (self.arg, self.codec))
+
+    nested = "x" * 1000
+    obj: object = nested
+    for _ in range(6):
+        obj = Encode(obj, "hex")
+    for payload in (
+        obj,
+        Encode("abc", "hex"),
+        Encode("abc", "base64"),
+        Encode(Encode("a", "latin1"), "latin1"),
+    ):
+        data = pickle.dumps({"a": payload}, protocol=2)
+        with pytest.raises(CheckpointCorruptError, match="codec") as info:
+            serializers.scan_pt_archive(framework_archive({"archive/data.pkl": data}))
+        assert info.value.reason == "unsafe_archive"

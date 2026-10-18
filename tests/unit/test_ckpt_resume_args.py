@@ -123,3 +123,17 @@ def test_a_pt_file_skipped_as_unsafe_says_so_instead_of_returning_a_bare_none(
     assert skipped and skipped[0]["reason"] == "unsafe_archive" and skipped[0]["step"] == 1
     none = [e for e in logged if e["message"] == "resume_point_unavailable"]
     assert none and none[0]["reasons"] == ["unsafe_archive"] and none[0]["level"] == "WARNING"
+
+
+def test_a_file_replaced_by_a_symlink_after_verification_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    point = point_of(tmp_path, monkeypatch, fmt="pt")
+    path = point.path
+    other = tmp_path / "other.pt"
+    other.write_bytes(path.read_bytes())  # same bytes: only the identity differs
+    path.parent.chmod(0o700)
+    path.unlink()
+    path.symlink_to(other)
+    with pytest.raises(ValueError, match="changed after it was verified"):
+        yolo_hook.resume_arguments(point)

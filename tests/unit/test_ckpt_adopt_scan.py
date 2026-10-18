@@ -140,3 +140,64 @@ def test_a_file_that_is_not_a_zip_archive_is_refused_with_a_message_that_says_wh
         with pytest.raises(CheckpointError, match="not adopted"):
             mgr.adopt(source, step=1)
         run.finish()
+
+
+def test_adopt_reads_the_source_once_so_a_swap_cannot_store_unscanned_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cvpilot.ckpt import fsops
+
+    good = archive(OrderedDict(epoch=1))
+    evil = archive({"model": ModelObject()})
+    source = tmp_path / "last.ckpt"
+    source.write_bytes(good)
+    real_iter, real_read = fsops.iter_regular_file, fsops.read_regular_file
+    reads: list[int] = []
+
+    def swapping(path: Path, *, max_bytes: int) -> Any:
+        reads.append(1)
+        return bytearray(good if len(reads) == 1 else evil)  # a second read sees another file
+
+    def swapping_iter(path: Path, *, max_bytes: int) -> Any:
+        reads.append(1)
+        yield good if len(reads) == 1 else evil
+
+    monkeypatch.setattr(fsops, "read_regular_file", swapping)
+    monkeypatch.setattr(fsops, "iter_regular_file", swapping_iter)
+    run, mgr = start(tmp_path)
+    manifest = mgr.adopt(source, step=1)
+    monkeypatch.setattr(fsops, "read_regular_file", real_read)
+    monkeypatch.setattr(fsops, "iter_regular_file", real_iter)
+    assert len(reads) == 1
+    stored = tmp_path / "ckpt" / run.run_id / manifest.path
+    assert stored.read_bytes() == good
+    run.finish()
+
+
+def test_adopt_holds_the_file_once_in_memory_and_refuses_oversize_before_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tracemalloc
+
+    body = bytes(range(256)) * (20 * 4096)  # about 21 MB of tensor-like data
+    data = framework_archive(
+        {"archive/data.pkl": pickle.dumps(OrderedDict(a=1), protocol=2), "archive/data/0": body}
+    )
+    source = tmp_path / "last.ckpt"
+    source.write_bytes(data)
+    run, mgr = start(tmp_path)
+    tracemalloc.start()
+    mgr.adopt(source, step=1)
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    assert peak < 1.6 * len(data), (peak, len(data))
+    monkeypatch.setattr(serializers, "MAX_PT_BYTES", 1000)
+    monkeypatch.setattr("cvpilot.ckpt.manager.MAX_PT_BYTES", 1000)
+    source2 = tmp_path / "big.ckpt"
+    source2.write_bytes(data)
+    with pytest.raises(CheckpointCorruptError) as info:
+        mgr.adopt(source2, step=2)
+    assert info.value.reason == "too_large"
+    with pytest.raises(CheckpointCorruptError, match="zip64"):
+        serializers.scan_pt_archive(data)
+    run.finish()

@@ -51,7 +51,7 @@ from cvpilot.ckpt.directory import (
 )
 from cvpilot.ckpt.remote import Mirror
 from cvpilot.ckpt.rng import capture_rng, validate_rng
-from cvpilot.ckpt.serializers import check_pt_bytes, get_serializer
+from cvpilot.ckpt.serializers import MAX_PT_BYTES, check_pt_bytes, get_serializer
 from cvpilot.core.errors import (
     CheckpointCorruptError,
     CheckpointError,
@@ -118,7 +118,7 @@ def _state_of(name: str, value: Any) -> Any:
     raise CheckpointError(f"{name} must be a mapping or have a state_dict() method")
 
 
-def _head(data: bytes, n: int) -> bytes:
+def _head(data: bytes | bytearray, n: int) -> bytes | bytearray:
     return data[:n]
 
 
@@ -476,7 +476,9 @@ class CheckpointManager:
     ) -> CheckpointManifest:
         started = time.perf_counter()
         try:
-            data: bytes | Iterable[bytes] = self._serializer.dumps(self._build_state(kind, state))
+            data: bytes | bytearray | Iterable[bytes] = self._serializer.dumps(
+                self._build_state(kind, state)
+            )
         except Exception as exc:  # noqa: BLE001  # logged and re-raised; callers decide
             self._emit(
                 "error", "checkpoint_save_failed", step=step, kind=kind,
@@ -489,7 +491,7 @@ class CheckpointManager:
         self,
         kind: CheckpointKind,
         step: int,
-        data: bytes | Iterable[bytes],
+        data: bytes | bytearray | Iterable[bytes],
         format: CheckpointFormat,  # noqa: A002
         metric: tuple[str, float] | None,
         started: float,
@@ -739,32 +741,24 @@ class CheckpointManager:
             )
         source = Path(path)
         started = time.perf_counter()
-        digest = hashlib.sha256()
-        size = 0
-        chunks: list[bytes] = []
-        for chunk in fsops.iter_regular_file(source, max_bytes=self._max_bytes):
-            if size == 0:
-                get_serializer("pt").check(functools.partial(_head, chunk), len(chunk))
-            digest.update(chunk)
-            chunks.append(chunk)
-            size += len(chunk)
-        if size == 0:
+        # One read: the bytes that are scanned are the bytes that are hashed, stored and tagged
+        # (a second read could see a file somebody replaced or Lightning rewrote in between). The
+        # size limit is checked from fstat before any byte is read; pt archives over the zip64
+        # limit are refused by the scan, so the cap is the smaller of the two.
+        data = fsops.read_regular_file(source, max_bytes=min(self._max_bytes, MAX_PT_BYTES))
+        if not data:
             raise CheckpointError("a checkpoint cannot be empty")
+        get_serializer("pt").check(functools.partial(_head, data), len(data))
         # the same scan resume runs, now: a file that resume would refuse is never stored (it
-        # would look saved and verified until the restart that needs it); the scan at resume time
-        # stays, because it reads the bytes that were hashed then
-        check_pt_bytes(b"".join(chunks))
-        del chunks
+        # would look saved and verified until the restart that needs it)
+        check_pt_bytes(data)
         existing = self._own.existing("last", step)
         if existing is not None and (existing.sha256, existing.size_bytes) == (
-            digest.hexdigest(),
-            size,
+            hashlib.sha256(data).hexdigest(),
+            len(data),
         ):
             return existing
-        return self._publish(
-            "last", step, fsops.iter_regular_file(source, max_bytes=self._max_bytes), "pt", None,
-            started,
-        )  # fmt: skip
+        return self._publish("last", step, data, "pt", None, started)
 
     def _lineage_best(self) -> float | None:
         """The best monitored value among this run and the runs it resumed, read from checkpoints

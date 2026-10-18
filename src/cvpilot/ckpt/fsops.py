@@ -231,6 +231,52 @@ def iter_regular_file(path: Path, *, max_bytes: int) -> Iterator[bytes]:
         os.close(fd)
 
 
+def read_regular_file(path: Path, *, max_bytes: int) -> bytearray:
+    """A regular file at an arbitrary path read into ONE buffer sized from ``fstat`` (so the peak
+    is the file once, not twice): never through a symlink, never more than ``max_bytes``, and a file
+    that grows or shrinks while it is read is refused."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise CheckpointCorruptError(f"{path.name} is missing", reason="missing") from None
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENXIO, errno.EISDIR):
+            raise CheckpointCorruptError(
+                f"{path.name} is not a regular file", reason="not_regular_file"
+            ) from None
+        raise CheckpointError(f"cannot open {path.name}: {exc}") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise CheckpointCorruptError(
+                f"{path.name} is not a regular file", reason="not_regular_file"
+            )
+        if info.st_size > max_bytes:
+            raise CheckpointCorruptError(
+                f"{path.name} is over the limit of {max_bytes} bytes", reason="too_large"
+            )
+        buffer = bytearray(info.st_size)
+        view = memoryview(buffer)
+        filled = 0
+        while filled < info.st_size:
+            got = os.readv(fd, [view[filled : filled + CHUNK * 16]])
+            if got == 0:
+                break
+            filled += got
+        if filled != info.st_size or os.read(fd, 1):
+            raise CheckpointCorruptError(
+                f"{path.name} changed size while it was read", reason="size_mismatch"
+            )
+        view.release()
+        return buffer
+    except OSError as exc:
+        if isinstance(exc, CheckpointError):
+            raise
+        raise CheckpointError(f"cannot read {path.name}: {exc}") from exc
+    finally:
+        os.close(fd)
+
+
 def read_at(dir_fd: int, name: str, offset: int, length: int, *, max_bytes: int) -> bytes:
     """``length`` bytes of a regular file starting at ``offset`` (one open, one ``pread``)."""
     fd, _ = _open_regular(dir_fd, name, max_bytes)
@@ -253,7 +299,7 @@ def read_prefix(dir_fd: int, name: str, length: int, *, max_bytes: int) -> bytes
         os.close(fd)
 
 
-def _write_all(fd: int, data: bytes) -> None:
+def _write_all(fd: int, data: bytes | bytearray) -> None:
     view = memoryview(data)
     while view:
         written = os.write(fd, view)
@@ -263,7 +309,7 @@ def _write_all(fd: int, data: bytes) -> None:
 def write_exclusive(
     dir_fd: int,
     name: str,
-    data: bytes | Iterable[bytes],
+    data: bytes | bytearray | Iterable[bytes],
     *,
     max_bytes: int | None = None,
     final_mode: int = 0o444,
@@ -286,7 +332,7 @@ def write_exclusive(
             if max_bytes is not None and total > max_bytes:
                 raise CheckpointError(f"checkpoint data exceeds the limit of {max_bytes} bytes")
             digest.update(chunk)
-            _write_all(fd, bytes(chunk))
+            _write_all(fd, chunk if isinstance(chunk, (bytes, bytearray)) else bytes(chunk))
         os.fsync(fd)
         os.fchmod(fd, final_mode)
     except BaseException as exc:

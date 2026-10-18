@@ -48,7 +48,7 @@ _DTYPE_BYTES = {
     "BF16": 2, "I32": 4, "U32": 4, "F32": 4, "F64": 8, "I64": 8, "U64": 8,
 }  # fmt: skip
 
-PrefixReader = Callable[[int], bytes]
+PrefixReader = Callable[[int], bytes | bytearray]
 """``reader(n)`` returns the first ``n`` bytes of the file."""
 
 
@@ -270,6 +270,8 @@ MAX_ARCHIVE_MEMBERS = 10_000
 MAX_MEMBER_NAME = 200
 MAX_COMPRESSION_RATIO = 100
 MAX_PICKLE_BYTES = 64 * 1024 * 1024
+MAX_PT_BYTES = 0xFFFFFFFE
+"""Larger archives need zip64 and are refused (and never read into memory)."""
 _MEMBER = re.compile(r"[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)*")
 _VERSION = re.compile(r"([0-9]{1,4})\.([0-9]{1,4})(?:[.+\-a-zA-Z0-9]*)")
 _T = "to" + "rch"  # spelled in parts: the repository QA gate scans source text for it
@@ -337,17 +339,38 @@ def _unsafe(message: str) -> CheckpointCorruptError:
     return CheckpointCorruptError(message, reason="unsafe_archive")
 
 
-def _scan_pickle(data: bytes) -> None:
+_ENCODE = ("_codecs", "encode")
+_NEUTRAL = frozenset({"MEMOIZE", "PUT", "BINPUT", "LONG_BINPUT"})
+
+
+def _scan_pickle(data: bytes | bytearray) -> None:
     recent: list[str | None] = []
+    # ``_codecs.encode`` is allowed only in the one shape protocol 2 uses for a byte string:
+    # encode(<string literal>, 'latin1'), which cannot grow its input. Any other call (hex or
+    # base64, an argument that is itself a call) could multiply memory before the loader sees it.
+    codec: list[str] = []
     try:
         for opcode, arg, _ in pickletools.genops(data):
             name = opcode.name
+            if codec and name not in _NEUTRAL:
+                want = codec[0]
+                ok = (
+                    (want == "text" and name in _STRING_OPS)
+                    or (want == "label" and name in _STRING_OPS and arg == "latin1")
+                    or (want == "pair" and name == "TUPLE2")
+                    or (want == "reduce" and name == "REDUCE")
+                )
+                if not ok:
+                    raise _unsafe("the pickle calls a codec other than a plain latin1 byte string")
+                codec.pop(0)
             if name in _FORBIDDEN_OPS:
                 raise _unsafe(f"the pickle uses the forbidden opcode {name}")
             if name == "GLOBAL":
                 module, _, attr = str(arg).partition(" ")
                 if (module, attr) not in _ALLOWED_GLOBALS:
                     raise _unsafe(f"the pickle refers to {module[:40]}.{attr[:40]}")
+                if (module, attr) == _ENCODE:
+                    codec[:] = ["text", "label", "pair", "reduce"]
             elif name == "STACK_GLOBAL":
                 if len(recent) < 2 or recent[-1] is None or recent[-2] is None:
                     raise _unsafe("the pickle builds a global the scan cannot resolve")
@@ -355,6 +378,8 @@ def _scan_pickle(data: bytes) -> None:
                     raise _unsafe(
                         f"the pickle refers to {str(recent[-2])[:40]}.{str(recent[-1])[:40]}"
                     )
+                if (recent[-2], recent[-1]) == _ENCODE:
+                    codec[:] = ["text", "label", "pair", "reduce"]
             if name != "MEMOIZE" and not name.endswith("PUT"):
                 # a memo fetch (GET, BINGET) pushes something the scan cannot name: it counts as
                 # a non-string, so a STACK_GLOBAL fed by one is refused
@@ -379,7 +404,7 @@ _ZIP64_MARK = 0xFFFFFFFF
 MAX_MEMBER_BYTES = 1 << 36
 
 
-def _local_extra_ok(extra: bytes) -> bool:
+def _local_extra_ok(extra: bytes | bytearray) -> bool:
     """Only the framework's alignment padding records are tolerated in a local header."""
     if len(extra) > 4096:
         return False
@@ -394,7 +419,7 @@ def _local_extra_ok(extra: bytes) -> bool:
     return True
 
 
-def _member_name(raw: bytes) -> str:
+def _member_name(raw: bytes | bytearray) -> str:
     try:
         name = raw.decode("ascii")
     except UnicodeDecodeError:
@@ -408,8 +433,10 @@ def _member_name(raw: bytes) -> str:
     return name
 
 
-def _read_member(data: bytes, start: int, csize: int, usize: int, method: int, crc: int) -> bytes:
-    blob = data[start : start + csize]
+def _read_member(
+    data: bytes | bytearray, start: int, csize: int, usize: int, method: int, crc: int
+) -> bytes:
+    blob = bytes(data[start : start + csize])
     if method == 0:
         body = blob
     else:
@@ -425,7 +452,9 @@ def _read_member(data: bytes, start: int, csize: int, usize: int, method: int, c
     return body
 
 
-def _check_zip64_end(data: bytes, end: int, total: int, cd_size: int, cd_offset: int) -> int:
+def _check_zip64_end(
+    data: bytes | bytearray, end: int, total: int, cd_size: int, cd_offset: int
+) -> int:
     """Accept the plain zip64 end record and locator the framework writes in front of the classic
     end record; return where the central directory must end (the start of that record)."""
     at = end - _Z64_LOCATOR.size - _Z64_END.size
@@ -443,7 +472,7 @@ def _check_zip64_end(data: bytes, end: int, total: int, cd_size: int, cd_offset:
     return at
 
 
-def scan_pt_archive(data: bytes) -> int:
+def scan_pt_archive(data: bytes | bytearray) -> int:
     """Check a ``.pt`` archive with one strict reader and return its tensor data size in bytes.
 
     The archive is parsed here, not by the loader, with these rules: it starts with a local
@@ -466,6 +495,8 @@ def scan_pt_archive(data: bytes) -> int:
         CheckpointCorruptError: reason ``unsafe_archive``.
     """
     n = len(data)
+    if n > MAX_PT_BYTES:
+        raise _unsafe("archives over 4 GiB need zip64 and are refused: use safetensors")
     if n < _EOCD.size or data[:4] != b"PK\x03\x04":
         raise _unsafe("the archive does not start with a local file header")
     sig, disk, cd_disk, on_disk, total, cd_size, cd_offset, comment_len = _EOCD.unpack(
@@ -558,7 +589,7 @@ def scan_pt_archive(data: bytes) -> int:
     return data_bytes
 
 
-def check_pt_bytes(data: bytes) -> int:
+def check_pt_bytes(data: bytes | bytearray) -> int:
     """Everything that must hold before a framework may open these bytes: a loader version whose
     ``weights_only=True`` is safe, and a clean archive (see ``scan_pt_archive``). Returns the
     tensor data size.

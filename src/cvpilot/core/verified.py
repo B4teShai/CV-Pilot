@@ -57,9 +57,14 @@ def _still_the_same(path: Path, record: _Record) -> bool:
         if (st.st_ino, st.st_size, st.st_mtime_ns) != (record.ino, record.size, record.mtime_ns):
             return False
         digest = hashlib.sha256()
-        with open(path, "rb") as handle:
-            while chunk := handle.read(1 << 20):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            if (os.fstat(fd).st_ino, os.fstat(fd).st_size) != (record.ino, record.size):
+                return False  # the name now points at another file than the one checked
+            while chunk := os.read(fd, 1 << 20):
                 digest.update(chunk)
+        finally:
+            os.close(fd)
     except OSError:
         return False
     return digest.hexdigest() == record.sha256
