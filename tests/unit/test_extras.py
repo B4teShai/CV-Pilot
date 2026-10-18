@@ -36,6 +36,18 @@ def test_the_hf_extra_brings_the_framework_with_a_verified_lower_bound() -> None
     )  # the hook needs the trainer to run
 
 
+def test_the_mmengine_extra_brings_the_framework_with_a_lower_bound() -> None:
+    (requirement,) = EXTRAS["mmengine"]
+    assert requirement.startswith("mmengine>=0.")  # the hook needs the runner to attach to
+
+
+def test_every_hook_entry_point_has_an_extra_of_the_same_name() -> None:
+    hooks = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["entry-points"][
+        "cvpilot.hooks"
+    ]
+    assert sorted(hooks) == sorted(set(hooks) & set(EXTRAS))
+
+
 def test_the_remote_extras_bring_their_backend() -> None:
     assert any(d.startswith("s3fs") for d in EXTRAS["remote-s3"])
     assert any(d.startswith("gcsfs") for d in EXTRAS["remote-gcs"])

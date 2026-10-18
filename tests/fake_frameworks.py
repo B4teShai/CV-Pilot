@@ -169,3 +169,91 @@ class FakeHFTrainer:
 
 FakeHFTrainer.__module__ = f"{HF_PACKAGE}.trainer"
 FakeHFTrainer.__name__ = "Trainer"
+
+
+# -- the MMEngine ``Runner`` -----------------------------------------------------------------
+
+MM_PACKAGE = "mmengine"
+
+
+def install_fake_mmengine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register fake ``mmengine`` and ``mmengine.hooks`` modules with the ``Hook`` base class."""
+
+    class Hook:
+        """Like the framework's base class: every stage method exists and does nothing."""
+
+        def __getattr__(self, name: str) -> Any:
+            if name.startswith(("before_", "after_")):
+                return lambda *args, **kwargs: None
+            raise AttributeError(name)
+
+    package = types.ModuleType(MM_PACKAGE)
+    hooks_module = types.ModuleType(f"{MM_PACKAGE}.hooks")
+    hooks_module.Hook = Hook  # type: ignore[attr-defined]
+    package.hooks = hooks_module  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, MM_PACKAGE, package)
+    monkeypatch.setitem(sys.modules, f"{MM_PACKAGE}.hooks", hooks_module)
+
+
+class FakeMMRunner:
+    """Has ``register_hook``, ``hooks``, ``rank``, ``iter``, ``epoch`` and the three loops
+    (``train``, ``val``, ``test``) like the framework's ``Runner``."""
+
+    def __init__(self, *, rank: int = 0, fail_with: BaseException | None = None) -> None:
+        self.hooks: list[Any] = []
+        self.priorities: list[Any] = []
+        self.rank = rank
+        self.iter = 0
+        self.epoch = 0
+        self.fail_with = fail_with
+        self.calls: list[str] = []
+
+    def register_hook(self, hook: Any, priority: Any = None) -> None:
+        self.hooks.append(hook)
+        self.priorities.append(priority)
+
+    def fire(self, event: str, *args: Any, **kwargs: Any) -> None:
+        for hook in list(self.hooks):
+            getattr(hook, event)(self, *args, **kwargs)
+
+    def at(self, iteration: int) -> FakeMMRunner:
+        self.iter = iteration
+        return self
+
+    def _crash(self) -> None:
+        if self.fail_with is not None:
+            raise self.fail_with
+
+    def train(self) -> str:
+        """Like the framework: four iterations, a validation after the second epoch, then end."""
+        self.calls.append("train")
+        self.fire("before_run")
+        for iteration in range(4):
+            self.at(iteration).fire(
+                "after_train_iter", iteration, data_batch=None,
+                outputs={"loss": 1.0 / (iteration + 1), "loss_cls": 0.5},
+            )  # fmt: skip
+        self.at(4).fire("after_val_epoch", metrics={"accuracy/top1": 0.75})
+        self._crash()
+        self.fire("after_run")
+        return "model"
+
+    def val(self) -> dict[str, float]:
+        self.calls.append("val")
+        self.fire("before_run")
+        self.at(4).fire("after_val_epoch", metrics={"accuracy/top1": 0.8})
+        self._crash()
+        self.fire("after_run")
+        return {"accuracy/top1": 0.8}
+
+    def test(self) -> dict[str, float]:
+        self.calls.append("test")
+        self.fire("before_run")
+        self.at(4).fire("after_test_epoch", metrics={"accuracy/top1": 0.7})
+        self._crash()
+        self.fire("after_run")
+        return {"accuracy/top1": 0.7}
+
+
+FakeMMRunner.__module__ = f"{MM_PACKAGE}.runner.runner"
+FakeMMRunner.__name__ = "Runner"

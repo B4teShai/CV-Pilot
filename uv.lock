@@ -40,6 +40,15 @@ wheels = [
 ]
 
 [[package]]
+name = "addict"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/85/ef/fd7649da8af11d93979831e8f1f8097e85e82d5bfeabc8c68b39175d8e75/addict-2.4.0.tar.gz", hash = "sha256:b3b2210e0e067a281f5646c8c5db92e99b7231ea8b0eb5f74dbdf9e259d4e494", size = 9186, upload-time = "2020-11-21T16:21:31.416Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/00/b08f23b7d7e1e14ce01419a467b583edbb93c6cdb8654e54a9cc579cd61f/addict-2.4.0-py3-none-any.whl", hash = "sha256:249bb56bbfd3cdc2a004ea0ff4c2b6ddc84d53bc2194761636eb314d5cfa5dfc", size = 3832, upload-time = "2020-11-21T16:21:29.588Z" },
+]
+
+[[package]]
 name = "adlfs"
 version = "2026.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1478,6 +1487,9 @@ lightning = [
 mlflow = [
     { name = "mlflow-skinny" },
 ]
+mmengine = [
+    { name = "mmengine" },
+]
 remote = [
     { name = "fsspec" },
 ]
@@ -1541,6 +1553,7 @@ requires-dist = [
     { name = "gcsfs", marker = "extra == 'remote-gcs'", specifier = ">=2024.2" },
     { name = "lightning", marker = "extra == 'lightning'", specifier = ">=2.2" },
     { name = "mlflow-skinny", marker = "extra == 'mlflow'", specifier = ">=2.14" },
+    { name = "mmengine", marker = "extra == 'mmengine'", specifier = ">=0.10" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pyarrow", specifier = ">=18" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -1553,7 +1566,7 @@ requires-dist = [
     { name = "ultralytics", marker = "extra == 'ultralytics'", specifier = ">=8.2" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.17" },
 ]
-provides-extras = ["hf", "lightning", "mlflow", "remote", "remote-azure", "remote-gcs", "remote-s3", "safetensors", "trackio", "ultralytics", "wandb"]
+provides-extras = ["hf", "lightning", "mlflow", "mmengine", "remote", "remote-azure", "remote-gcs", "remote-s3", "safetensors", "trackio", "ultralytics", "wandb"]
 
 [package.metadata.requires-dev]
 audit = [{ name = "pip-audit", specifier = "==2.10.1" }]
@@ -3485,6 +3498,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c7/b3/a72208dd21b7b8345d3d15eafa8d5d2897d36e21420e22d290fad5775aa4/mlflow_skinny-3.17.1.tar.gz", hash = "sha256:c4587083811f638d9c2e6e8ab7caabbccc51ccc09de2c87a503913b32bbfd7bf", size = 3483742, upload-time = "2026-10-13T08:58:49.651Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0f/54/d0e5e2588013d7655f9cfb3d17fff4760c22652ce628b57ae4ac0fa913e6/mlflow_skinny-3.17.1-py3-none-any.whl", hash = "sha256:7374adf971e06f77f861dd8196c50e344557728b643192c665f0603c19a8d146", size = 4105632, upload-time = "2026-10-13T08:58:47.785Z" },
+]
+
+[[package]]
+name = "mmengine"
+version = "0.10.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "addict" },
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "opencv-python" },
+    { name = "pyyaml" },
+    { name = "regex", marker = "sys_platform == 'win32'" },
+    { name = "rich" },
+    { name = "termcolor" },
+    { name = "yapf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/17/14/959360bbd8374e23fc1b720906999add16a3ac071a501636db12c5861ff5/mmengine-0.10.7.tar.gz", hash = "sha256:d20ffcc31127567e53dceff132612a87f0081de06cbb7ab2bdb7439125a69225", size = 378090, upload-time = "2025-03-04T12:23:09.568Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/8e/f98332248aad102511bea4ae19c0ddacd2f0a994f3ca4c82b7a369e0af8b/mmengine-0.10.7-py3-none-any.whl", hash = "sha256:262ac976a925562f78cd5fd14dd1bc9b680ed0aa81f0d85b723ef782f99c54ee", size = 452720, upload-time = "2025-03-04T12:23:06.339Z" },
 ]
 
 [[package]]
@@ -6075,6 +6111,15 @@ wheels = [
 ]
 
 [[package]]
+name = "termcolor"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/46/79/cf31d7a93a8fdc6aa0fbb665be84426a8c5a557d9240b6239e9e11e35fc5/termcolor-3.3.0.tar.gz", hash = "sha256:348871ca648ec6a9a983a13ab626c0acce02f515b9e1983332b17af7979521c5", size = 14434, upload-time = "2025-12-29T12:55:21.882Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/d1/8bb87d21e9aeb323cc03034f5eaf2c8f69841e40e4853c2627edf8111ed3/termcolor-3.3.0-py3-none-any.whl", hash = "sha256:cf642efadaf0a8ebbbf4bc7a31cec2f9b5f21a9f726f4ccbb08192c9c26f43a5", size = 7734, upload-time = "2025-12-29T12:55:20.718Z" },
+]
+
+[[package]]
 name = "tokenizers"
 version = "0.23.3"
 source = { registry = "https://pypi.org/simple" }
@@ -7324,6 +7369,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/59/46/cc7130e6ca6b41ab72eb6a03177b933c7c74145545c99a8610ecc208c449/xxhash-4.0.1-pp311-pypy311_pp73-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8b99ebaf9e816ac5069423b1367ee7e8078fbcebcf62545506bb0608d2f4f468", size = 42725, upload-time = "2026-08-17T08:36:34.144Z" },
     { url = "https://files.pythonhosted.org/packages/1c/24/4f26ff9a7dd0998f6d1036bdddef7ce3e78972a74f7fffa7967e7bc3b7e4/xxhash-4.0.1-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f484ed57bb3e4142f9d6439568658c38be5f94b702ba00a1ff32c69783b6c66d", size = 39532, upload-time = "2026-08-17T08:23:57.556Z" },
     { url = "https://files.pythonhosted.org/packages/7d/f3/1ac078fc8fceadcf066469acecacb35d2821cbfaf7d6fc5ac2107c7a314d/xxhash-4.0.1-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:fac4832b638000106207bc44e44b9616a6a416aaee56c62b01d61f3705e49f58", size = 37252, upload-time = "2026-08-17T08:24:06.652Z" },
+]
+
+[[package]]
+name = "yapf"
+version = "0.43.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "platformdirs", version = "4.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "platformdirs", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/97/b6f296d1e9cc1ec25c7604178b48532fa5901f721bcf1b8d8148b13e5588/yapf-0.43.0.tar.gz", hash = "sha256:00d3aa24bfedff9420b2e0d5d9f5ab6d9d4268e72afbf59bb3fa542781d5218e", size = 254907, upload-time = "2024-11-14T00:11:41.584Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/81/6acd6601f61e31cfb8729d3da6d5df966f80f374b78eff83760714487338/yapf-0.43.0-py3-none-any.whl", hash = "sha256:224faffbc39c428cb095818cf6ef5511fdab6f7430a10783fdfb292ccf2852ca", size = 256158, upload-time = "2024-11-14T00:11:39.37Z" },
 ]
 
 [[package]]

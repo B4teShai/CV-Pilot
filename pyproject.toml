@@ -51,6 +51,7 @@ Issues = "https://github.com/B4teShai/CV-Pilot/issues"
 [project.optional-dependencies]
 ultralytics = ["ultralytics>=8.2"]
 lightning = ["lightning>=2.2"]
+mmengine = ["mmengine>=0.10"]
 hf = ["transformers[torch]>=4.46"]
 mlflow = ["mlflow-skinny>=2.14"]
 wandb = ["wandb>=0.17"]
@@ -74,6 +75,7 @@ parquet = "cvpilot.store.tables:open_tables"
 lightning = "cvpilot.hooks.lightning:LightningHook"
 hf = "cvpilot.hooks.hf_trainer:HFHook"
 ultralytics = "cvpilot.hooks.ultralytics:YoloHook"
+mmengine = "cvpilot.hooks.mmengine:MMEngineHook"
 
 [project.entry-points."cvpilot.forwarders"]
 mlflow = "cvpilot.forward.mlflow:MlflowForwarder"
