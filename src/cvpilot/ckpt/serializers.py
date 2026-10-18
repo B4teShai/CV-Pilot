@@ -272,7 +272,11 @@ MAX_COMPRESSION_RATIO = 100
 MAX_PICKLE_BYTES = 64 * 1024 * 1024
 MAX_PT_BYTES = 0xFFFFFFFE
 """Larger archives need zip64 and are refused (and never read into memory)."""
-_MEMBER = re.compile(r"[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)*")
+# The framework names the top folder of a file saved to a path after its stem (Lightning's
+# default ``epoch=1-step=8.ckpt``, ``my model.pt``): printable ASCII without anything a path or a
+# shell gives meaning to. Non-ASCII stems make the writer fall back to ``archive``.
+_MEMBER = re.compile(r"[A-Za-z0-9_.\-=+,@()\[\] ]+(?:/[A-Za-z0-9_.\-=+,@()\[\] ]+)*")
+_PRERELEASE = re.compile(r"[0-9](?:a|b|rc|\.?dev)[0-9]*")
 _VERSION = re.compile(r"([0-9]{1,4})\.([0-9]{1,4})(?:[.+\-a-zA-Z0-9]*)")
 _T = "to" + "rch"  # spelled in parts: the repository QA gate scans source text for it
 _ALLOWED_GLOBALS = frozenset(
@@ -330,9 +334,18 @@ def parse_version(text: object) -> tuple[int, int] | None:
 def framework_version() -> tuple[int, int] | None:
     """The installed training framework's ``(major, minor)`` from package metadata only."""
     try:
-        return parse_version(importlib.metadata.version(_T))
+        text = importlib.metadata.version(_T)
     except importlib.metadata.PackageNotFoundError:
         return None
+    version = parse_version(text)
+    if version == MIN_PT_VERSION and _PRERELEASE.search(text):
+        return None  # a development or candidate build of the first fixed release is not it
+    return version
+
+
+def _plain(text: object) -> str:
+    """Pickle-controlled text for a message: 40 printable ASCII characters, the rest ``?``."""
+    return "".join(c if " " < c < "\x7f" else "?" for c in str(text)[:40])
 
 
 def _unsafe(message: str) -> CheckpointCorruptError:
@@ -368,16 +381,14 @@ def _scan_pickle(data: bytes | bytearray) -> None:
             if name == "GLOBAL":
                 module, _, attr = str(arg).partition(" ")
                 if (module, attr) not in _ALLOWED_GLOBALS:
-                    raise _unsafe(f"the pickle refers to {module[:40]}.{attr[:40]}")
+                    raise _unsafe(f"the pickle refers to {_plain(module)}.{_plain(attr)}")
                 if (module, attr) == _ENCODE:
                     codec[:] = ["text", "label", "pair", "reduce"]
             elif name == "STACK_GLOBAL":
                 if len(recent) < 2 or recent[-1] is None or recent[-2] is None:
                     raise _unsafe("the pickle builds a global the scan cannot resolve")
                 if (recent[-2], recent[-1]) not in _ALLOWED_GLOBALS:
-                    raise _unsafe(
-                        f"the pickle refers to {str(recent[-2])[:40]}.{str(recent[-1])[:40]}"
-                    )
+                    raise _unsafe(f"the pickle refers to {_plain(recent[-2])}.{_plain(recent[-1])}")
                 if (recent[-2], recent[-1]) == _ENCODE:
                     codec[:] = ["text", "label", "pair", "reduce"]
             if name != "MEMOIZE" and not name.endswith("PUT"):
@@ -534,6 +545,8 @@ def scan_pt_archive(data: bytes | bytearray) -> int:
             raise _unsafe("a member uses extra fields, comments, zip64 or encryption")
         if method not in (0, 8) or _ZIP64_MARK in (csize, usize, offset):
             raise _unsafe("a member is not plainly stored or deflated")
+        if method == 0 and csize != usize:
+            raise _unsafe("a stored member has different compressed and uncompressed sizes")
         name = _member_name(name_raw)
         if name.casefold() in seen:
             raise _unsafe("the archive has duplicate member names")
@@ -577,8 +590,11 @@ def scan_pt_archive(data: bytes | bytearray) -> int:
             if pickle_body is not None or usize > MAX_PICKLE_BYTES:
                 raise _unsafe("the archive must hold exactly one reasonably sized data.pkl")
             pickle_body = _read_member(data, start, csize, usize, method, crc)
-        elif "/data/" in name or name.startswith("data/"):
-            data_bytes += usize
+        else:
+            if method == 0 and zlib.crc32(memoryview(data)[start : start + csize]) != crc:
+                raise _unsafe("a stored member does not match its recorded checksum")
+            if "/data/" in name or name.startswith("data/"):
+                data_bytes += usize
     if cursor != cd_offset:
         raise _unsafe("bytes lie between the last member and the central directory")
     if total_size > 8 * n + (1 << 20):
@@ -682,6 +698,12 @@ class PtSerializer:
         self.check(lambda n: data[:n], len(data))
         data_bytes = scan_pt_archive(data)
         framework = self._framework()
+        loaded = parse_version(getattr(framework, "__version__", None))
+        if getattr(framework, "__version__", None) is not None and loaded != version[:2]:
+            raise CheckpointFormatError(
+                "the imported training framework is not the version its package metadata names; "
+                "refusing to load a .pt checkpoint with it"
+            )
         try:
             result = framework.load(io.BytesIO(data), map_location=map_location, weights_only=True)
         except Exception:  # noqa: BLE001  # the restricted loader refuses anything it cannot trust

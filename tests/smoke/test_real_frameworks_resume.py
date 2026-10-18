@@ -51,7 +51,7 @@ def find(tmp_path: Path) -> resume.ResumePoint | None:
 def test_the_test_builder_reproduces_the_framework_layout_byte_for_byte(tmp_path: Path) -> None:
     framework = pytest.importorskip(FRAMEWORK)
     state = {"epoch": 3, "w": framework.zeros(2), "nested": {"v": framework.ones(3)}}
-    path = tmp_path / "plain.pt"
+    path = tmp_path / "epoch=1-step=8.ckpt"  # a path stem with '=' becomes the folder name
     framework.save(state, path)
     with zipfile.ZipFile(path) as archive:
         members = {i.filename: archive.read(i.filename) for i in archive.infolist()}
