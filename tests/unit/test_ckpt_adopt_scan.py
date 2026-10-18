@@ -17,7 +17,7 @@ from zip_support import framework_archive
 from cvpilot import runs
 from cvpilot.ckpt import resume, serializers
 from cvpilot.ckpt.manager import CheckpointManager
-from cvpilot.core.errors import CheckpointCorruptError
+from cvpilot.core.errors import CheckpointCorruptError, CheckpointError
 
 pytestmark = pytest.mark.usefixtures("new_enough_framework")
 
@@ -95,3 +95,48 @@ def test_a_set_pickled_by_the_older_protocol_passes_the_scan() -> None:
     data = pickle.dumps(OrderedDict(seen={1, 2}), protocol=2)
     assert b"__builtin__" in data
     serializers.scan_pt_archive(framework_archive({"archive/data.pkl": data}))
+
+
+def planted(tmp_path: Path, data: bytes) -> Any:
+    """A directory whose ``pt`` checkpoint was written below the manager (no adopt-time scan)."""
+    from ckpt_support import make
+
+    rc = make(tmp_path, allow_pt=True)
+    rc.save(
+        kind="last", step=1, data=data, format="pt", versions={},
+        dataset_hash="merkle:" + "c" * 64,
+    )  # fmt: skip
+    return rc
+
+
+def test_verify_scans_a_pt_file_so_it_agrees_with_resume(tmp_path: Path) -> None:
+    """``inspect`` (``cvpilot ckpt verify``) used to check only size and digest: a planted file
+    that resume refuses showed as valid."""
+    bad = planted(tmp_path / "bad", archive({"model": ModelObject()}))
+    assert [(e.status, e.reason) for e in bad.inspect("last")] == [("corrupt", "unsafe_archive")]
+    good = planted(tmp_path / "good", archive(OrderedDict(epoch=1)))
+    assert [(e.status, e.reason) for e in good.inspect("last")] == [("valid", None)]
+
+
+def test_verify_does_not_need_the_framework_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loader version matters to the machine that resumes, not to one that only verifies."""
+    rc = planted(tmp_path, archive(OrderedDict(epoch=1)))
+    monkeypatch.setattr(serializers, "framework_version", lambda: None)
+    assert [(e.status, e.reason) for e in rc.inspect("last")] == [("valid", None)]
+
+
+def test_a_file_that_is_not_a_zip_archive_is_refused_with_a_message_that_says_what_is_adopted(
+    tmp_path: Path,
+) -> None:
+    for name, data in (
+        ("model.safetensors", b"\x10\x00\x00\x00\x00\x00\x00\x00{}" + b" " * 14),
+        ("raw.pt", pickle.dumps({"a": 1})),
+    ):
+        source = tmp_path / name
+        source.write_bytes(data)
+        run, mgr = start(tmp_path / name.split(".")[0])
+        with pytest.raises(CheckpointError, match="not adopted"):
+            mgr.adopt(source, step=1)
+        run.finish()

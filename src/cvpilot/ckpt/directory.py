@@ -44,7 +44,7 @@ from typing import Any, Literal
 from pydantic import ValidationError
 
 from cvpilot.ckpt import auth, fsops
-from cvpilot.ckpt.serializers import get_serializer
+from cvpilot.ckpt.serializers import get_serializer, scan_pt_archive
 from cvpilot.core.errors import (
     CheckpointChainError,
     CheckpointCorruptError,
@@ -1218,7 +1218,10 @@ class RunCheckpoints:
             ) from None
         if size != manifest.size_bytes:
             raise CheckpointCorruptError(f"{name} has the wrong size", reason="size_mismatch")
-        if load:
+        if load or manifest.format == "pt":
+            # a pt file is also read whole when only verifying and its archive is scanned, so
+            # verify never calls valid a file that resume refuses for its content (the loader
+            # version is a property of the machine that resumes, not of the file)
             try:
                 data = fsops.read_regular(kind_fd, name, max_bytes=manifest.size_bytes)
             except CheckpointCorruptError as exc:
@@ -1230,6 +1233,9 @@ class RunCheckpoints:
             serializer.check(lambda n: data[:n], len(data))
             if hashlib.sha256(data).hexdigest() != manifest.sha256:
                 raise CheckpointCorruptError(f"{name} fails its digest", reason="digest_mismatch")
+            if not load:
+                scan_pt_archive(data)
+                return None
             return data
         serializer.check(
             lambda n: fsops.read_prefix(kind_fd, name, n, max_bytes=self.max_bytes), size

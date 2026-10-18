@@ -100,6 +100,7 @@ class _Session:
 
         settings: Settings = ctx.obj
         self.root = root
+        self.allow_pt = settings.ckpt_allow_pt  # a pt file verifies only when it was opted into
         try:
             self.key = auth.load_key()
         except CheckpointError as exc:
@@ -136,6 +137,7 @@ class _Session:
                 key=self.key,
                 require_trust=self.policy,
                 accept_key_change=self.accept_key_change,
+                allow_pt=self.allow_pt,
             )
         except CheckpointError as exc:
             raise _usage(str(exc)) from None

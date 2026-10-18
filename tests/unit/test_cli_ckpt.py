@@ -336,3 +336,41 @@ def test_plain_verify_prints_no_note_when_nothing_is_missing(
 ) -> None:
     res = invoke("ckpt", "verify", str(tmp_path / "ckpt"), "--project", "proj")
     assert res.code == 0 and res.human == ""
+
+
+def seed_framework_file(store_root: Path, tmp_path: Path) -> str:
+    """A ``pt`` checkpoint adopted from a file in the layout the framework writes."""
+    from unittest import mock
+
+    from zip_support import framework_archive
+
+    from cvpilot.ckpt import serializers
+
+    source = tmp_path / "last.ckpt"
+    source.write_bytes(
+        framework_archive({"archive/data.pkl": b"\x80\x02}q\x00X\x01\x00\x00\x00aK\x01s."})
+    )
+    meta, repro = run_meta("proj")
+    run = runs.start_run(meta, repro, store_dir=store_root)
+    manager = CheckpointManager(
+        run, dir=tmp_path / "ckpt", allow_pt_format=True, install_signal_handlers=False
+    )
+    with mock.patch.object(serializers, "framework_version", lambda: (2, 6)):
+        manager.adopt(source, step=1)
+    run.finish("preempted")
+    return run.run_id
+
+
+def test_a_pt_checkpoint_verifies_from_the_command_line_only_when_pt_is_opted_into(
+    invoke: Invoke, store_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = seed_framework_file(store_root, tmp_path)
+    directory = str(tmp_path / "ckpt")
+    monkeypatch.delenv("CVPILOT_CKPT_ALLOW_PT", raising=False)
+    res = invoke("ckpt", "verify", directory, "--project", "proj")
+    assert res.code == 1 and "pt_not_allowed" in res.out  # fail closed without the opt-in
+    monkeypatch.setenv("CVPILOT_CKPT_ALLOW_PT", "1")
+    res = invoke("ckpt", "verify", directory, "--project", "proj")
+    assert res.code == 0 and run_id in res.out, res.out + res.err
+    rows = json.loads(invoke("ckpt", "list", directory, "--json").out)
+    assert rows[0]["status"] == "valid" and rows[0]["format"] == "pt"

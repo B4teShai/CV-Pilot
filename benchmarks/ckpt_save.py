@@ -147,6 +147,7 @@ def profile_state(
     baseline: Callable[[Path], None] | None = None,
     repeats: int = 7,
     keep_last: int = 3,
+    verify_after_save: bool = True,
 ) -> dict[str, object]:
     """Median seconds of a steady-state ``save_now`` of ``state`` and of each phase in it, plus the
     plain write of the same bytes and the optional framework ``baseline(path)`` (written, flushed
@@ -184,8 +185,9 @@ def profile_state(
         )  # fmt: skip
         run = runs.start_run(meta, repro, store_dir=base / "store")
         manager = CheckpointManager(
-            run, dir=base / "ckpt", keep_last=keep_last, install_signal_handlers=False
-        )
+            run, dir=base / "ckpt", keep_last=keep_last, verify_after_save=verify_after_save,
+            install_signal_handlers=False,
+        )  # fmt: skip
         totals: list[float] = []
         per_phase: dict[str, list[float]] = defaultdict(list)
         for step in range(1, keep_last + repeats + 1):

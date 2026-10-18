@@ -635,7 +635,10 @@ class PtSerializer:
 
     def check(self, read_prefix: PrefixReader, size: int) -> None:
         if size < 4 or read_prefix(4) != ZIP_MAGIC:
-            raise _unloadable("the file is not a zip-archive checkpoint (raw pickles are refused)")
+            raise _unloadable(
+                "the file is not a zip-archive checkpoint (raw pickles and safetensors files "
+                "are not adopted)"
+            )
 
     def loads(self, data: bytes, *, map_location: str = "cpu") -> dict[str, Any]:
         version = framework_version()
