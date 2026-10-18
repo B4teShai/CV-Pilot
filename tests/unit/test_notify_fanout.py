@@ -108,7 +108,7 @@ def test_a_failing_channel_is_counted_and_logged_once_by_type_with_alert_events(
     failed = [r for r in logs.records() if r["message"] == "alert_delivery_failed"]
     assert len(failed) == 1 and failed[0]["channel"] == "failing"
     assert failed[0]["error_type"] == "OSError" and failed[0]["n_alerts"] == 1
-    assert failed[0]["logger"] == "cvpilot.notify" and failed[0]["level"] == "WARNING"
+    assert failed[0]["logger"] == "cvpilot.notify" and failed[0]["level"] == "WARN"
     summary = [r for r in logs.records() if r["message"] == "alert_delivery_summary"]
     assert len(summary) == 1 and summary[0]["failed_alerts"] == 5
     assert not any(r["message"] in ("forward_failed", "forward_summary") for r in logs.records())

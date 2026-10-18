@@ -153,7 +153,7 @@ def test_a_deliberate_rollback_can_be_accepted_and_is_logged(
     assert restored is not None and restored.manifest.step == 1
     accepted = [e for e in events() if e["message"] == "checkpoint_rollback_accepted"]
     assert accepted and accepted[0]["step"] == 1 and accepted[0]["floor"] == 3
-    assert accepted[0]["level"] == "WARNING"
+    assert accepted[0]["level"] == "WARN"
     run.finish()
 
 

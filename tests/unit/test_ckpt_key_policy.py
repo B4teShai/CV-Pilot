@@ -70,7 +70,7 @@ def test_an_explicit_any_still_works_and_is_logged_as_accepted(
     restored = mgr.restore(run_ids=[run_id])
     assert restored is not None and restored.trust == "local_chain_only"
     accepted = [e for e in events() if e["message"] == "checkpoint_untrusted_accepted"]
-    assert accepted and accepted[0]["level"] == "WARNING"
+    assert accepted and accepted[0]["level"] == "WARN"
     assert accepted[0]["trust_level"] == "local_chain_only"
     child.finish()
 

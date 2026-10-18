@@ -248,6 +248,6 @@ def test_the_manager_warns_once_about_a_weak_key_and_never_prints_it(
     monkeypatch.setenv("CVPILOT_CKPT_KEY", "k" * 40)
     run, mgr = make(tmp_path, "alpha", "s")
     weak = [e for e in events() if e["message"] == "checkpoint_key_weak"]
-    assert len(weak) == 1 and weak[0]["level"] == "WARNING"
+    assert len(weak) == 1 and weak[0]["level"] == "WARN"
     assert "kkkk" not in json.dumps(events())
     run.finish()

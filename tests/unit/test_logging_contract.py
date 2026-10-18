@@ -81,7 +81,7 @@ def test_debug_emitted_in_dev(buf: io.StringIO) -> None:
 def test_warning_level_is_uppercase(buf: io.StringIO) -> None:
     setup(buf)
     get_logger("x").warning("careful")
-    assert records(buf)[0]["level"] == "WARNING"
+    assert records(buf)[0]["level"] == "WARN"
 
 
 @pytest.mark.parametrize(
@@ -96,6 +96,14 @@ def test_warning_level_is_uppercase(buf: io.StringIO) -> None:
         "X-Api-Key",
         "access_token",
         "PASSWORD",
+        "secret",
+        "client_secret",
+        "hmac",
+        "auth_hmac",
+        "key",
+        "private_key",
+        "signing_key",
+        "ckpt_key",
     ],
 )
 def test_sensitive_keys_are_redacted(buf: io.StringIO, key: str) -> None:
@@ -123,9 +131,10 @@ def test_nested_and_listed_secrets_are_redacted(buf: io.StringIO) -> None:
 
 def test_innocent_keys_are_not_redacted(buf: io.StringIO) -> None:
     setup(buf)
-    get_logger("x").info("evt", token_count=5, passwords_checked=2)
+    get_logger("x").info("evt", token_count=5, passwords_checked=2, has_key=True, key_id="ab12")
     (rec,) = records(buf)
     assert (rec["token_count"], rec["passwords_checked"]) == (5, 2)
+    assert rec["has_key"] is True and rec["key_id"] == "ab12"
 
 
 def test_non_serializable_values_do_not_crash(buf: io.StringIO) -> None:

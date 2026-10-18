@@ -383,5 +383,5 @@ def test_building_a_channel_in_development_mode_warns_once_and_production_does_n
     assert not [r for r in logs.records() if r["message"] == "insecure_dev_mode"]
     slack(monkeypatch, server.url + SLACK_PATH, allow_insecure=True)
     warned = [r for r in logs.records() if r["message"] == "insecure_dev_mode"]
-    assert len(warned) == 1 and warned[0]["channel"] == "slack" and warned[0]["level"] == "WARNING"
+    assert len(warned) == 1 and warned[0]["channel"] == "slack" and warned[0]["level"] == "WARN"
     assert "SECRET" not in logs.text() and SLACK_PATH not in logs.text()

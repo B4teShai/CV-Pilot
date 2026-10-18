@@ -101,7 +101,7 @@ def test_a_call_cannot_weaken_the_manager_and_says_so(
             call()
     ignored = [e for e in events() if e["message"] == "checkpoint_trust_downgrade_ignored"]
     assert len(ignored) == 3 and ignored[0]["requested"] == "any"
-    assert ignored[0]["effective"] == "authenticated" and ignored[0]["level"] == "WARNING"
+    assert ignored[0]["effective"] == "authenticated" and ignored[0]["level"] == "WARN"
     child.finish()
 
 
@@ -143,7 +143,7 @@ def test_the_opt_out_is_explicit_logged_once_and_shown_in_the_result(
     assert restored is not None and restored.policy == "any" and restored.weaker_allowed
     mgr.restore(run_ids=[run_id])
     allowed = [e for e in events() if e["message"] == "checkpoint_weaker_trust_allowed"]
-    assert len(allowed) == 1 and allowed[0]["level"] == "WARNING"
+    assert len(allowed) == 1 and allowed[0]["level"] == "WARN"
     child.finish()
 
 

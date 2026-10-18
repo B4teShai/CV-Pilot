@@ -18,7 +18,11 @@ from cvpilot.settings import Settings
 REDACTED = "[REDACTED]"
 TRUNCATED = "[TRUNCATED]"
 _MAX_DEPTH = 8
-_SENSITIVE = ("token", "password", "api_key", "jwt", "authorization")
+_SENSITIVE = (
+    "token", "password", "api_key", "jwt", "authorization", "secret", "hmac", "secret_key",
+    "private_key", "signing_key", "auth_key", "ckpt_key",
+)  # fmt: skip
+_SENSITIVE_EXACT = ("key",)  # a bare ``key``; ``has_key`` and ``key_id`` are not secrets
 _LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
 
 
@@ -66,7 +70,7 @@ def _scrub_exception(
 
 def _is_sensitive(key: object) -> bool:
     name = _safe_str(key).lower().replace("-", "_")
-    return any(name == s or name.endswith(f"_{s}") for s in _SENSITIVE)
+    return name in _SENSITIVE_EXACT or any(name == s or name.endswith(f"_{s}") for s in _SENSITIVE)
 
 
 def _redact_item(item: Any, depth: int, path: frozenset[int]) -> Any:
@@ -117,7 +121,8 @@ def _reassert_context(
 def _uppercase_level(
     _logger: Any, _method: str, event_dict: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
-    event_dict["level"] = str(event_dict["level"]).upper()
+    level = str(event_dict["level"]).upper()
+    event_dict["level"] = "WARN" if level == "WARNING" else level  # the org standard's spelling
     return event_dict
 
 

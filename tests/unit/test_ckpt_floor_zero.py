@@ -195,7 +195,7 @@ def test_under_any_the_empty_result_is_loud_with_the_floor_and_a_reason(
         lost = [e for e in events() if e["message"] == "checkpoint_progress_lost"]
         assert lost, "a bare None looks like a fresh start"
         assert lost[-1]["floor"] == 3 and lost[-1]["reason"] == "rolled_back"
-        assert lost[-1]["level"] == "WARNING"
+        assert lost[-1]["level"] == "WARN"
 
 
 def test_a_genuine_fresh_start_is_still_none(

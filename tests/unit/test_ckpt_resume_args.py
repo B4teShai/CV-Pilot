@@ -122,7 +122,7 @@ def test_a_pt_file_skipped_as_unsafe_says_so_instead_of_returning_a_bare_none(
     skipped = [e for e in logged if e["message"] == "resume_point_skipped"]
     assert skipped and skipped[0]["reason"] == "unsafe_archive" and skipped[0]["step"] == 1
     none = [e for e in logged if e["message"] == "resume_point_unavailable"]
-    assert none and none[0]["reasons"] == ["unsafe_archive"] and none[0]["level"] == "WARNING"
+    assert none and none[0]["reasons"] == ["unsafe_archive"] and none[0]["level"] == "WARN"
 
 
 def test_a_file_replaced_by_a_symlink_after_verification_is_refused(

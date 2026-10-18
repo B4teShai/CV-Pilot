@@ -72,7 +72,7 @@ def test_a_failing_adapter_is_counted_logged_once_and_never_raises(logs: Any) ->
     assert len(good.logged) == 15  # the healthy adapter is unaffected
     failed = [r for r in logs.records() if r["message"] == "forward_failed"]
     assert len(failed) == 1
-    assert failed[0]["forwarder"] == "failing" and failed[0]["level"] == "WARNING"
+    assert failed[0]["forwarder"] == "failing" and failed[0]["level"] == "WARN"
     assert failed[0]["error_type"] == "RuntimeError" and failed[0]["run_id"] == meta.run_id
 
 

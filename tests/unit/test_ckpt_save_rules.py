@@ -105,7 +105,7 @@ def test_a_planted_high_step_is_reported_quarantined_and_still_counts(
         mgr.save_now(3, model=weights(3.0))
     assert "quarantine" in str(caught.value) and "999999" in str(caught.value)
     logged = [e for e in events() if e["message"] == "checkpoint_quarantined"]
-    assert logged and logged[0]["step"] == 999_999 and logged[0]["level"] == "WARNING"
+    assert logged and logged[0]["step"] == 999_999 and logged[0]["level"] == "WARN"
     # listed, not moved: the planted files are exactly where they were
     assert (folder(tmp_path, run) / "step_000999999.manifest.json").exists()
     assert (tmp_path / "ckpt" / run.run_id / "QUARANTINE").exists()

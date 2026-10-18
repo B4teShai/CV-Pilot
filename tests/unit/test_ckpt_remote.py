@@ -78,7 +78,7 @@ def test_the_manifest_is_never_uploaded_when_the_data_fails(tmp_path: Path, even
     manifest = mgr.save_now(1, model=weights(1.0))  # the local save succeeds regardless
     assert fake.objects == {} and not mgr._own.is_uploaded(manifest)
     failed = [e for e in events() if e["message"] == "checkpoint_upload_failed"]
-    assert failed and failed[0]["error_type"] == "OSError" and failed[0]["level"] == "WARNING"
+    assert failed and failed[0]["error_type"] == "OSError" and failed[0]["level"] == "WARN"
     run.finish()
 
 

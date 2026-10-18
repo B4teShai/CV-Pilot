@@ -109,7 +109,7 @@ def test_the_displaced_handler_still_runs_after_the_flag_is_set(
     assert mgr.flag.is_set and calls == [(SIG, False)]
     displaced = [e for e in events() if e["message"] == "signal_handler_displaced"]
     assert len(displaced) == 1 and displaced[0]["signal"] == "SIGUSR1"
-    assert displaced[0]["level"] == "WARNING" and displaced[0]["chained"] is True
+    assert displaced[0]["level"] == "WARN" and displaced[0]["chained"] is True
     mgr.close()
     assert signal.getsignal(SIG) is app_handler  # put back exactly
     run.finish()
