@@ -18,7 +18,7 @@ from cvpilot import runs
 from cvpilot.ckpt import auth
 from cvpilot.ckpt.directory import RunCheckpoints
 from cvpilot.ckpt.manager import CheckpointManager
-from cvpilot.core.errors import CheckpointUntrustedError
+from cvpilot.core.errors import CheckpointUntrustedError, StoreError
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX directory fds")
 Events = Callable[[], list[dict[str, Any]]]
@@ -140,10 +140,19 @@ def test_a_store_that_cannot_answer_fails_closed_with_the_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str
 ) -> None:
     run, mgr = make(tmp_path, monkeypatch, policy=policy)
-    run.finish()  # the run store is closed: every lookup raises
+
+    def broken(*args: object) -> None:
+        raise StoreError("the run store cannot be read")
+
+    # every lookup raises (a finished run still answers through a read-only connection, so the
+    # failure is injected rather than produced by finishing the run)
+    for name in ("checkpoint_digest", "checkpoint_max_step", "checkpoint_auth_evidence"):
+        monkeypatch.setattr(run, name, broken)
     with pytest.raises(CheckpointUntrustedError) as info:
         mgr.restore()
     assert info.value.reason == "anchor_error"
+    monkeypatch.undo()
+    run.finish()
 
 
 def test_a_lower_external_mark_never_lowers_the_floor(
