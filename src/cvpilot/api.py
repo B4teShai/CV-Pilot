@@ -307,8 +307,9 @@ def autolog(
     forward_to: Sequence[str] | None = None,
     **init_kwargs: Any,
 ) -> Run:
-    """Start a run and attach the hook that matches ``target`` (a Lightning ``Trainer`` or a
-    YOLO model) so its scalars are logged without changing the training loop.
+    """Start a run and attach the hook that matches ``target`` (a Lightning ``Trainer``, a Hugging
+    Face ``Trainer``, a YOLO model, an MMEngine ``Runner`` or an RF-DETR model) so its scalars are
+    logged without changing the training loop.
 
     ``init_kwargs`` are passed to :func:`init` (``task`` is required). The hook's callbacks never
     raise into or block the framework. The YOLO framework's hook is an AGPL-3.0 extra: the notice is

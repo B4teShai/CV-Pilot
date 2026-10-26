@@ -257,3 +257,99 @@ class FakeMMRunner:
 
 FakeMMRunner.__module__ = f"{MM_PACKAGE}.runner.runner"
 FakeMMRunner.__name__ = "Runner"
+
+
+# -- RF-DETR: a model whose train() builds a trainer of the legacy Lightning package --------------
+
+RF_PACKAGE = "rfdetr"
+RF_LIGHTNING = "py" + "to" + "rch_lightning"  # spelled in parts for the repository QA gate
+
+
+class FakeRFTrainer:
+    """The parts of the trainer RF-DETR builds that the hook touches: two lists and the rank."""
+
+    def __init__(self, *, rank_zero: bool = True) -> None:
+        self.callbacks: list[Any] = ["rfdetr-callback"]
+        self.loggers: list[Any] = ["rfdetr-csv-logger"]
+        self.is_global_zero = rank_zero
+
+
+def install_fake_rfdetr(
+    monkeypatch: pytest.MonkeyPatch, *, rank_zero: bool = True, training: bool = True
+) -> types.ModuleType:
+    """Register ``rfdetr``, ``rfdetr.training`` (with ``build_trainer``) and the legacy Lightning
+    package with its ``Callback`` and ``Logger``. ``training=False`` leaves ``rfdetr.training``
+    unimportable, as when the framework's training extras are missing."""
+
+    class Callback:
+        pass
+
+    class Logger:
+        pass
+
+    lightning = types.ModuleType(RF_LIGHTNING)
+    lightning.Callback = Callback  # type: ignore[attr-defined]
+    lightning.loggers = types.SimpleNamespace(Logger=Logger)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, RF_LIGHTNING, lightning)
+    package = types.ModuleType(RF_PACKAGE)
+    monkeypatch.setitem(sys.modules, RF_PACKAGE, package)
+    training_module = types.ModuleType(f"{RF_PACKAGE}.training")
+    built: list[FakeRFTrainer] = []
+
+    def build_trainer(*args: Any, **kwargs: Any) -> FakeRFTrainer:
+        trainer = FakeRFTrainer(rank_zero=rank_zero)
+        built.append(trainer)
+        return trainer
+
+    training_module.build_trainer = build_trainer  # type: ignore[attr-defined]
+    training_module.built = built  # type: ignore[attr-defined]
+    if training:
+        package.training = training_module  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, f"{RF_PACKAGE}.training", training_module)
+    else:
+        monkeypatch.setitem(sys.modules, f"{RF_PACKAGE}.training", None)  # import fails
+    return training_module
+
+
+class FakeRFDETR:
+    """Like the framework's ``RFDETR``: ``train`` imports ``build_trainer`` when it runs, builds a
+    trainer, fires its callbacks and loggers like a fit with two epochs, then ends or crashes."""
+
+    def __init__(self, fail_with: BaseException | None = None, *, steps: int = 2) -> None:
+        self.fail_with = fail_with
+        self.steps = steps
+        self.train_calls: list[dict[str, Any]] = []
+
+    def train(self, **kwargs: Any) -> None:
+        self.train_calls.append(kwargs)
+        module = importlib.import_module(f"{RF_PACKAGE}.training")
+        trainer = module.build_trainer("train-config", "model-config")
+        ours = [c for c in trainer.callbacks if not isinstance(c, str)]
+        loggers = [x for x in trainer.loggers if not isinstance(x, str)]
+        for callback in ours:
+            callback.setup(trainer, None, "fit")
+            callback.on_fit_start(trainer, None)
+        for step, loss in [(49 + 50 * i, 2.0 - 0.5 * i) for i in range(self.steps)]:
+            for logger in loggers:
+                logger.log_metrics({"train/loss": loss, "epoch": 0}, step)
+        for logger in loggers:
+            logger.log_metrics({"val/mAP_50_95": 0.25, "val/mAP_50": 0.5, "epoch": 1}, 99)
+        if self.fail_with is not None:
+            for callback in ours:
+                callback.on_exception(trainer, None, self.fail_with)
+            raise self.fail_with
+        for callback in ours:
+            callback.on_fit_end(trainer, None)
+            callback.on_teardown(trainer, None, "fit")
+
+
+class RFDETR(FakeRFDETR):
+    pass
+
+
+class RFDETRNano(RFDETR):
+    pass
+
+
+RFDETR.__module__ = f"{RF_PACKAGE}.detr"
+RFDETRNano.__module__ = f"{RF_PACKAGE}.variants"

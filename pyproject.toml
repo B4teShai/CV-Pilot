@@ -53,6 +53,22 @@ Issues = "https://github.com/B4teShai/CV-Pilot/issues"
 ultralytics = ["ultralytics>=8.2"]
 lightning = ["lightning>=2.2"]
 mmengine = ["mmengine>=0.10"]
+# RF-DETR 1.11.2 (Apache-2.0) and its [train] extra, minus roboflow: that upload client is not
+# needed to train and pins typer<0.26, which would hold back the core typer for every install.
+rfdetr = [
+  "rfdetr>=1.11",
+  "pytorch-lightning>=2.6,<3,!=2.6.2,!=2.6.3",
+  "torchmetrics[detection]>=1.8.2,<1.9",
+  "peft",
+  "hotcoco==1.0.1",
+  "faster-coco-eval>=1.7.2",
+  "ultrafast-pycocotools>=0.1.10,<0.2",
+  "vernier>=0.5.3,<0.6",
+  "pycocotools",
+  "scipy",
+  "simplejpeg>=1.9,<2",
+  "torch-hungarian==0.1.0rc0",
+]
 hf = ["transformers[torch]>=4.46"]
 mlflow = ["mlflow-skinny>=2.14"]
 wandb = ["wandb>=0.17"]
@@ -77,6 +93,7 @@ lightning = "cvpilot.hooks.lightning:LightningHook"
 hf = "cvpilot.hooks.hf_trainer:HFHook"
 ultralytics = "cvpilot.hooks.ultralytics:YoloHook"
 mmengine = "cvpilot.hooks.mmengine:MMEngineHook"
+rfdetr = "cvpilot.hooks.rfdetr:RFDETRHook"
 
 [project.entry-points."cvpilot.forwarders"]
 mlflow = "cvpilot.forward.mlflow:MlflowForwarder"

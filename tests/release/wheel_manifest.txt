@@ -69,6 +69,7 @@ cvpilot/hooks/_sink.py
 cvpilot/hooks/hf_trainer.py
 cvpilot/hooks/lightning.py
 cvpilot/hooks/mmengine.py
+cvpilot/hooks/rfdetr.py
 cvpilot/hooks/ultralytics.py
 cvpilot/logging.py
 cvpilot/notify/__init__.py

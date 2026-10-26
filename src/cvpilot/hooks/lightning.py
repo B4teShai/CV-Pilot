@@ -97,7 +97,7 @@ class LightningCore:
         if stage in ("test", "predict"):
             self.guard.run("on_teardown", self._finish, "finished", always=True)
 
-    def exception(self) -> None:
+    def exception(self, error: BaseException | None = None) -> None:
         self.failed = True
         self.guard.run("on_exception", self._finish, "failed", always=True)
 
@@ -117,21 +117,28 @@ _NO_PICKLE = (
 )
 
 
-def build_classes() -> tuple[type, type]:
-    """``(CVPilotCallback, CVPilotLogger)`` subclassing Lightning's ``Callback`` and ``Logger``.
+def build_classes(
+    packages: tuple[str, ...] = PACKAGES, missing: str | None = None
+) -> tuple[type, type]:
+    """``(CVPilotCallback, CVPilotLogger)`` subclassing Lightning's ``Callback`` and ``Logger``,
+    from the first of ``packages`` that imports (a trainer only accepts the classes of the package
+    it was built from: RF-DETR passes the legacy package alone).
 
     Raises:
-        MissingExtraError: Lightning is not installed (``pip install "cvpilot[lightning]"``).
+        MissingExtraError: none of ``packages`` is installed (``missing`` is the message;
+            by default ``pip install "cvpilot[lightning]"``).
     """
     module = None
-    for name in PACKAGES:
+    for name in packages:
         try:
             module = importlib.import_module(name)
             break
         except ImportError:
             continue
     if module is None:
-        raise MissingExtraError('Lightning is not installed: pip install "cvpilot[lightning]"')
+        raise MissingExtraError(
+            missing or 'Lightning is not installed: pip install "cvpilot[lightning]"'
+        )
     base_callback = module.Callback if hasattr(module, "Callback") else module.callbacks.Callback
     base_logger = module.loggers.Logger
 
@@ -153,7 +160,7 @@ def build_classes() -> tuple[type, type]:
             self._core.teardown(stage)
 
         def on_exception(self, trainer: Any, pl_module: Any, exception: BaseException) -> None:
-            self._core.exception()
+            self._core.exception(exception)
 
         def __getstate__(self) -> Any:
             raise TypeError(_NO_PICKLE)
