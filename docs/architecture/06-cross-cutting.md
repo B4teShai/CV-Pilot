@@ -231,7 +231,7 @@ Project specifics:
 
 | Integration or model | Classification | Reason |
 |---|---|---|
-| Lightning, HF Trainer, MMEngine/MMDetection, RF-DETR hooks | extras of this package | Apache-2.0 upstream |
+| Lightning, HF Trainer, MMEngine/MMDetection, RF-DETR hooks | extras of this package | Apache-2.0 upstream (the `rfdetr` extra also brings PyAV, BSD-3-Clause, whose wheels bundle FFmpeg under the LGPL; never imported by CV-Pilot) |
 | Ultralytics hook (`hooks/ultralytics.py`) | `[ultralytics]` extra, lazy import inside the adapter, AGPL-3.0 notice in the adapter docstring, `license_notice`, the `hook_attached` event and [05-runtime.md](05-runtime.md); the package is never imported by this project | AGPL-3.0; never core, never vendored, never imported from `core/` or application code |
 | MLflow, W&B SDK, Trackio, TensorBoard forwarders | extras | Apache-2.0 / MIT upstream |
 | numpy | core, added with `eval/` (ADR-0003) | BSD |

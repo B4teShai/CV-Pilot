@@ -5,6 +5,53 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Added (Phase 7: works from a clone, crash safety under real kills, RF-DETR)
+
+- Install from a clone: the README quick start and the install guide no longer say `pip install
+  cvpilot` (nothing is on a package index); they show `uv sync` or `pip install -e .` from a clone,
+  extras from a clone, and a git URL or a local path for your own project. `scripts/check_clone.sh`
+  (and `pytest -m clone`, off by default) clones the current commit, installs it with pip into a fresh
+  virtual environment and runs `--version`, `doctor` and the README quick start; it passed on 3.10 and
+  3.14.
+- Python 3.14: classifier and CI matrix; the full suite passes on a real 3.14 environment.
+- "Datasets prepared with DataCopilot" in the concepts guide; a test with a `manifest.json` copied from
+  a real `datacopilot ingest` checks that `init(dataset_uri=...)` records `dcp:<version>`.
+- Chaos suite: 1,000 seeded `SIGKILL`s inside checkpoint saves (200 at each of four places: before
+  the temporary write, in the middle of it, after it but before any rename, after the renames but
+  before the store record and the pointer; 200 at a random moment), each followed by a fresh process
+  that restores, compares byte for byte, saves the next step and restores it; and 200 uploads to an
+  in-memory filesystem cut after a random number of bytes. All restored the expected checkpoint.
+- An RF-DETR hook (`cvpilot[rfdetr]`, `cvpilot.autolog(model, ...)`): the framework's losses and COCO
+  metrics at the trainer's step, the end of `train`, the guard, isolation and rank rules of the other
+  hooks. No resume helper. Ran on RF-DETR Nano with its published weights in notebook 05.
+- A SkyPilot spot recipe (`examples/skypilot/`, guide page), **experimental**: the script's preemption
+  save, upload and fresh-node resume are tested locally with real signals; SkyPilot and a real spot
+  instance were not used.
+- Notebook 05 (`notebooks/05_chaos_and_rfdetr.ipynb`): the 1,000 kills and the cut uploads, computed;
+  the RF-DETR licence checks before the pinned download, the strict reader on the published weights,
+  a real fine-tune with the hook and a comparison with the framework's own metrics file.
+- ADR-0011 (design only): the scope and threat model of a minimal read-only server. ADR-0012: the chaos
+  suite, the RF-DETR hook and the spot recipe.
+
+### Fixed (Phase 7)
+
+- A `memory://` remote could not save a checkpoint: its URL gained a third slash and every manifest
+  failed validation (found by the truncated-upload suite).
+- `CheckpointManager.preempted()` was true as soon as a signal arrived, so the documented loop
+  (`maybe_save`, then `if preempted(): break`) could leave without the preemption save and with the run
+  still running. It is now true once the preemption was handled; `flag.is_set` is the raw request
+  (found by the SkyPilot walk-through).
+- The preemption checkpoint was not uploaded after the run was marked `preempted` (with a key, or for a
+  resumed run): the run store was closed and every lookup failed. Lookups after `finish` now use a
+  short-lived read-only connection (found by the SkyPilot walk-through).
+
+### Changed (Phase 7)
+
+- `preempted()` semantics, as above. Code that polled it to learn about the signal itself should read
+  `ckpt.flag.is_set`.
+- The lock resolves `torchmetrics` 1.8.2 (was 1.9.0) for the `lightning` and `rfdetr` extras, because
+  RF-DETR requires `<1.9`; the core dependencies are unchanged.
+
 ### Fixed (checkpoints, found by running the verifier on real framework files, ADR-0010)
 
 - The strict `.pt` reader refused every file the framework writes (zip data descriptors and a zip64 end

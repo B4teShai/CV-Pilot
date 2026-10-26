@@ -30,8 +30,8 @@ URLs, plain http outside `CVPILOT_ENV=dev` and disabled TLS verification.
 The core install has no deep-learning framework. Add what you use (see
 [Install](../guide/install.md) for how to install an extra from a clone): `cvpilot[safetensors]`
 (checkpoints), `[remote-s3]`, `[remote-gcs]`, `[remote-azure]` or `[remote]` (copy checkpoints to a
-bucket), `[lightning]`, `[hf]`, `[ultralytics]` (the Ultralytics package is AGPL-3.0, see
-[Install](../guide/install.md)), `[mlflow]`, `[wandb]`, `[trackio]`.
+bucket), `[lightning]`, `[hf]`, `[mmengine]`, `[rfdetr]`, `[ultralytics]` (the Ultralytics package
+is AGPL-3.0, see [Install](../guide/install.md)), `[mlflow]`, `[wandb]`, `[trackio]`.
 
 ## Exit codes
 

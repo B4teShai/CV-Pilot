@@ -74,6 +74,7 @@ one of the ways above.
 | `cvpilot[hf]` | Hugging Face `transformers` with PyTorch | callback for the `Trainer`; see [Alerts](alerts.md) |
 | `cvpilot[ultralytics]` | Ultralytics | callbacks for YOLO models; **AGPL-3.0**, see below |
 | `cvpilot[mmengine]` | MMEngine | hook for the MMEngine `Runner`: scalars, `val/` and `test/` metrics, the end of the run |
+| `cvpilot[rfdetr]` | RF-DETR (Apache-2.0) and its training dependencies | hook for an RF-DETR model's `train`: losses and COCO metrics, the end of the run; the framework's `roboflow` upload client is left out |
 | `cvpilot[mlflow]`, `[wandb]`, `[trackio]` | the tracker SDK | forward scalars to a tracker |
 
 The Ultralytics package is licensed AGPL-3.0. CV-Pilot never imports it from its own code and

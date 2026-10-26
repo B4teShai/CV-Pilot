@@ -496,7 +496,7 @@ Framework adapters. Each adapter implements (`Hook` in `core/schema.py`):
 
 ```python notest
 class Hook(Protocol):
-    name: str  # "lightning", "hf", "ultralytics"; planned: "mmengine", "rfdetr", "torch"
+    name: str  # "lightning", "hf", "ultralytics", "mmengine", "rfdetr"; planned: "torch"
     requires: tuple[str, ...]  # distributions that must be installed; "a|b" means either
     license_notice: str | None  # set for a copyleft framework
 
@@ -510,7 +510,8 @@ class Hook(Protocol):
 | `hooks/lightning.py` | `CVPilotLogger` (a Lightning `Logger`, scalars of `self.log`, rank zero only) plus `CVPilotCallback` (`on_fit_start` rank check, `on_fit_end` finishes, `on_exception` marks the run failed), both built when the hook is attached | scalars; hyperparameters are not forwarded | built |
 | `hooks/hf_trainer.py` (`cvpilot[hf]`) | `TrainerCallback` built at attach time (`on_train_begin` rank gate, `on_log`, `on_evaluate`, `on_save`, `on_train_end`); `train` is wrapped so an exception marks the run failed | `train/` scalars, `eval/` metrics, a save as an event; no resume helper (the trainer resumes from a directory bundle, see ADR-0009) | built |
 | `hooks/mmengine.py` (`cvpilot[mmengine]`) | a `Hook` built at attach time registered last (`before_run` rank gate, `after_train_iter`, `after_val_epoch`, `after_test_epoch`); `train`, `val` and `test` are wrapped so an exception marks the run failed and an interrupt preempted; the run finishes when `test` returns | `train/` scalars every `interval` iterations (default 10), `val/` and `test/` metrics, step = `runner.iter`; no resume helper, no `VisBackend` (its checkpoints pickle `HistoryBuffer` by class, which the strict scan refuses, see ADR-0010) | built |
-| `hooks/rfdetr.py`, `hooks/torch_loop.py` | context manager plus explicit `log_eval` | explicit | planned |
+| `hooks/rfdetr.py` (`cvpilot[rfdetr]`) | `train` is wrapped on the model instance; for that call the framework's `rfdetr.training.build_trainer` is wrapped too, and the first trainer it builds gets the Lightning hook's `CVPilotLogger` and `CVPilotCallback` (built from the legacy Lightning package the framework trains with); the factory is put back when `train` returns or raises; `train` returning finishes the run, an exception fails it, an interrupt marks it preempted | every scalar the framework logs (`train/loss` and its parts, `val/mAP_50_95`, `val/mAP_50`, EMA and per-class values) at the trainer's global step, rank zero only; no resume helper (the framework's `resume=` falls back to full unpickling when its restricted load fails, see ADR-0012) | built |
+| `hooks/torch_loop.py` | context manager plus explicit `log_eval` | explicit | planned |
 | `hooks/ultralytics.py` (`cvpilot[ultralytics]`, AGPL-3.0 notice) | `add_callback("on_fit_epoch_end" / "on_train_end")` on the model; reads `trainer.metrics`, the loss items and `validator.metrics.box.maps` with `validator.names` | losses, mAP, per-class AP (`val/AP/<class>`), step = epoch | built; `resume_arguments(point)` gives the `resume=` target for a `pt` file `resume_path` verified here (`hooks/lightning.py` has the same for `ckpt_path`; safetensors files and unverified paths are refused); the confusion matrix and automatic adoption of framework checkpoints are planned |
 
 `api.autolog(target, project=..., forward_to=..., task=...)` finds the hook whose `matches`

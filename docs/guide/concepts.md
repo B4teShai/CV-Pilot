@@ -83,6 +83,8 @@ run = cvpilot.autolog(trainer, project="fridge-sku", task="detection")
 run = cvpilot.autolog(yolo_model, project="fridge-sku", task="detection")
 # MMEngine (extra cvpilot[mmengine]): a hook on the Runner (call runner.train() and runner.test() after)
 run = cvpilot.autolog(runner, project="fridge-sku", task="detection")
+# RF-DETR (extra cvpilot[rfdetr]): call model.train(...) after; the run ends when it returns
+run = cvpilot.autolog(model, project="fridge-sku", task="detection")
 ```
 
 Forwarders (`cvpilot[mlflow]`, `[wandb]`, `[trackio]`) run on their own threads behind bounded
@@ -92,8 +94,8 @@ variables; CV-Pilot refuses credentials in URLs, plain http outside `CVPILOT_ENV
 TLS verification. Hook callbacks never raise into the framework. The `ultralytics` package is
 AGPL-3.0: using `cvpilot[ultralytics]` makes your combined work subject to AGPL-3.0; CV-Pilot never
 imports it. These integrations are tested with fake trainers and injected fake SDK modules; smoke
-tests against the real libraries exist behind `pytest -m real_libs`, and notebooks 03 and 04
-ran the Hugging Face, Lightning, Ultralytics and MMEngine hooks on real training runs. Design: [ADR-0008](../adr/0008-forwarders.md).
+tests against the real libraries exist behind `pytest -m real_libs`, and notebooks 03, 04 and 05
+ran the Hugging Face, Lightning, Ultralytics, MMEngine and RF-DETR hooks on real training runs. Design: [ADR-0008](../adr/0008-forwarders.md).
 
 ## Layers
 

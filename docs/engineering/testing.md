@@ -46,8 +46,11 @@ directories are not committed.
 
 - Parity tests pin the reference implementation's version and record the tolerance in the
   test. A tolerance change is a reviewed decision.
-- Chaos tests simulate `kill -9` mid-write by writing to a temporary path and asserting the
-  recovery routine ignores the partial file.
+- Chaos tests kill real processes with `SIGKILL` inside a save and check that a fresh process
+  restores a whole checkpoint and never a partial file. `tests/chaos/test_ckpt_kill_points.py` does
+  this 200 times at each of four places inside a save and 200 times at a random moment, from a fixed
+  seed (about 2.5 minutes); `test_ckpt_truncated_upload.py` cuts 200 uploads to an in-memory
+  filesystem. Chaos tests use temporary directories only and never the user's store or cache.
 
 ## What CI runs
 
