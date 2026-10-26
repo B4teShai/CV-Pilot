@@ -51,7 +51,7 @@ A change is done when all of the following are true:
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs lint, format check, type check and tests with coverage on
-Python 3.10 to 3.13 on every push to `main` and every pull request. A red CI blocks merge.
+Python 3.10 to 3.14 on every push to `main` and every pull request. A red CI blocks merge.
 
 ## Releases
 

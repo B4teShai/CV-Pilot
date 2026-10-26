@@ -190,7 +190,7 @@ def test_the_metadata_is_correct(wheel: Path) -> None:
     assert meta["Description-Content-Type"] == "text/markdown"
     classifiers = set(meta.get_all("Classifier") or [])
     assert "Typing :: Typed" in classifiers
-    for minor in ("3.10", "3.11", "3.12", "3.13"):
+    for minor in ("3.10", "3.11", "3.12", "3.13", "3.14"):
         assert f"Programming Language :: Python :: {minor}" in classifiers
     assert not [c for c in classifiers if c.startswith("License ::")]  # the expression says it
     urls = [u for u in meta.get_all("Project-URL") or []]
@@ -239,7 +239,7 @@ def test_a_wheel_can_be_built_from_the_sdist_alone(sdist: Path, tmp_path: Path) 
     assert len(list(out.glob("*.whl"))) == 1
 
 
-@pytest.mark.parametrize("python", ["3.10", "3.13"])
+@pytest.mark.parametrize("python", ["3.10", "3.13", "3.14"])
 def test_the_wheel_installs_in_a_clean_environment_and_runs(
     wheel: Path, tmp_path: Path, python: str
 ) -> None:

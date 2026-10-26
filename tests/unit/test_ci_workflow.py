@@ -24,6 +24,18 @@ def jobs() -> dict[str, Any]:
     return doc["jobs"]  # type: ignore[no-any-return]
 
 
+def supported_pythons() -> list[str]:
+    """The minor versions the package's classifiers claim; CI must test every one of them."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    prefix = "Programming Language :: Python :: 3."
+    minors = [c[len(prefix) :] for c in project["classifiers"] if c.startswith(prefix)]
+    return [f"3.{m}" for m in sorted(minors, key=int)]
+
+
+def test_ci_tests_3_14_too() -> None:
+    assert supported_pythons()[0] == "3.10" and supported_pythons()[-1] == "3.14"
+
+
 def scripts(job: str) -> str:
     return "\n".join(str(s.get("run", "")) for s in jobs()[job]["steps"])
 
@@ -62,7 +74,7 @@ def test_the_dependency_audit_runs_against_the_lock_with_a_pinned_tool() -> None
 def test_the_test_job_still_runs_the_full_gate_on_every_python() -> None:
     doc = yaml.safe_load(CI.read_text())
     test = doc["jobs"]["test"]
-    assert test["strategy"]["matrix"]["python"] == ["3.10", "3.11", "3.12", "3.13"]
+    assert test["strategy"]["matrix"]["python"] == supported_pythons()
     text = scripts("test")
     for command in (
         "ruff check",
@@ -92,7 +104,7 @@ def test_every_job_has_a_timeout_and_the_workflow_does_not_pile_up_runs() -> Non
 def test_the_audit_runs_for_every_supported_python_and_every_night() -> None:
     doc = yaml.safe_load(CI.read_text())
     audit = doc["jobs"]["audit"]
-    assert audit["strategy"]["matrix"]["python"] == ["3.10", "3.11", "3.12", "3.13"]
+    assert audit["strategy"]["matrix"]["python"] == supported_pythons()
     assert "--python" in scripts("audit")
     triggers = doc.get("on", doc.get(True))
     assert triggers["schedule"] and "cron" in triggers["schedule"][0]

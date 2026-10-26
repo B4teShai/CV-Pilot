@@ -2,7 +2,7 @@
 
 ## Language and layout
 
-- Python 3.10 is the floor for the published package; CI runs 3.10 through 3.13. New syntax
+- Python 3.10 is the floor for the published package; CI runs 3.10 through 3.14. New syntax
   is used only when every supported version has it. (The floor is a deliberate choice for
   adoption; raising it is an ADR.)
 - `src/` layout. The import package is `cvpilot`; the distribution is built with hatchling

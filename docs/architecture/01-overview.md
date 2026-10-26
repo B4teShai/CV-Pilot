@@ -87,7 +87,7 @@ result is recorded here; until then the row is a commitment, not a claim.
 |---|---|
 | Apache-2.0 for every file, including the server; copyleft packages only as lazily imported extras, never vendored | [ADR-0001](../adr/0001-scope-and-license.md), [dependencies-and-licensing.md](../engineering/dependencies-and-licensing.md) |
 | Core is CPU-only and torch-free; its runtime dependencies are `typer`, `click`, `pydantic`, `structlog`, `numpy` (eval math) and `pyarrow` (lazy, store only); PyTorch, framework SDKs, FastAPI and tracker SDKs are extras | [ADR-0003](../adr/0003-repo-and-tooling.md), [ADR-0005](../adr/0005-run-store.md) |
-| Python ≥ 3.10; CI on 3.10 to 3.13 | [standards.md](../engineering/standards.md) |
+| Python ≥ 3.10; CI on 3.10 to 3.14 | [standards.md](../engineering/standards.md) |
 | No database server required: SQLite WAL locally; Postgres optional for the server only | [ADR-0005](../adr/0005-run-store.md) |
 | Four layers, downward imports, registries for adapters | [ADR-0004](../adr/0004-layering-and-dependency-rule.md) |
 | Structured JSON logs; secrets never logged | [ADR-0002](../adr/0002-logging.md), [errors-and-logging.md](../engineering/errors-and-logging.md) |
