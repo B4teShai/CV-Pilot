@@ -13,12 +13,13 @@ Events (constant messages, ``request_id`` = ``<run_id>:<seq>``): ``run_started``
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import os
 import threading
 import time
 import weakref
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, get_args
@@ -354,13 +355,16 @@ class RunHandle:
         chain: list[str] = []
         seen = {self.run_id}
         current = self.meta.parent_run_id
-        while current is not None and len(chain) < limit and current not in seen:
-            chain.append(current)
-            seen.add(current)
-            try:
-                current = self._store.get_run(current).parent_run_id
-            except RunNotFoundError:
-                break
+        if current is None:
+            return chain
+        with self._reader() as store:
+            while current is not None and len(chain) < limit and current not in seen:
+                chain.append(current)
+                seen.add(current)
+                try:
+                    current = store.get_run(current).parent_run_id
+                except RunNotFoundError:
+                    break
         return chain
 
     def repro_facts(self) -> tuple[str, str | None]:
@@ -374,19 +378,36 @@ class RunHandle:
             raise self._closed_error()
         self._store.put_manifest(manifest, manifest_sha256)
 
+    @contextlib.contextmanager
+    def _reader(self) -> Iterator[RunStore]:
+        """The store for a checkpoint lookup. Once ``finish`` closed it, a short-lived read-only
+        connection: a preempted run is marked as soon as its checkpoint is safe, and the upload
+        and retention that follow still need the run store as their anchor."""
+        if not self._closed:
+            yield self._store
+            return
+        store = open_store(self.meta.project, self._store.path.parent, create=False)
+        try:
+            yield store
+        finally:
+            store.close()
+
     def checkpoint_digest(self, run_id: str, kind: CheckpointKind, step: int) -> str | None:
         """The digest recorded for a checkpoint manifest of this project, or None."""
-        return self._store.get_manifest_digest(run_id, kind, step)
+        with self._reader() as store:
+            return store.get_manifest_digest(run_id, kind, step)
 
     def checkpoint_auth_evidence(
         self, run_id: str, kind: CheckpointKind
     ) -> tuple[int | None, list[str]]:
         """The first tagged checkpoint step the store recorded for a run and the key ids seen."""
-        return self._store.auth_evidence(run_id, kind)
+        with self._reader() as store:
+            return store.auth_evidence(run_id, kind)
 
     def checkpoint_max_step(self, run_id: str, kind: CheckpointKind) -> int | None:
         """The highest checkpoint step the store recorded for a run, or None."""
-        return self._store.max_manifest_step(run_id, kind)
+        with self._reader() as store:
+            return store.max_manifest_step(run_id, kind)
 
     # -- finishing --------------------------------------------------------
 

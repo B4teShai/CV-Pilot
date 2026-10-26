@@ -151,3 +151,54 @@ def test_retention_waits_until_after_the_run_is_marked(tmp_path: Path) -> None:
     mgr.flag.request("SIGTERM")
     mgr.maybe_save(6, model={"w": np.ones(2)})
     assert marked and marked[-1] == "preempted"
+
+
+@pytest.mark.parametrize("key", [None, "9c" * 32])
+def test_the_preemption_checkpoint_reaches_the_remote_after_the_run_is_marked(
+    tmp_path: Path, events: Events, monkeypatch: pytest.MonkeyPatch, key: str | None
+) -> None:
+    # found by the SkyPilot walk-through: the run was marked preempted (its store closed) before
+    # the upload, every lookup of the run store then failed (checkpoint_anchor_failed) and the
+    # preemption checkpoint never left the node, which is exactly the one a spot job resumes from
+    if key is not None:
+        monkeypatch.setenv("CVPILOT_CKPT_KEY", key)
+    remote = FakeRemote()
+    run, mgr = build(tmp_path, remote=remote)
+    mgr.save_now(1, model={"w": np.ones(2)})
+    mgr.flag.request("SIGTERM")
+    manifest = mgr.maybe_save(2, model={"w": np.full(2, 2.0)})
+    assert manifest is not None and status(tmp_path, run) == "preempted"
+    base = f"{run.run_id}/last/step_000000002"
+    assert f"{base}.manifest.json" in remote.objects and f"{base}.safetensors" in remote.objects
+    names = [e["message"] for e in events()]
+    assert "checkpoint_anchor_failed" not in names
+    assert names.count("checkpoint_uploaded") == 2
+    mgr.close()
+
+
+def test_a_resumed_run_also_uploads_its_preemption_checkpoint(
+    tmp_path: Path, events: Events
+) -> None:
+    remote = FakeRemote()
+    parent, first = build(tmp_path, remote=remote)
+    first.save_now(1, model={"w": np.ones(2)})
+    first.close()
+    parent.finish("preempted")
+    meta = runs.get_run_view("p", parent.run_id, store_dir=tmp_path / "store").meta
+    from ckpt_support import run_meta as fresh
+
+    child_id = fresh()[0].run_id
+    child_meta = runs.resume_from(meta, run_id=child_id, host="h", name=None)
+    repro = fresh()[1].model_copy(update={"run_id": child_id})
+    child = runs.start_run(child_meta, repro, store_dir=tmp_path / "store")
+    mgr = CheckpointManager(
+        child, dir=tmp_path / "ckpt", every_n_steps=1, install_signal_handlers=False,
+        remote=URI, remote_store=remote, remote_sleep=lambda s: None,
+    )  # fmt: skip
+    assert mgr.restore() is not None
+    mgr.flag.request("SIGTERM")
+    assert mgr.maybe_save(2, model={"w": np.full(2, 2.0)}) is not None
+    assert f"{child_id}/last/step_000000002.manifest.json" in remote.objects
+    names = [e["message"] for e in events()]
+    assert "preemption_upload_deferred" not in names and "checkpoint_anchor_failed" not in names
+    mgr.close()

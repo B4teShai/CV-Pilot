@@ -185,6 +185,11 @@ failure on this path (not only checkpoint errors: a `state_dict` that raises `Ru
 that cannot be written) is logged and never reaches your loop. The run is marked `preempted` as soon
 as the local checkpoint is verified; the upload then gets only what is left of the grace window
 (`preemption_upload_deferred` when it is cut short or the window is spent) and retention runs last.
+`ckpt.preempted()` turns true only once this has happened, so the loop `maybe_save(...)`, then
+`if ckpt.preempted(): break` never leaves without the preemption save, even when the signal lands
+between the two calls (the next `maybe_save` handles it); `ckpt.flag.is_set` is the raw request.
+The upload and retention after the run was marked still read the run store, through a short-lived
+read-only connection.
 
 Platform notices are optional and off by default: `notice_source="aws"` or `"gcp"` polls the
 instance metadata service (the fixed link-local address, so no DNS answer can redirect it; short
