@@ -1,8 +1,8 @@
-"""Seeded kill-point suite: 200 real ``SIGKILL``s at each of four places inside a checkpoint save,
-plus 200 at a random moment. After every kill a fresh process must restore exactly the newest
-complete checkpoint, byte for byte what that step saved, never a partial file, and must be able to
-save and restore the next step. See ``_ckpt_kill_points.py`` for the places and what each
-iteration varies.
+"""Seeded kill-point suite: 200 real ``SIGKILL``s in each of four groups of places inside a
+checkpoint save (11 named places, each hit at least 20 times), plus 200 at a random moment. After
+every kill a fresh process must restore exactly the newest complete checkpoint, byte for byte what
+that step saved, never a partial file, and must be able to save and restore the next step. See
+``_ckpt_kill_points.py`` for the places and what each iteration varies.
 
 Run alone with ``uv run pytest -m chaos tests/chaos/test_ckpt_kill_points.py -s`` to see the
 per-place counts.
@@ -142,3 +142,26 @@ def test_every_kill_inside_a_save_restores_the_newest_complete_checkpoint(
             assert not other & set(r["skipped"]), r
         if point != "random_moment":
             assert r["restored"] == r["expected"]
+
+
+def test_the_docs_count_the_named_places_the_harness_really_has() -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("kill_points_harness", HARNESS)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses look their module up by name
+    spec.loader.exec_module(module)
+    named = {
+        place
+        for point, places in module.POINTS.items()
+        if point != "random_moment"
+        for place in places
+    }
+    assert (
+        len(named) == 11
+    )  # "11 named places" in the changelog, status page, ADR-0012 and testing guide
+    assert set(module.POINTS) == {
+        "before_temp_write", "mid_write", "after_write_before_rename", "after_rename_before_chain",
+        "random_moment",
+    }  # fmt: skip

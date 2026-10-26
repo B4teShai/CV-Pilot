@@ -48,8 +48,8 @@ directories are not committed.
   test. A tolerance change is a reviewed decision.
 - Chaos tests kill real processes with `SIGKILL` inside a save and check that a fresh process
   restores a whole checkpoint and never a partial file. `tests/chaos/test_ckpt_kill_points.py` does
-  this 200 times at each of four places inside a save and 200 times at a random moment, from a fixed
-  seed (about 2.5 minutes); `test_ckpt_truncated_upload.py` cuts 200 uploads to an in-memory
+  this 200 times in each of four groups of places inside a save (11 named places in all, each hit at
+  least 20 times) and 200 times at a random moment, from a fixed seed (about 2.6 minutes); `test_ckpt_truncated_upload.py` cuts 200 uploads to an in-memory
   filesystem. Chaos tests use temporary directories only and never the user's store or cache.
 
 ## What CI runs

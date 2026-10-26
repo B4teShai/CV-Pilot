@@ -25,9 +25,10 @@ registry.
 Random delays (the existing test) land wherever the scheduler puts them: most land between saves.
 Exact places need instrumentation inside the save, which tests the places named but nothing between
 them. Chosen: both. A harness forks a writer per iteration; the writer stops itself (`SIGSTOP`) at a
-seeded place inside the save and the harness kills it with `SIGKILL` there, 200 times at each of four
-places; 200 more kills land 0 to 4 ms after a save started. Forking from a harness that has imported
-everything keeps 1,000 iterations at about 2.5 minutes, so the suite stays in the default run.
+seeded place inside the save and the harness kills it with `SIGKILL` there: 200 kills in each of four
+groups of places, which together name 11 places (each at least 20 times); 200 more kills land 0 to 4 ms
+after a save started. Forking from a harness that has imported everything keeps 1,000 iterations at
+about 2.6 minutes (the whole chaos directory at about 3.2), so the suite stays in the default run.
 
 ### RF-DETR: wrap the trainer factory, or ask users to build the trainer
 
@@ -46,7 +47,7 @@ extra without `roboflow`, which training does not import.
 ## Decision
 
 1. **Chaos suite** (`tests/chaos/test_ckpt_kill_points.py`, `_ckpt_kill_points.py`): 200 seeded kills
-   at each of `before_temp_write`, `mid_write` (a random number of bytes, at least one and less than
+   in each of the groups `before_temp_write`, `mid_write` (a random number of bytes, at least one and less than
    the file, never fsynced), `after_write_before_rename` and `after_rename_before_chain` (after the
    manifest link, the data link, verification, the store record, or with the new pointer at its
    temporary name), and 200 at a random moment. Each iteration varies the number of earlier saves, the
@@ -110,7 +111,7 @@ extra without `roboflow`, which training does not import.
 ## Consequences
 
 - The crash-safety claim is backed by 1,000 kills at named places and 200 cut uploads, run on every
-  `pytest` (about 2.5 minutes) and reproducible from the seed.
+  `pytest` (about 3.2 minutes for the chaos directory) and reproducible from the seed.
 - `preempted()` changed meaning (handled, not requested); code that polled it for the request itself
   reads `flag.is_set`.
 - The `rfdetr` extra must be kept in step with the framework's `[train]` extra by hand; a framework

@@ -16,11 +16,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 - Python 3.14: classifier and CI matrix; the full suite passes on a real 3.14 environment.
 - "Datasets prepared with DataCopilot" in the concepts guide; a test with a `manifest.json` copied from
   a real `datacopilot ingest` checks that `init(dataset_uri=...)` records `dcp:<version>`.
-- Chaos suite: 1,000 seeded `SIGKILL`s inside checkpoint saves (200 at each of four places: before
+- Chaos suite: 1,000 seeded `SIGKILL`s inside checkpoint saves: 200 in each of four groups (before
   the temporary write, in the middle of it, after it but before any rename, after the renames but
-  before the store record and the pointer; 200 at a random moment), each followed by a fresh process
-  that restores, compares byte for byte, saves the next step and restores it; and 200 uploads to an
-  in-memory filesystem cut after a random number of bytes. All restored the expected checkpoint.
+  before the store record and the pointer), spread over 11 named places inside them (each killed at
+  least 20 times), and 200 at a random moment (every one of them with a save in flight). Each kill is
+  followed by a fresh process that restores, compares byte for byte, saves the next step and restores
+  it; and 200 uploads to an in-memory filesystem are cut after a random number of bytes. All restored
+  the expected checkpoint. The kill-point file takes about 2.6 minutes, the chaos directory about 3.2.
 - An RF-DETR hook (`cvpilot[rfdetr]`, `cvpilot.autolog(model, ...)`): the framework's losses and COCO
   metrics at the trainer's step, the end of `train`, the guard, isolation and rank rules of the other
   hooks. No resume helper. Ran on RF-DETR Nano with its published weights in notebook 05.
