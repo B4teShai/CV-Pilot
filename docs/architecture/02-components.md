@@ -628,6 +628,9 @@ Imports `core/` only; never `runs/`, `store/` or `cli/`. Routes: `POST /api/v1/r
 pages under `/ui`. Every route requires a project token except `/healthz` and valid share
 links. Depends on: `core/schema.py`; FastAPI, Uvicorn, SQLAlchemy (SQLite or Postgres)
 from the `[server]` extra. Status: planned.
+The first step is narrower and is designed in [ADR-0011](../adr/0011-minimal-read-only-server.md):
+read-only JSON routes and a metrics websocket over the existing project stores, per-project bearer
+tokens, no write API, no database of its own, no UI. Status: designed, not built.
 
 ## Cross-cutting
 

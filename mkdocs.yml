@@ -68,6 +68,7 @@ nav:
       - ADR-0008 Forwarders: adr/0008-forwarders.md
       - ADR-0009 Alerts and the Hugging Face hook: adr/0009-alerts-and-hf-hook.md
       - ADR-0010 Real checkpoint files and MMEngine: adr/0010-real-checkpoint-files-and-mmengine.md
+      - ADR-0011 A minimal read-only server: adr/0011-minimal-read-only-server.md
   - Engineering:
       - Overview: engineering/README.md
       - Standards: engineering/standards.md
