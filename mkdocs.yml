@@ -41,6 +41,7 @@ nav:
       - Gating in CI: guide/gating-ci.md
       - Trust model: guide/trust.md
       - Alerts: guide/alerts.md
+      - Spot instances with SkyPilot: guide/skypilot.md
   - Tutorial: tutorial.md
   - What is built and planned: status.md
   - Reference:

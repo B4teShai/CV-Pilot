@@ -1,0 +1,36 @@
+# CV-Pilot on a spot instance with SkyPilot managed jobs. EXPERIMENTAL: this file has not been
+# run on a real spot instance. The training script and the preemption path it relies on are
+# tested locally (tests/docs/test_skypilot_recipe.py); SkyPilot itself is not. See
+# docs/guide/skypilot.md for the walk-through and what is and is not verified.
+#
+# Launch (from a clone of the repository):
+#   sky jobs launch -n fridge-sku examples/skypilot/cvpilot-spot.yaml --secret CVPILOT_CKPT_KEY
+name: fridge-sku
+
+resources:
+  accelerators: T4:1  # any; the stand-in training runs on a CPU too
+  use_spot: true
+  job_recovery:
+    strategy: EAGER_NEXT_REGION  # a preempted job starts again on a new node
+    max_restarts_on_errors: 3  # the script exits 143 after a preemption save
+
+workdir: .  # the repository clone, synced to every node
+
+envs:
+  CVPILOT_PROJECT: fridge-sku
+  CVPILOT_CHECKPOINT_DIR: /tmp/cvpilot-ckpt  # node-local; the bucket is what survives
+  CVPILOT_CHECKPOINT_REMOTE: s3://my-bucket/cvpilot/fridge-sku  # one prefix per job
+  CVPILOT_CKPT_REQUIRE_TRUST: authenticated  # restore only checkpoints written with your key
+  SPOT_NOTICE: aws  # poll the instance metadata for the two-minute notice (gcp on Google Cloud)
+  TOTAL_STEPS: "20000"
+  SAVE_EVERY: "500"
+
+secrets:
+  CVPILOT_CKPT_KEY: null  # given with --secret at launch; never written in this file
+
+setup: |
+  python3 -m venv ~/cvpilot-venv
+  ~/cvpilot-venv/bin/pip install -e ".[safetensors,remote-s3]"
+
+run: |
+  ~/cvpilot-venv/bin/python examples/skypilot/train.py
