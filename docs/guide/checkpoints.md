@@ -123,7 +123,7 @@ from cvpilot.runs import recover_run
 
 point = find_resume_point("fridge-sku")  # newest run of this project that can be resumed, or None
 if point is not None and point.needs_recover:  # the earlier process was killed outright
-    recover_run("fridge-sku", point.run_id)
+    recover_run("fridge-sku", point.run_id)  # needs the lease: CVPILOT_CHECKPOINT_DIR or force=True
 run = cvpilot.init(
     "fridge-sku", task="detection", resume_from=None if point is None else point.run_id
 )

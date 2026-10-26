@@ -268,7 +268,7 @@ def verifier(work: Path, plan: Plan, tag: str, dead_id: str) -> dict[str, Any]:
     debris = [p.name for p in (work / "ckpt" / dead_id / "last").iterdir()]
     out["temp_files"] = sum(1 for n in debris if n.startswith(".") and n.endswith(".tmp"))
 
-    runs.recover_run(PROJECT, dead_id, store_dir=store)
+    runs.recover_run(PROJECT, dead_id, store_dir=store, checkpoint_dir=work / "ckpt")
     parent = runs.get_run_view(PROJECT, dead_id, store_dir=store).meta
     child_id = new_run_id()
     child_meta = runs.resume_from(parent, run_id=child_id, host="h", name=None)

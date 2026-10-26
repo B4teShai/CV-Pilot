@@ -133,7 +133,10 @@ the record. The only way through is the explicit constructor argument `allow_wea
   built with memoised names; it narrows what a hostile file can do and does not make loading a
   `pt` file safe. Prefer safetensors.
 * **Liveness.** A run holds a lease on its checkpoint directory; `recover_run` refuses a run whose
-  lease is held. The lease is an advisory file lock: it is not reliable on NFS or FUSE mounts, and
+  lease is held, and also refuses a run whose liveness it cannot establish (no checkpoint directory,
+  no lease file for that run, an unreadable directory) unless you pass `force=True`: unknown is not
+  dead. The directory is `checkpoint_dir=` or `CVPILOT_CHECKPOINT_DIR`. The lease is an advisory
+  file lock: it is not reliable on NFS or FUSE mounts, and
   a run that cannot take one logs `checkpoint_lease_unavailable`.
 
 ## Verified, then opened: the gap

@@ -55,6 +55,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ### Changed (Phase 7)
 
+- `recover_run` fails closed: a run whose liveness it cannot establish (no checkpoint directory, no
+  lease file for the run, an unreadable directory) is refused unless `force=True`; a held lease is
+  refused even with `force`. It reads `CVPILOT_CHECKPOINT_DIR` when `checkpoint_dir` is not given.
+  Code that called it for a run that never used `CheckpointManager` passes `force=True`.
+- `CheckpointManager` refuses a checkpoint root that another account owns or that has group or world
+  access (`chmod 700` it); a `memory://` checkpoint remote is accepted only with `CVPILOT_ENV=dev`.
+
 - `preempted()` semantics, as above. Code that polled it to learn about the signal itself should read
   `ckpt.flag.is_set`.
 - The lock resolves `torchmetrics` 1.8.2 (was 1.9.0) for the `lightning` and `rfdetr` extras, because

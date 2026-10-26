@@ -317,12 +317,14 @@ def test_unfinished_run_stays_running_and_can_be_marked_failed(tmp_path: Path, l
     h.log({"a": 1.0, "b": 2.0}, step=0)  # flushed; then the process "dies" without finish
     assert runs.list_runs("p", store_dir=tmp_path)[0].status == "running"
 
-    runs.recover_run("p", h.run_id, store_dir=tmp_path)
+    runs.recover_run(
+        "p", h.run_id, store_dir=tmp_path, force=True
+    )  # no lease: the run never took one
     view = runs.get_run_view("p", h.run_id, store_dir=tmp_path)
     assert view.meta.status == "failed" and view.stats.n_points == 2
     assert any(e["message"] == "run_finished" and e["status"] == "failed" for e in logs())
     with pytest.raises(InvalidTransitionError):
-        runs.recover_run("p", h.run_id, store_dir=tmp_path)
+        runs.recover_run("p", h.run_id, store_dir=tmp_path, force=True)
 
 
 def test_the_run_functions_honour_the_store_directory_setting(
@@ -333,7 +335,7 @@ def test_the_run_functions_honour_the_store_directory_setting(
     monkeypatch.setenv("CVPILOT_STORE_DIR", str(tmp_path))
     h = start(tmp_path)
     assert [m.run_id for m in runs.list_runs("p")] == [h.run_id]
-    runs.recover_run("p", h.run_id)
+    runs.recover_run("p", h.run_id, force=True)
     assert runs.get_run_view("p", h.run_id).meta.status == "failed"
 
 
@@ -404,3 +406,40 @@ def test_list_runs_filters_by_status(tmp_path: Path) -> None:
         b.run_id
     ]
     b.finish()
+
+
+def test_recover_run_fails_closed_when_it_cannot_tell_whether_the_process_is_dead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "no lease information" means unknown, not dead: marking a live run failed would end its
+    # status while it still trains and writes
+    monkeypatch.delenv("CVPILOT_CHECKPOINT_DIR", raising=False)
+    h = start(tmp_path)
+    with pytest.raises(InvalidTransitionError, match="force=True"):
+        runs.recover_run("p", h.run_id, store_dir=tmp_path)  # no checkpoint directory known
+    with pytest.raises(InvalidTransitionError, match="force=True"):
+        runs.recover_run(  # a directory without a lease for this run: the run never took one
+            "p", h.run_id, store_dir=tmp_path, checkpoint_dir=tmp_path / "ckpt"
+        )
+    assert runs.get_run_view("p", h.run_id, store_dir=tmp_path).meta.status == "running"
+    runs.recover_run("p", h.run_id, store_dir=tmp_path, force=True)  # the operator vouches for it
+    assert runs.get_run_view("p", h.run_id, store_dir=tmp_path).meta.status == "failed"
+
+
+def test_recover_run_reads_the_checkpoint_directory_from_the_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import numpy as np
+
+    from cvpilot.ckpt.manager import CheckpointManager
+
+    monkeypatch.setenv("CVPILOT_CHECKPOINT_DIR", str(tmp_path / "ckpt"))
+    monkeypatch.delenv("CVPILOT_CKPT_KEY", raising=False)
+    h = start(tmp_path)
+    manager = CheckpointManager(h, every_n_steps=1, install_signal_handlers=False)
+    manager.save_now(1, model={"w": np.ones(2)})
+    with pytest.raises(InvalidTransitionError, match="live process"):
+        runs.recover_run("p", h.run_id, store_dir=tmp_path, force=True)  # force never beats a lease
+    manager.close()  # the lease is free: the process is provably gone
+    runs.recover_run("p", h.run_id, store_dir=tmp_path)
+    assert runs.get_run_view("p", h.run_id, store_dir=tmp_path).meta.status == "failed"

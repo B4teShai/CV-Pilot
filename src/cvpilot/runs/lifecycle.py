@@ -591,36 +591,57 @@ def recover_run(
     *,
     store_dir: Path | None = None,
     checkpoint_dir: Path | str | None = None,
+    force: bool = False,
 ) -> None:
     """Mark a run left ``running`` by a dead process as ``failed`` (keeps its flushed points).
 
+    The run's liveness lease in its checkpoint directory (``checkpoint_dir``, else
+    ``CVPILOT_CHECKPOINT_DIR``) is the proof of death: held means a live process and the run is
+    refused (``force`` does not change that); free means the process is gone. No directory, no
+    lease file for this run (it never took one) or an unreadable directory means the state is
+    unknown, which is not the same as dead: the call is refused unless ``force=True``, the
+    operator's statement that the process is gone.
+
     Raises:
-        RunNotFoundError, InvalidTransitionError: unknown run, or it already has a final status.
+        RunNotFoundError, InvalidTransitionError: unknown run, it already has a final status, a
+            live process holds it, or its liveness cannot be established and ``force`` is false.
     """
 
-    ensure_configured("cvpilot-client", load_settings())  # the recipe calls this before init
+    settings = load_settings()
+    ensure_configured("cvpilot-client", settings)  # the recipe calls this before init
+    directory = checkpoint_dir if checkpoint_dir is not None else settings.checkpoint_dir
 
-    def held() -> bool:
-        if checkpoint_dir is None:
-            return False
+    def liveness() -> bool | None:
+        """True: a live process holds the lease. False: it is free. None: cannot tell."""
+        if directory is None:
+            return None
         from cvpilot.ckpt.directory import RunCheckpoints
 
         try:
-            return RunCheckpoints(Path(checkpoint_dir), run_id).lease_state() is True
+            return RunCheckpoints(Path(directory), run_id).lease_state()
         except Exception:  # noqa: BLE001  # an unreadable directory cannot prove the run dead
-            return True
+            return None
 
-    if held():
-        raise InvalidTransitionError(f"run {run_id} is still held by a live process")
+    def check_dead() -> None:
+        state = liveness()
+        if state is True:
+            raise InvalidTransitionError(f"run {run_id} is still held by a live process")
+        if state is None and not force:
+            raise InvalidTransitionError(
+                f"cannot tell whether the process of run {run_id} is gone (no checkpoint "
+                "directory or no liveness lease for it): pass checkpoint_dir= or set "
+                "CVPILOT_CHECKPOINT_DIR, or force=True if you know it is dead"
+            )
+
     store = open_existing(project, run_id, store_dir)
     try:
         meta = store.get_run(run_id)
-        if held():  # checked again once the store is open: the lease is the proof of death
-            raise InvalidTransitionError(f"run {run_id} is still held by a live process")
         if is_terminal(meta.status):
             raise InvalidTransitionError(f"run status cannot change from {meta.status} to failed")
+        check_dead()
         stats = store.metric_stats(run_id)
         store.compact_metrics(run_id)
+        check_dead()  # once more just before the write: the lease is the proof of death
         store.set_status(run_id, "failed", datetime.now(timezone.utc))
         bind_request_id(f"{run_id}:1")
         _log().info(

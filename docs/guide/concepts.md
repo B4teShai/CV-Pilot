@@ -7,7 +7,8 @@ at it; the step timeline continues, the history stays separate.
 
 **Store.** `CVPILOT_STORE_DIR/<project>/`: SQLite in WAL mode for rows, batched Parquet for
 metric points, a content-addressed directory for artifacts. A process killed with `SIGKILL`
-leaves a readable store; its run stays `running` until `recover_run` marks it `failed`.
+leaves a readable store; its run stays `running` until `recover_run` marks it `failed` (it refuses while the run's checkpoint
+lease is held, and when it cannot tell, unless you pass `force=True`).
 
 **Snapshot.** An immutable evaluation of one run on one evaluation set at one step: COCO-style
 mAP, per-class AP, confusion, slices and bootstrap intervals, keyed by

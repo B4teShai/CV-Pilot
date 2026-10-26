@@ -121,7 +121,10 @@ def test_after_a_kill_the_next_run_resumes_cleans_the_debris_and_continues(
     run_id, _, _ = run_and_kill(tmp_path, point="manifest_renamed")
     debris = [p.name for p in (tmp_path / "ckpt" / run_id / "last").iterdir()]
     assert any(n.endswith(".tmp") for n in debris)  # the half-written data file
-    runs.recover_run("chaos", run_id, store_dir=tmp_path / "store")  # the dead run becomes failed
+    # the dead run becomes failed: its lease is free, which is the proof of death
+    runs.recover_run(
+        "chaos", run_id, store_dir=tmp_path / "store", checkpoint_dir=tmp_path / "ckpt"
+    )
     from datetime import datetime, timezone
 
     from cvpilot.core.schema import Repro

@@ -128,7 +128,8 @@ def start_run(meta: RunMeta, repro: Repro, *, store_dir=None, git_diff: bytes | 
 def log_points(run: RunHandle, points: Mapping[str, float], *, step: int, epoch: int | None = None) -> None
 def finish_run(run: RunHandle, status: Literal["finished", "failed", "preempted"]) -> None
 def resume_from(parent: RunMeta, *, run_id: str, host: str, name: str | None) -> RunMeta
-def recover_run(project: str, run_id: str, *, store_dir=None) -> None   # running -> failed
+def recover_run(project, run_id, *, store_dir=None, checkpoint_dir=None, force=False) -> None
+#   running -> failed; refused while the lease is held or when liveness is unknown (unless force)
 def list_runs(project: str, *, status: RunStatus | None = None, store_dir=None) -> list[RunMeta]
 def get_run_view(project: str, run_id: str, *, store_dir=None) -> RunView   # meta, repro, stats, artifacts
 
