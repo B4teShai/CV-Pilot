@@ -112,3 +112,10 @@ def test_a_missing_fsspec_names_the_plain_remote_extra(monkeypatch: pytest.Monke
     with pytest.raises(MissingExtraError) as info:
         fsspec_store.open_remote(parse_remote_uri("memory://t/x"))
     assert "cvpilot[remote]" in str(info.value)
+
+
+def test_the_rfdetr_extra_pins_the_framework_below_the_next_minor_release() -> None:
+    # the hook patches rfdetr.training.build_trainer: a release that renames it would make the hook
+    # record nothing, so a new minor release is taken on purpose, after the smoke test passed
+    requirement = next(d for d in EXTRAS["rfdetr"] if d.startswith("rfdetr"))
+    assert re.fullmatch(r"rfdetr>=1\.11,<1\.12", requirement), requirement

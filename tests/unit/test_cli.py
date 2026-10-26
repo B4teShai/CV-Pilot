@@ -118,3 +118,16 @@ def test_unexpected_error_is_logged_once_and_exits_1(
     assert rec["message"] == "command_failed" and rec["level"] == "ERROR"
     assert rec["command"] == "doctor" and "RuntimeError: boom" in rec["exception"]
     assert err.count("Traceback") == 1  # only inside the JSON `exception` field
+
+
+def test_doctor_reports_a_hook_whose_framework_patch_target_is_missing(
+    invoke: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cvpilot.hooks import rfdetr
+
+    monkeypatch.setattr(rfdetr, "compatibility", lambda: "rfdetr.training has no build_trainer")
+    result = invoke("doctor")
+    assert result.code == 0 and result.out.strip() == "ok"  # a warning, not a failure
+    (event,) = result.event("doctor_completed")
+    assert event["hook_problems"] == ["rfdetr: rfdetr.training has no build_trainer"]
+    assert [e["level"] for e in result.event("hook_incompatible")] == ["WARN"]

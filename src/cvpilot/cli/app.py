@@ -60,12 +60,26 @@ app.command("gate")(gate_command)
 app.command("eval-file", hidden=True)(eval_command)
 
 
+def _hook_problems() -> list[str]:
+    """``"<hook>: <why>"`` for each installed framework whose hook would silently record nothing
+    (a patch target the hook relies on is gone). Reads source text only; imports no framework."""
+    from cvpilot.hooks import rfdetr
+
+    found = {"rfdetr": rfdetr.compatibility()}
+    return [f"{name}: {why}" for name, why in found.items() if why is not None]
+
+
 def _run_doctor() -> None:
-    get_logger("cvpilot.cli").info(
+    log = get_logger("cvpilot.cli")
+    problems = _hook_problems()
+    for problem in problems:
+        log.warning("hook_incompatible", problem=problem)
+    log.info(
         "doctor_completed",
         status="ok",
         package_version=__version__,
         python_version=platform.python_version(),
+        hook_problems=problems,
     )
 
 

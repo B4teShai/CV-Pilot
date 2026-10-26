@@ -227,3 +227,65 @@ def test_the_hook_module_imports_no_framework(monkeypatch: pytest.MonkeyPatch) -
         monkeypatch.setitem(sys.modules, name, None)  # any import of them would fail
     importlib.reload(rf)
     assert rf.RFDETRHook().matches(object()) is False
+
+
+def test_a_constructor_that_fails_never_escapes_into_train(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Broken:
+        def __init__(self, core: Any) -> None:
+            raise RuntimeError("constructor failed")
+
+    monkeypatch.setattr(rf, "build_classes", lambda *a, **k: (Broken, Broken))
+    model, sink, _, training = attached(monkeypatch)
+    model.train()  # the factory wrapper's failure is isolated: training goes on without the hook
+    (trainer,) = training.built
+    assert trainer.callbacks == ["rfdetr-callback"] and trainer.loggers == ["rfdetr-csv-logger"]
+    assert sink.logged == []
+
+
+def test_a_renamed_trainer_factory_is_reported_instead_of_silently_recording_nothing(
+    monkeypatch: pytest.MonkeyPatch, events: Any
+) -> None:
+    model, sink, _, training = attached(monkeypatch)
+    del training.build_trainer  # a framework release that renamed the patch target
+    with pytest.raises(AttributeError):  # the fake framework looks the name up and fails, as the
+        model.train()  # real one would; the hook has already said why it recorded nothing
+    names = [e["message"] for e in events()]
+    assert names.count("hook_target_missing") == 1 and "hook_not_attached" not in names
+    assert sink.logged == [] and sink.finished == ["failed"]
+
+
+def test_a_train_that_never_built_a_trainer_through_the_factory_is_reported(
+    monkeypatch: pytest.MonkeyPatch, events: Any
+) -> None:
+    class QuietModel(RFDETRNano):
+        def train(self, **kwargs: Any) -> None:  # a framework whose train() skips the factory
+            return None
+
+    QuietModel.__module__ = "my_project.models"
+    model, sink, _, _ = attached(monkeypatch, model=QuietModel())
+    model.train()
+    names = [e["message"] for e in events()]
+    assert names.count("hook_not_attached") == 1
+    assert sink.logged == [] and sink.finished == ["finished"]
+
+
+def test_the_compatibility_check_reads_the_framework_source_without_importing_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    package = tmp_path / "rfdetr" / "training"
+    package.mkdir(parents=True)
+    (tmp_path / "rfdetr" / "__init__.py").write_text("raise SystemExit('imported')\n")
+    (package / "__init__.py").write_text("raise SystemExit('imported')\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in ("rfdetr", "rfdetr.training"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    problem = rf.compatibility()
+    assert problem is not None and "build_trainer" in problem
+    (package / "__init__.py").write_text("from .trainer import build_trainer\n")
+    assert rf.compatibility() is None
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if str(tmp_path) not in p])
+    for name in ("rfdetr", "rfdetr.training"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    assert rf.compatibility() is None  # not installed: nothing to report

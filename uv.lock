@@ -1688,7 +1688,7 @@ requires-dist = [
     { name = "pycocotools", marker = "extra == 'rfdetr'" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytorch-lightning", marker = "extra == 'rfdetr'", specifier = ">=2.6,!=2.6.2,!=2.6.3,<3" },
-    { name = "rfdetr", marker = "extra == 'rfdetr'", specifier = ">=1.11" },
+    { name = "rfdetr", marker = "extra == 'rfdetr'", specifier = ">=1.11,<1.12" },
     { name = "s3fs", marker = "extra == 'remote-s3'", specifier = ">=2024.2" },
     { name = "safetensors", marker = "extra == 'safetensors'", specifier = ">=0.4" },
     { name = "scipy", marker = "extra == 'rfdetr'" },

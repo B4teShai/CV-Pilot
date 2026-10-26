@@ -56,7 +56,7 @@ mmengine = ["mmengine>=0.10"]
 # RF-DETR 1.11.2 (Apache-2.0) and its [train] extra, minus roboflow: that upload client is not
 # needed to train and pins typer<0.26, which would hold back the core typer for every install.
 rfdetr = [
-  "rfdetr>=1.11",
+  "rfdetr>=1.11,<1.12",  # the hook patches rfdetr.training.build_trainer: move on purpose
   "pytorch-lightning>=2.6,<3,!=2.6.2,!=2.6.3",
   "torchmetrics[detection]>=1.8.2,<1.9",
   "peft",

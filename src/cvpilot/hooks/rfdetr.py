@@ -6,7 +6,10 @@ itself with ``rfdetr.training.build_trainer``; it offers no callback argument. `
 module's ``build_trainer`` is wrapped so that the first trainer it builds gets a ``CVPilotLogger``
 and a ``CVPilotCallback`` (the classes of the Lightning hook, built from the legacy package because
 the trainer accepts only its own classes); the original ``build_trainer`` is put back when ``train``
-returns or raises. Nothing else (``evaluate``, ``predict``, another model) is touched.
+returns or raises. ``evaluate``, ``predict`` and other model instances are not touched, but while
+``train`` runs the module's ``build_trainer`` is replaced for the whole process: another thread that
+builds an RF-DETR trainer at that moment would get the hook's logger and callback too. One training
+per process is the supported case.
 
 What is recorded, on rank zero only (``trainer.is_global_zero`` and the ``RANK`` environment
 check): every scalar RF-DETR logs (``train/loss`` and its parts, ``val/mAP_50_95``, ``val/mAP_50``,
@@ -26,12 +29,15 @@ framework is imported when the hook is attached, never at module import.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from cvpilot.hooks._guard import Guard
 from cvpilot.hooks._sink import ScalarRelay
 from cvpilot.hooks.lightning import HookAttachError, LightningCore, build_classes
+from cvpilot.logging import get_logger
 from cvpilot.settings import is_rank_zero
 
 PACKAGE = "rfdetr"
@@ -47,6 +53,35 @@ MISSING = (
     "the Lightning package RF-DETR trains with is not installed: "
     'pip install "cvpilot[rfdetr]" (it brings the framework with its training extras)'
 )
+
+
+MAX_SOURCE_BYTES = 1024 * 1024
+"""Most of the framework's ``rfdetr/training/__init__.py`` that the compatibility check reads."""
+
+
+def compatibility() -> str | None:
+    """Why the hook would silently record nothing, or None. Reads the source of the framework's
+    ``rfdetr/training/__init__.py`` (bounded) for the name ``build_trainer`` that the hook patches,
+    without importing the framework: ``cvpilot doctor`` calls it, and an import would load PyTorch.
+    A framework that is not installed has nothing to report."""
+    try:  # the top-level package only: finding a submodule would import (run) its parent
+        spec = importlib.util.find_spec(PACKAGE)
+    except (ImportError, ValueError):
+        return None
+    folders = [] if spec is None else list(spec.submodule_search_locations or [])
+    if not folders:
+        return None
+    try:
+        with (Path(folders[0]) / "training" / "__init__.py").open("rb") as handle:
+            text = handle.read(MAX_SOURCE_BYTES).decode("utf-8", "replace")
+    except OSError:
+        return None
+    if FACTORY in text:
+        return None
+    return (
+        f"{TRAINING_MODULE} no longer mentions {FACTORY}: the hook would record nothing "
+        "(a newer RF-DETR release than the one this hook was tested with)"
+    )
 
 
 class RFDETRCore(LightningCore):
@@ -141,16 +176,21 @@ class RFDETRHook:
             return lambda: None
         real = getattr(module, FACTORY, None)
         if not callable(real):
+            get_logger("cvpilot.hooks").warning(
+                "hook_target_missing", hook=EXTRA, target=f"{TRAINING_MODULE}.{FACTORY}"
+            )
             return lambda: None
         added: list[object] = []
+
+        def attach_one(trainer: object) -> None:
+            # built here, inside the guard: a constructor that fails is isolated like any callback
+            _add(trainer, callback_cls(core), logger_cls(core))
 
         def build_trainer(*args: Any, **kwargs: Any) -> Any:
             trainer = real(*args, **kwargs)
             if not added:  # the first trainer of this train call is the one that fits
                 added.append(trainer)
-                core.guard.run(
-                    "attach", _add, trainer, callback_cls(core), logger_cls(core), always=True
-                )
+                core.guard.run("attach", attach_one, trainer, always=True)
             return trainer
 
         setattr(module, FACTORY, build_trainer)
@@ -158,6 +198,8 @@ class RFDETRHook:
         def restore() -> None:
             if getattr(module, FACTORY, None) is build_trainer:
                 setattr(module, FACTORY, real)
+            if not added:
+                get_logger("cvpilot.hooks").warning("hook_not_attached", hook=EXTRA)
 
         return restore
 
