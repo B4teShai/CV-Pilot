@@ -109,7 +109,9 @@ def test_a_preempted_node_saves_and_a_fresh_node_resumes_from_the_bucket(tmp_pat
         if x.startswith("{") and json.loads(x).get("message") == "checkpoint_restored"
     ]  # fmt: skip
     assert restored and restored[0]["trust_level"] == "authenticated"
-    runs_in_bucket = sorted(p.name for p in (bucket / "my-bucket" / "cvpilot" / "fridge-sku").iterdir())
+    runs_in_bucket = sorted(
+        p.name for p in (bucket / "my-bucket" / "cvpilot" / "fridge-sku").iterdir()
+    )
     assert len(runs_in_bucket) == 2  # node A's run and node B's run
 
 
