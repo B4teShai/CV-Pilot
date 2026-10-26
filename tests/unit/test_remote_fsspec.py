@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -98,3 +99,34 @@ def test_a_missing_fsspec_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> No
 def test_the_schemes_are_registered() -> None:
     assert registry.remotes.names() == ["az", "gs", "memory", "s3"]
     assert registry.remotes.get("memory") is fsspec_store.open_remote
+
+
+def test_a_memory_location_url_parses_back_to_itself() -> None:
+    # found by the truncated-upload chaos suite: the URL had a third slash ("memory:///t/x"), so
+    # every manifest's uri failed validation and no save with a memory:// remote could succeed
+    loc = parse_remote_uri("memory://t/x")
+    assert loc.url == "memory://t/x"
+    assert parse_remote_uri(loc.url) == loc
+    s3 = parse_remote_uri("s3://bucket-name/runs/exp")
+    assert parse_remote_uri(s3.url) == s3
+
+
+def test_a_checkpoint_manager_saves_and_mirrors_to_a_memory_remote(tmp_path: Path) -> None:
+    import numpy as np
+    from ckpt_support import run_meta
+
+    from cvpilot import runs
+    from cvpilot.ckpt.manager import CheckpointManager
+
+    uri = f"memory://t{uuid.uuid4().hex}/runs"
+    meta, repro = run_meta()
+    run = runs.start_run(meta, repro, store_dir=tmp_path / "store")
+    manager = CheckpointManager(
+        run, dir=tmp_path / "ckpt", remote=uri, every_n_steps=1, install_signal_handlers=False
+    )
+    manifest = manager.save_now(1, model={"w": np.ones(4, dtype=np.float32)})
+    assert manifest.uri == f"{uri}/{run.run_id}/last/step_000000001.safetensors"
+    store = fsspec_store.open_remote(parse_remote_uri(uri))
+    assert store.size(f"{run.run_id}/last/step_000000001.safetensors") == manifest.size_bytes
+    manager.close()
+    run.finish()

@@ -29,9 +29,9 @@ class RemoteLocation:
 
     @property
     def url(self) -> str:
-        tail = "/".join(self.prefix)
-        head = f"{self.scheme}://{self.bucket}"
-        return f"{head}/{tail}" if tail else head
+        """The location as text that ``parse_remote_uri`` reads back to the same location (a
+        ``memory://`` remote has no bucket, so its path follows the scheme directly)."""
+        return f"{self.scheme}://" + "/".join(p for p in (self.bucket, *self.prefix) if p)
 
     def key(self, *parts: str) -> str:
         """``bucket/prefix/parts`` as the storage layer addresses it (no scheme)."""
