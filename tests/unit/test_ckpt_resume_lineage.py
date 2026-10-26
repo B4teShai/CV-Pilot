@@ -84,7 +84,7 @@ def test_preempt_resume_crash_resume_continues_from_the_crashed_runs_progress(
     assert selected and selected[-1]["step"] == 25 and selected[-1]["run_id"] == b_id
     assert selected[-1]["reason"]
 
-    runs.recover_run("p", b_id, store_dir=world.store)
+    runs.recover_run("p", b_id, store_dir=world.store, checkpoint_dir=world.ckpt)
     c = world.start(parent=b_id)
     restored_c = world.manager(c).restore()
     assert restored_c is not None and restored_c.manifest.step == 25

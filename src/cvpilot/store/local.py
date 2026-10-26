@@ -772,10 +772,7 @@ class LocalRunStore:
         source = Path(path).expanduser()
         # opened without blocking and judged on the descriptor: a FIFO swapped in after a path
         # check would otherwise wait for a writer for ever
-        try:
-            fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
-        except OSError as exc:
-            raise StoreError(f"cannot read {source.name}: {exc.strerror}") from None
+        fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise StoreError(f"{source} is not a regular file")
