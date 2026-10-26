@@ -40,7 +40,7 @@ apply_rng(state["rng"])  # from cvpilot.ckpt; restoring does not set your genera
 ckpt.adopt("last.pt", step)  # bring a framework-written file under verification
 ckpt.verify(manifest)
 ckpt.list()
-ckpt.preempted()
+ckpt.preempted()  # true once a preemption was handled: saved and the run marked
 ckpt.close()
 ```
 

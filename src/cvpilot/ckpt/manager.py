@@ -850,8 +850,13 @@ class CheckpointManager:
     # -- preemption -------------------------------------------------------------------------
 
     def preempted(self) -> bool:
-        """True once a signal or a platform notice asked this process to stop."""
-        return self.flag.is_set
+        """True once a preemption was HANDLED: a signal or a platform notice asked this process to
+        stop and the ``maybe_save`` after it ran the preemption path (saved inside the grace window
+        or logged why not, and marked the run ``preempted``). A signal that lands after a
+        ``maybe_save`` returned is handled by the next one, so the loop ``maybe_save(...)``, then
+        ``if preempted(): break`` never leaves without that save. ``flag.is_set`` is the raw
+        request."""
+        return self._handled
 
     def _on_preemption(self, step: int, state: Mapping[str, Any]) -> CheckpointManifest | None:
         if not self._announced:

@@ -121,7 +121,7 @@ def test_handlers_are_installed_on_construction_and_restored_on_close(tmp_path: 
     run, manager, _ = build(tmp_path, install_signal_handlers=True, signals=(signal.SIGUSR1,))
     assert manager.installed_signals == [signal.SIGUSR1]
     os.kill(os.getpid(), signal.SIGUSR1)
-    assert manager.preempted()
+    assert manager.flag.is_set and not manager.preempted()  # requested, handled at the next save
     manager.close()
     assert signal.getsignal(signal.SIGUSR1) == before
     run.finish()
@@ -148,7 +148,7 @@ def test_a_platform_notice_sets_the_flag_through_the_poller(tmp_path: Path) -> N
 
     run, manager, _ = build(tmp_path, notice_source=Notice(), notice_interval=1.0)
     deadline = time.monotonic() + 3
-    while not manager.preempted() and time.monotonic() < deadline:
+    while not manager.flag.is_set and time.monotonic() < deadline:
         time.sleep(0.01)
     assert manager.flag.source == "fake-cloud"
     manager.close()
@@ -160,3 +160,17 @@ def test_the_poller_is_off_by_default(tmp_path: Path) -> None:
     assert manager._poller is None
     run.finish()
     assert preempt.default_signals()
+
+
+def test_a_signal_right_after_a_due_save_is_handled_by_the_next_maybe_save(tmp_path: Path) -> None:
+    # found by the SkyPilot walk-through: the documented loop (maybe_save, then "if preempted():
+    # break") broke out WITHOUT the preemption save and with the run still running when the signal
+    # landed between the two calls, because preempted() reported the raw flag
+    run, manager, _ = build(tmp_path, every_n_steps=1)
+    assert manager.maybe_save(1, model=model()) is not None  # a regular save
+    manager.flag.request("SIGTERM")  # the signal lands here, between the two calls
+    assert not manager.preempted()  # not handled yet: the loop runs one more step
+    assert run.status == "running"
+    manifest = manager.maybe_save(2, model=model(2.0))
+    assert manifest is not None and manifest.step == 2
+    assert manager.preempted() and run.status == "preempted"
