@@ -125,10 +125,12 @@ about 12 ms; the table is the run committed with this record (2026-10-18):
 | YOLO11n weights (float32) | 10 653 476 | 19.34 ms | 12.05 ms | 1.6 x | 36 % |
 | ResNet-18 weights | 44 790 276 | 52.71 ms | 16.67 ms | 3.2 x | 56 % |
 
-Notebook 04 was re-executed on 2026-10-26 (its download cache moved to a private folder, ADR-0012) and
-gave, on the same machine: the tiny classifier 4.40 ms against 0.38 ms, YOLO11n weights 23.50 ms
-against 13.70 ms (1.7 x, two SHA-256 passes 29 %), ResNet-18 weights 54.12 ms against 16.44 ms (3.3 x,
-54 %), 0.0090 % of the wall time at the default interval. Both runs are inside the ranges above.
+Notebook 04 was re-executed twice on 2026-10-26 (its download cache moved to a private folder, ADR-0012).
+The committed run gave, on the same machine: the tiny classifier 4.58 ms against 0.47 ms, YOLO11n weights
+21.20 ms against 11.60 ms (1.8 x, two SHA-256 passes 33 %), ResNet-18 weights 54.87 ms against 18.69 ms
+(2.9 x, 54 %), 0.0091 % of the wall time at the default interval; the earlier re-run gave 54.12 ms against
+16.44 ms (3.3 x). All runs are inside the ranges above; the ratio moves with the framework's own save, which
+is the small number.
 
 Where the time goes for ResNet-18 (exclusive times, nothing counted twice): writing the file while hashing it
 40.3 %, reading it back and hashing it again (the verification that makes a save trustworthy) 33.2 %,

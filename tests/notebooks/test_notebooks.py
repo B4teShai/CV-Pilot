@@ -125,7 +125,7 @@ def test_the_readme_lists_the_notebooks_in_ten_lines() -> None:
 
 
 def test_the_edge_case_table_has_no_mismatch_and_matches_its_row_count() -> None:
-    last = code_cells(load(NAMES[1]))[-1]
+    last = code_cells(load(NAMES[1]))[-2]  # the last cell cleans up
     text = output_text(last)
     assert "MISMATCH" not in text
     summary = re.search(r"rows: (\d+), mismatches: (\d+)", text)
@@ -146,7 +146,7 @@ def download_problems(nb: dict[str, Any]) -> list[str]:
     """What is wrong with the way this notebook fetches, unpacks and loads its downloads."""
     cells = code_cells(nb)
     codes = [source(c) for c in cells]
-    fetch = [i for i, s in enumerate(codes) if "urlopen" in s]
+    fetch = [i for i, s in enumerate(codes) if "def fetch(" in s]
     problems: list[str] = []
     if not fetch:
         return ["no download cell"]
@@ -182,7 +182,7 @@ def test_downloads_are_pinned_checked_and_unpacked_safely(name: str) -> None:
 def _edit(nb: dict[str, Any], old: str, new: str) -> dict[str, Any]:
     doctored = copy.deepcopy(nb)
     for cell in code_cells(doctored):
-        if "urlopen" in source(cell):
+        if "def fetch(" in source(cell):
             cell["source"] = source(cell).replace(old, new)
     return doctored
 
@@ -195,7 +195,7 @@ def test_a_notebook_without_the_digest_check_is_rejected() -> None:
 
 def test_a_notebook_without_pinned_digests_is_rejected() -> None:
     nb = load(NAMES[0])
-    text = source(next(c for c in code_cells(nb) if "urlopen" in source(c)))
+    text = source(next(c for c in code_cells(nb) if "def fetch(" in source(c)))
     digests = sorted(set(HEX64.findall(text)))
     doctored = nb
     for digest in digests:
@@ -215,7 +215,7 @@ def test_a_notebook_that_checks_after_renaming_is_rejected() -> None:
     nb = load(NAMES[0])
     doctored = _edit(nb, "part.replace(dest)  # atomic", "part.replace(dest)\n        # atomic")
     for cell in code_cells(doctored):
-        if "urlopen" in source(cell):
+        if "def fetch(" in source(cell):
             s = source(cell).replace(
                 "        digest = sha256_of(part)",
                 "        part.replace(dest)\n        digest = sha256_of(dest)",
@@ -235,7 +235,7 @@ def test_a_notebook_that_loads_a_model_before_the_download_is_rejected() -> None
 def test_a_notebook_without_any_download_cell_is_rejected() -> None:
     nb = copy.deepcopy(load(NAMES[1]))
     for cell in code_cells(nb):
-        cell["source"] = source(cell).replace("urlopen", "open_url")
+        cell["source"] = source(cell).replace("def fetch(", "def get(")
     assert download_problems(nb) == ["no download cell"]
 
 
@@ -368,7 +368,7 @@ def test_the_prose_carries_no_hand_typed_measurement() -> None:
 def layout_rows(name: str) -> dict[tuple[str, str], tuple[str, str]]:
     """``(framework, file) -> (outcome, message)`` from the summary table of the notebook."""
     rows: dict[tuple[str, str], tuple[str, str]] = {}
-    out = output_text(code_cells(load(name))[-1])
+    out = output_text(code_cells(load(name))[-2])  # the last cell cleans up
     for ln in out.splitlines():
         match = re.match(r"(.{32}) (.{52}) (accepted|refused|ADOPTED)\s+(.*)$", ln)
         if match:
@@ -447,7 +447,7 @@ def test_the_real_file_notebook_prose_carries_no_hand_typed_measurement() -> Non
 
 def test_the_real_file_notebook_never_loads_a_file_before_it_was_checked() -> None:
     codes = [source(c) for c in code_cells(load(REAL_NB))]
-    fetch = next(i for i, s in enumerate(codes) if "urlopen" in s)
+    fetch = next(i for i, s in enumerate(codes) if "def fetch(" in s)
     first_load = min(i for i, s in enumerate(codes) if "YOLO(" in s or ("to" + "rch.load") in s)
     assert fetch < first_load
     assert not any(("to" + "rch.load(") in s or "pickle.load" in s for s in codes)
@@ -494,7 +494,7 @@ def test_the_kill_table_has_two_hundred_correct_restarts_per_place() -> None:
 def test_licences_are_checked_before_the_weights_are_downloaded_and_the_pins_hold() -> None:
     codes = [source(c) for c in code_cells(load(CHAOS_NB))]
     licence = next(i for i, s in enumerate(codes) if "RFDETRNanoConfig().license" in s)
-    fetch = next(i for i, s in enumerate(codes) if "urlopen" in s)
+    fetch = next(i for i, s in enumerate(codes) if "def fetch(" in s)
     assert licence < fetch
     code = "\n".join(codes)
     assert "d8d6b9ee57d4d0ed2b1f305163624712a0532cb7bce0c747317984fc5457440d" in code
@@ -528,7 +528,7 @@ def test_the_download_cache_is_a_private_folder_never_the_shared_temporary_one(n
 
 def test_downloads_are_loaded_from_a_checked_private_copy(name: str) -> None:
     codes = [source(c) for c in code_cells(load(name))]
-    fetch_cell = next(s for s in codes if "urlopen" in s)
+    fetch_cell = next(s for s in codes if "def fetch(" in s)
     assert "def private_copy(" in fetch_cell and "WORK /" in fetch_cell
     recheck = r"digest = sha256_of\(dest\)\s+if digest != PINNED_SHA256\[name\]:"
     assert re.search(recheck, fetch_cell)
@@ -542,3 +542,42 @@ def test_downloads_are_loaded_from_a_checked_private_copy(name: str) -> None:
 def test_the_notebook_readme_names_the_private_default() -> None:
     text = (NOTEBOOKS / "README.md").read_text()
     assert "~/.cache/cvpilot-notebooks" in text and "<tmp>/cvpilot-notebooks" not in text
+
+
+def test_the_fetch_follows_only_https_redirects_and_writes_a_private_part_file(name: str) -> None:
+    fetch_cell = next(source(c) for c in code_cells(load(name)) if "def fetch(" in source(c))
+    assert "class HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler)" in fetch_cell
+    assert 'startswith("https://")' in fetch_cell and "OPENER.open(url" in fetch_cell
+    assert "urllib.request.urlopen(" not in fetch_cell  # the default opener follows any redirect
+    assert "tempfile.mkstemp(dir=DATA" in fetch_cell  # a part file of this process only
+    assert 'dest.with_name(name + ".part")' not in fetch_cell
+
+
+def test_the_cache_folder_and_every_folder_above_it_are_checked(name: str) -> None:
+    code = "\n".join(source(c) for c in code_cells(load(name)))
+    assert ".expanduser().resolve()" in code and "for parent in path.parents" in code
+    assert "stat.S_ISVTX" in code and "belongs to another user" in code
+
+
+def test_an_unpack_that_fails_leaves_no_staging_folder_and_the_run_removes_its_scratch(
+    name: str,
+) -> None:
+    code = "\n".join(source(c) for c in code_cells(load(name)))
+    assert "except BaseException:\n        shutil.rmtree(staging, ignore_errors=True)" in code
+    last = source(code_cells(load(name))[-1])
+    assert "shutil.rmtree(WORK, ignore_errors=True)" in last
+    assert "scratch folder removed" in output_text(code_cells(load(name))[-1])
+
+
+def test_the_chaos_notebook_runs_its_children_in_their_own_group_with_a_scrubbed_environment() -> (
+    None
+):
+    code = all_code(CHAOS_NB)
+    assert "start_new_session=True" in code and "os.killpg(proc.pid, signal.SIGKILL)" in code
+    cut_cell = next(
+        source(c) for c in code_cells(load(CHAOS_NB)) if "test_ckpt_truncated_upload" in source(c)
+    )
+    assert '"HOME": str(WORK / "pytest-home")' in cut_cell and "os.environ" not in cut_cell
+    assert "run_group(" in cut_cell
+    assert "weights_only=True" not in code  # the framework's loading mode is not claimed
+    assert "named places inside a save" in all_output(CHAOS_NB)

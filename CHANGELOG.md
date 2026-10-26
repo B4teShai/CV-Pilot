@@ -53,7 +53,32 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   `CVPILOT_NOTEBOOK_DATA` gets the same check: a link, another owner or group or world write access is
   refused), every download is loaded from a private copy in the run's own folder whose SHA-256 is
   checked again, and an unpacked folder must hold exactly the archive's files with the archive's bytes
-  or it is unpacked again. All five notebooks were re-executed.
+  or it is unpacked again. Every folder above the cache is checked too, each download goes to a part
+  file only its own process has open, redirects must stay on https, a failed unpack removes its
+  staging folder, a last cell removes the run's scratch folder, and the chaos children run in their own
+  process group with a scrubbed environment. All five notebooks were re-executed twice.
+
+- `cvpilot.init(dataset_uri=...)`: a DataCopilot `manifest.json` is read defensively. It must be a
+  regular file (a link, FIFO, device or folder falls back to the merkle hash without being opened, so
+  a FIFO can no longer make `init` wait), at most 1 MiB (was 64 MiB), parsed without raising on deep
+  nesting, and its version must be 1 to 190 characters from `A-Za-z0-9._-`: a 197-character version
+  used to make `init` succeed and every later checkpoint save fail. `sha256_file` refuses a FIFO too.
+- The IMDSv2 token from the AWS metadata answer must match `[A-Za-z0-9_=-]{1,512}` before it is sent
+  back as a header, and a `ValueError` from the HTTP client becomes the usual `OSError`, so the notice
+  poller cannot be made to raise.
+- RF-DETR hook: the logger and callback are constructed inside the guard; a framework release that
+  removes `rfdetr.training.build_trainer` is reported (`hook_target_missing`, `hook_not_attached`) and
+  `cvpilot doctor` lists `hook_problems` (a warning, exit 0); the extra is `rfdetr>=1.11,<1.12`.
+- The kill-point suite records whether each random-moment kill landed with a save in flight, checks the
+  refusal reason per trust mode, runs in its own process group (a stopped writer cannot be orphaned)
+  and clears every `CVPILOT_` variable.
+- Install docs: git URLs are pinned to a full commit (`uv add ... --rev`, `pip ... @<full-commit-sha>`);
+  `scripts/check_clone.sh` installs the runtime dependencies from the committed `uv.lock` with
+  `--require-hashes`, then the clone with `--no-deps`, every step under an allow-list environment with
+  a private HOME; the SkyPilot recipe does the same with `uv sync --locked`.
+- ADR-0011 gained rate-limit keys from a trusted proxy only, a separate cap for pre-authentication
+  sockets, a Host allow-list, identical answers for an unknown project and a bad token, a rows-scanned
+  cap, an allow-list for served config fields and a must-test list (`mode=ro` on a WAL database).
 
 ### Changed (Phase 7)
 

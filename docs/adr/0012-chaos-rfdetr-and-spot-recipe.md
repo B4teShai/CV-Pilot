@@ -85,8 +85,13 @@ extra without `roboflow`, which training does not import.
    check and its use. The cache is now `~/.cache/cvpilot-notebooks` (mode 0700; it and
    `CVPILOT_NOTEBOOK_DATA` must be a real folder owned by the user and writable by nobody else), every
    download is loaded from a private copy in the run's folder whose SHA-256 is checked again, and an
-   unpacked folder must hold exactly the archive's files and bytes or it is unpacked again. A static
-   test forbids a data folder under the system's temporary directory. All five notebooks were
+   unpacked folder must hold exactly the archive's files and bytes or it is unpacked again. A second
+   pass (from the review of the first) resolves the cache path and checks every folder above it (owned
+   by the user or root, not writable by others unless sticky), writes each download to a part file only
+   its own process has open (`mkstemp`), follows redirects only to https URLs, removes a half-unpacked
+   staging folder on any error, removes the run's scratch folder in a last cell, runs the chaos children
+   in their own process group and the cut-upload test in an environment built from an allow-list with a
+   private HOME. A static test forbids a data folder under the system's temporary directory. All five notebooks were
    re-executed; notebook 04's save-cost numbers moved within the ranges ADR-0010 records.
 
 ## What was deliberately not built
@@ -97,8 +102,10 @@ extra without `roboflow`, which training does not import.
   strict scan; that is not enough when the framework's next read can fall back. `CheckpointManager` is
   the verified path.
 - **Accepting the published RF-DETR weights in CV-Pilot's reader.** The strict scan refuses them for
-  one `argparse.Namespace`; the allow-list stays as it is, because CV-Pilot never loads those weights
-  (the framework does, with PyTorch's restricted loader).
+  one `argparse.Namespace`; the allow-list stays as it is, because CV-Pilot never loads those weights.
+  The framework loads them itself; its source asks for a restricted load first, but the loading mode
+  was not verified at run time, so the control is the SHA-256 pin, checked again on the private copy
+  right before the framework opens it.
 - **Kill tests on other file systems, power loss, or a real bucket.** The suite runs on the local disk
   of the machine that runs the tests; a kill is not a power cut (the page cache survives a killed
   process), and the cut uploads are against an in-memory filesystem.
