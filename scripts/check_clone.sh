@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Install CV-Pilot the way a person without a package index does, and run what the README shows.
 #
-# Usage: scripts/check_clone.sh [PYTHON]    (default: python3)
+# Usage: scripts/check_clone.sh [PYTHON]    (default: python3; needs git and uv on PATH)
 #
 # Clones the current commit (committed files only) into a temporary directory, creates a fresh
-# virtual environment with PYTHON, runs `pip install .` from the clone (the network is used for
-# the build backend and the dependencies only), then `cvpilot --version`, `cvpilot doctor` and the
-# README quick start: the `file=train.py` block is written to disk and the first command block
-# after it runs. The run store lives in the temporary directory, never in your home directory.
+# virtual environment with PYTHON, installs the dependencies exactly as the committed uv.lock
+# pins them (runtime dependencies only: uv export, then pip install --require-hashes; the
+# network is used for those files only), installs the clone itself with pip, then runs `cvpilot --version`, `cvpilot doctor` and
+# the README quick start: the `file=train.py` block is written to disk and the first command block
+# after it runs. Everything after the clone runs in an environment built from an allow-list
+# (env -i): a private HOME and TMPDIR inside the temporary directory, no inherited CVPILOT_,
+# PIP_, PYTHON or proxy variables, so nothing of your home directory is read or written.
 # Exits non-zero on the first failure; the temporary directory is removed either way.
 set -euo pipefail
 
@@ -15,24 +18,28 @@ PYTHON="${1:-python3}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cvpilot-clone.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$WORK/home" "$WORK/tmp" "$WORK/quickstart"
+
+# the only variables a step may see (the ones pip needs to verify certificates are the system's)
+clean() {
+  env -i PATH="$WORK/venv/bin:/usr/bin:/bin" HOME="$WORK/home" TMPDIR="$WORK/tmp" \
+    LC_ALL=C.UTF-8 GIT_CEILING_DIRECTORIES="$WORK" PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_INPUT=1 NO_COLOR=1 "$@"
+}
 
 git clone --quiet --no-hardlinks "$REPO" "$WORK/src"
 "$PYTHON" -m venv "$WORK/venv"
-"$WORK/venv/bin/python" -m pip install --quiet --disable-pip-version-check "$WORK/src"
+uv export --quiet --locked --no-default-groups --no-emit-project --project "$WORK/src" \
+  -o "$WORK/requirements.txt"
+clean "$WORK/venv/bin/python" -m pip install --quiet --require-hashes -r "$WORK/requirements.txt"
+clean "$WORK/venv/bin/python" -m pip install --quiet --no-deps "$WORK/src"
 
-mkdir -p "$WORK/home" "$WORK/quickstart"
-export HOME="$WORK/home"
-export GIT_CEILING_DIRECTORIES="$WORK"
-export PATH="$WORK/venv/bin:/usr/bin:/bin"
-unset VIRTUAL_ENV PYTHONPATH
-for name in $(env | sed -n 's/^\(CVPILOT_[A-Z_]*\)=.*/\1/p'); do unset "$name"; done
-
-echo "python: $(python --version 2>&1)"
-cvpilot --version
-cvpilot doctor 2>/dev/null
+echo "python: $(clean python --version 2>&1)"
+clean cvpilot --version
+clean cvpilot doctor 2>/dev/null
 
 # The quick start from the cloned README: write train.py, then run the command block after it.
-python - "$WORK/src/README.md" "$WORK/quickstart" <<'EOF'
+clean python - "$WORK/src/README.md" "$WORK/quickstart" <<'EOF'
 import re
 import sys
 from pathlib import Path
@@ -48,7 +55,7 @@ command = next(
 (out / "quickstart.sh").write_text(command, encoding="utf-8")
 EOF
 cd "$WORK/quickstart"
-bash -e quickstart.sh 2>/dev/null | tee output.txt
+clean bash -e quickstart.sh 2>/dev/null | tee output.txt
 grep -q '^status: finished$' output.txt
 grep -q '^n_points: 3$' output.txt
 echo "clone check passed"

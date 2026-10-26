@@ -34,6 +34,7 @@ def interpreter(version: str) -> str | None:
 def test_a_fresh_clone_installs_with_pip_and_runs_the_readme_quick_start(
     version: str, tmp_path: Path
 ) -> None:
+    (tmp_path / "home").mkdir()
     python = interpreter(version)
     if python is None:
         pytest.skip(f"python {version} is not available")
@@ -41,7 +42,7 @@ def test_a_fresh_clone_installs_with_pip_and_runs_the_readme_quick_start(
         ["bash", str(SCRIPT), python],  # noqa: S607
         capture_output=True, text=True, check=False, timeout=900,
         env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "TMPDIR": str(tmp_path),
-             "HOME": str(Path.home())},
+             "HOME": str(tmp_path / "home")},  # private: nothing of the real home is read
     )  # fmt: skip
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     lines = done.stdout.splitlines()

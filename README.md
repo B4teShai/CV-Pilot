@@ -24,9 +24,10 @@ uv sync && source .venv/bin/activate
 # without uv: python3 -m venv .venv && . .venv/bin/activate && pip install -e .
 ```
 
-To use it in your own project, run `uv add git+https://github.com/B4teShai/CV-Pilot` or
-`pip install "cvpilot @ git+https://github.com/B4teShai/CV-Pilot"`. Extras and local paths are in
-the [install guide](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/install.md).
+To use it in your own project, pin the commit you reviewed (`git rev-parse HEAD` in a clone):
+`uv add git+https://github.com/B4teShai/CV-Pilot --rev <full-commit-sha>` or
+`pip install "cvpilot @ git+https://github.com/B4teShai/CV-Pilot@<full-commit-sha>"`. Extras and
+local paths are in the [install guide](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/install.md).
 
 Record a run from your training code:
 

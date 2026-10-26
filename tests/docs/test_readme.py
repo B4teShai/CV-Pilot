@@ -74,3 +74,13 @@ def test_the_readme_leaves_internals_to_the_docs() -> None:
     text = README.read_text()
     for word in ("HMAC", "trust policy", "lineage", "quarantine", "eval_set_hash", "CVPILOT_"):
         assert word not in text, word
+
+
+def test_every_git_url_install_in_the_readme_and_install_guide_is_pinned_to_a_full_commit() -> None:
+    """A branch URL installs whatever the branch holds on the day: the default is a full commit."""
+    pages = [README, ROOT / "docs" / "guide" / "install.md"]
+    for page in pages:
+        for number, line in enumerate(page.read_text().splitlines(), start=1):
+            if "git+https://" in line:
+                assert "<full-commit-sha>" in line, f"{page.name}:{number}: pin a commit: {line}"
+    assert "git rev-parse HEAD" in (ROOT / "docs" / "guide" / "install.md").read_text()

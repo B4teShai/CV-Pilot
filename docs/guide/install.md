@@ -34,21 +34,24 @@ python3 -m venv .venv
 ```
 
 `pip install .` (without `-e`) copies the package into the environment instead of linking the
-clone. `scripts/check_clone.sh` does exactly this in a temporary directory, from a fresh clone of
+clone. `scripts/check_clone.sh` does this in a temporary directory, from a fresh clone of
 the current commit and a fresh virtual environment, and then runs the README quick start.
 
 ## Use it in your own project
 
-Point your project's installer at the repository or at a local clone:
+Point your project's installer at the repository, pinned to a full commit: a branch URL installs
+whatever the branch holds on the day, and nothing here is signed or released. Take the commit from
+a clone you reviewed (`git rev-parse HEAD`) and put its 40 characters where `<full-commit-sha>`
+stands:
 
 ```bash notest
-uv add git+https://github.com/B4teShai/CV-Pilot                    # a uv project
-pip install "cvpilot @ git+https://github.com/B4teShai/CV-Pilot"    # any virtual environment
-pip install -e ../CV-Pilot                                          # a local clone, editable
+uv add git+https://github.com/B4teShai/CV-Pilot --rev <full-commit-sha>               # a uv project
+pip install "cvpilot @ git+https://github.com/B4teShai/CV-Pilot@<full-commit-sha>"    # a virtual environment
+pip install -e ../CV-Pilot                                                            # a local clone, editable
 ```
 
-Add `@<commit or tag>` to the URL (`git+https://github.com/B4teShai/CV-Pilot@<commit>`) to pin
-an exact version; `uv add` records the commit it resolved in your `uv.lock` either way.
+`uv add` records the commit it resolved in your `uv.lock`; with `pip`, keep the SHA in your
+requirements file. A local clone is only as good as the checkout in it.
 
 ## Extras
 
@@ -58,8 +61,8 @@ install. From a clone, add extras like this:
 ```bash notest
 uv sync --extra safetensors --extra lightning      # with uv
 pip install -e '.[safetensors,lightning]'          # with pip
-pip install "cvpilot[safetensors] @ git+https://github.com/B4teShai/CV-Pilot"  # in your project
-uv add "cvpilot[safetensors] @ git+https://github.com/B4teShai/CV-Pilot"      # in a uv project
+pip install "cvpilot[safetensors] @ git+https://github.com/B4teShai/CV-Pilot@<full-commit-sha>"  # in your project
+uv add "cvpilot[safetensors] @ git+https://github.com/B4teShai/CV-Pilot" --rev <full-commit-sha>  # in a uv project
 ```
 
 When an error message says `pip install "cvpilot[hf]"`, it names the extra: install that extra in
