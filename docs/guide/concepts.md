@@ -66,8 +66,11 @@ run = cvpilot.init("fridge-sku", task="detection", dataset_uri="/data/fridge.dcp
 `cvpilot runs show RUN` then prints `dataset_hash: dcp:<version>`, the same version DataCopilot
 printed, so a gate result, a checkpoint manifest and a reproduction script all name the exact
 dataset version the model was trained on. CV-Pilot reads only the `version` field of
-`dataset.dcp/manifest.json` (at most 64 MiB, parsed as JSON, nothing executed); without a readable
-version it falls back to a `merkle:` hash of the directory's files. The two packages do not depend
+`dataset.dcp/manifest.json` (a regular file, not a link, at most 1 MiB, parsed as JSON, nothing
+executed, a version of at most 190 characters from `A-Z a-z 0-9 . _ -`); without a usable version it
+falls back to a `merkle:` hash of the directory's files. The `dcp:` value names the version the manifest
+claims: it does not cover the files' contents, and neither does `merkle:` (paths, sizes, times).
+The two packages do not depend
 on each other: install both in the same environment, or run DataCopilot from its own clone.
 `tests/unit/test_api.py` checks this with a manifest copied from a real `datacopilot ingest` run.
 

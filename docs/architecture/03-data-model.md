@@ -315,7 +315,9 @@ The outbox table holds `(run_id, seq, payload_json, created_at, acked_at)`; rows
 - `Artifact.sha256`, `CheckpointManifest.sha256`: SHA-256 over the file bytes, lower-case hex.
 - `Repro.dataset_hash`:
   - `dcp:<version>` when `<dataset_uri>/manifest.json` exists and parses as a DataCopilot
-    manifest; `version` is copied verbatim and is content-based on the DataCopilot side.
+    manifest; `version` is copied verbatim and is content-based on the DataCopilot side, but CV-Pilot only
+    names it, it does not check it against the files. The manifest must be a regular file (never a link)
+    of at most 1 MiB and the version at most 190 characters of `A-Za-z0-9._-`, otherwise `merkle:`.
   - `merkle:<hex>` otherwise: list regular files under `dataset_uri` recursively, excluding
     dot-files; sort by POSIX relative path; leaf = `sha256(relpath + "\0" + size + "\0" +
     mtime_ns)`; root = `sha256` over the concatenated leaf digests in sorted order. It

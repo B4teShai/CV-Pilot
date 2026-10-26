@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -17,7 +18,12 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
 _MANIFEST = "manifest.json"
-_MAX_MANIFEST_BYTES = 64 * 1024 * 1024
+MAX_MANIFEST_BYTES = 1024 * 1024
+"""Largest ``manifest.json`` that is read: DataCopilot's is under a kilobyte, so more is not one."""
+MAX_DATASET_VERSION_CHARS = 190
+"""Longest accepted version: ``dcp:`` plus it must fit the 200 characters of ``dataset_hash``, which
+every checkpoint manifest copies; a longer one would make ``init`` succeed and every save fail."""
+_VERSION = re.compile(rf"[A-Za-z0-9._-]{{1,{MAX_DATASET_VERSION_CHARS}}}")
 
 
 def new_run_id() -> str:
@@ -95,19 +101,41 @@ def merkle_hash(root: Path) -> str:
 
 
 def _manifest_version(directory: Path) -> str | None:
-    manifest = directory / _MANIFEST
+    """The ``version`` of a DataCopilot manifest, or None for anything unusable (the caller then
+    falls back to the Merkle hash). The file is opened without following a link, must be a regular
+    file of at most ``MAX_MANIFEST_BYTES`` and is read from the descriptor; deeply nested JSON and
+    versions outside ``[A-Za-z0-9._-]{1,190}`` are not used."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     try:
-        if not manifest.is_file() or manifest.stat().st_size > _MAX_MANIFEST_BYTES:
+        fd = os.open(directory / _MANIFEST, flags)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_MANIFEST_BYTES:
             return None
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            raw = handle.read(MAX_MANIFEST_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if len(raw) > MAX_MANIFEST_BYTES:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError, MemoryError):
         return None
     version = data.get("version") if isinstance(data, dict) else None
-    return version if isinstance(version, str) and version else None
+    return version if isinstance(version, str) and _VERSION.fullmatch(version) else None
 
 
 def dataset_hash(dataset_uri: str) -> str:
     """``dcp:<version>`` when a DataCopilot ``manifest.json`` is present, else ``merkle:<hex>``.
+
+    ``dcp:<version>`` names the dataset version the manifest claims; it does not cover the files'
+    contents (the manifest is read as it is, not checked against the data). ``merkle:`` covers
+    paths, sizes and modification times, not contents either.
 
     Raises:
         ValueError: ``dataset_uri`` is a URL; only local directories can be hashed.

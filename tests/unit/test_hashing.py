@@ -157,3 +157,64 @@ def test_dataset_hash_on_a_file_is_an_error(tmp_path: Path) -> None:
     f.write_bytes(b"abc")
     with pytest.raises(NotADirectoryError):
         dataset_hash(str(f))
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["a" * 197, "a" * 191, "has space", "new\nline", "a/b", "é" * 4, "../x", "a;b"],
+)
+def test_a_manifest_version_that_a_checkpoint_manifest_could_not_carry_falls_back(
+    tmp_path: Path, version: str
+) -> None:
+    # a 197-character version made init succeed and every later checkpoint save fail, because the
+    # stored dataset_hash ("dcp:" + version) is limited to 200 characters
+    make_tree(tmp_path)
+    (tmp_path / "manifest.json").write_text(json.dumps({"version": version}))
+    assert dataset_hash(str(tmp_path)).startswith("merkle:")
+
+
+def test_the_longest_accepted_version_is_a_valid_checkpoint_dataset_hash(tmp_path: Path) -> None:
+    from cvpilot.core.hashing import MAX_DATASET_VERSION_CHARS
+    from cvpilot.core.schema import Repro
+
+    make_tree(tmp_path)
+    version = "a1_-." * 100
+    version = version[:MAX_DATASET_VERSION_CHARS]
+    (tmp_path / "manifest.json").write_text(json.dumps({"version": version}))
+    value = dataset_hash(str(tmp_path))
+    assert value == "dcp:" + version
+    Repro(  # the model every checkpoint manifest copies the hash into
+        run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV", git_dirty=False, packages_lock_sha256="0" * 64,
+        python_version="3", gpu_names=[], dataset_uri="", dataset_hash=value, config={},
+        command_line="x",
+    )  # fmt: skip
+
+
+def test_a_deeply_nested_manifest_falls_back_instead_of_raising(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    (tmp_path / "manifest.json").write_text("[" * 100_000 + "]" * 100_000)
+    assert dataset_hash(str(tmp_path)).startswith("merkle:")
+
+
+def test_a_manifest_over_the_size_cap_is_not_read(tmp_path: Path) -> None:
+    from cvpilot.core.hashing import MAX_MANIFEST_BYTES
+
+    make_tree(tmp_path)
+    padding = " " * (MAX_MANIFEST_BYTES + 1)
+    (tmp_path / "manifest.json").write_text(json.dumps({"version": "abc"}) + padding)
+    assert dataset_hash(str(tmp_path)).startswith("merkle:")
+    assert MAX_MANIFEST_BYTES == 1024 * 1024
+
+
+def test_a_symlinked_manifest_is_not_followed(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    elsewhere = tmp_path.parent / (tmp_path.name + "-elsewhere.json")
+    elsewhere.write_text(json.dumps({"version": "planted"}))
+    (tmp_path / "manifest.json").symlink_to(elsewhere)
+    assert dataset_hash(str(tmp_path)).startswith("merkle:")
+
+
+def test_a_manifest_that_is_not_a_regular_file_falls_back(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    (tmp_path / "manifest.json").mkdir()
+    assert dataset_hash(str(tmp_path)).startswith("merkle:")
