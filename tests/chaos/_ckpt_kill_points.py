@@ -413,6 +413,9 @@ def one(work: Path, plan: Plan, tag: str) -> dict[str, Any]:
     run_ids = [x.split()[1] for x in lines if x.startswith("RUN ")]
     acks = [int(x.split()[1]) for x in lines if x.startswith("ACK ")]
     result["acks"] = max(acks, default=0)
+    started_saves = [int(x.split()[1]) for x in lines if x.startswith("SAVING ")]
+    # the kill landed inside a save when the newest save the writer began was not yet acknowledged
+    result["in_save"] = max(started_saves, default=0) > result["acks"]
     if not result["killed"] or not run_ids:
         result["ok"] = False
         result["error"] = "writer did not stop at the kill point: " + " | ".join(lines)[-1500:]
@@ -439,10 +442,13 @@ def one(work: Path, plan: Plan, tag: str) -> dict[str, Any]:
     result.update(json.loads(text) if text else {"ok": False, "error": "verifier died"})
     if result["ok"]:
         problems = []
-        # a random kill may land after the broken save finished: everything acknowledged must
-        # survive and at most the one save in flight may have completed
+        # a random kill may land between two saves: everything acknowledged must survive, and only
+        # when a save was in flight may that one have completed too
         acked = result["acks"] if plan.place == "random" else plan.acked
-        allowed = {acked, acked + 1} if plan.place == "random" else {plan.expected}
+        if plan.place != "random":
+            allowed = {plan.expected}
+        else:
+            allowed = {acked, acked + 1} if result["in_save"] else {acked}
         if plan.place != "random" and result["acks"] != plan.acked:
             problems.append(f"acknowledged {result['acks']} saves, planned {plan.acked}")
         if result["restored"] not in allowed:
@@ -464,16 +470,16 @@ def main(work: str, point: str, seed: int, iterations: int) -> None:
     import cvpilot.ckpt.serializers  # noqa: F401
     import cvpilot.runs  # noqa: F401
 
+    for name in [n for n in os.environ if n.startswith("CVPILOT_")]:
+        del os.environ[name]  # nothing of the caller's configuration leaks into an iteration
     for i in range(iterations):
         plan = plan_for(seed, point, i)
+        for name in ("CVPILOT_CKPT_KEY", "CVPILOT_CKPT_REQUIRE_TRUST"):
+            os.environ.pop(name, None)
         if plan.keyed:
             os.environ["CVPILOT_CKPT_KEY"] = KEY
-        else:
-            os.environ.pop("CVPILOT_CKPT_KEY", None)
         if plan.anchored:
             os.environ["CVPILOT_CKPT_REQUIRE_TRUST"] = "anchored"
-        else:
-            os.environ.pop("CVPILOT_CKPT_REQUIRE_TRUST", None)
         started = time.monotonic()
         where = root / f"{point}-{i:04d}"
         where.mkdir(parents=True)
