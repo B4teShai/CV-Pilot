@@ -249,3 +249,22 @@ def test_explicit_arguments_beat_the_environment(
 def test_missing_project_is_a_clear_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="CVPILOT_PROJECT"):
         api.init(task="detection", store_dir=tmp_path)
+
+
+# A real manifest written by `datacopilot ingest <tiny COCO set> --format coco -o x.dcp`
+# (DataCopilot 0.1.0, commit 335ffb3), copied byte for byte: not written by hand.
+DATACOPILOT_MANIFEST = Path(__file__).parents[1] / "data" / "datacopilot_0_1_0_manifest.json"
+
+
+def test_a_dataset_prepared_with_datacopilot_is_recorded_by_its_version(tmp_path: Path) -> None:
+    dcp = tmp_path / "dataset.dcp"
+    dcp.mkdir()
+    raw = DATACOPILOT_MANIFEST.read_bytes()
+    (dcp / "manifest.json").write_bytes(raw)
+    (dcp / "images.parquet").write_bytes(b"not read: the version comes from the manifest")
+    run = init(tmp_path, dataset_uri=str(dcp))
+    api.finish()
+    repro = stored(tmp_path, run.run_id).repro
+    assert repro.dataset_hash == "dcp:" + json.loads(raw)["version"]
+    assert repro.dataset_hash == "dcp:3b87778c1af0e31665bdabf06112f3eb"
+    assert repro.dataset_uri == str(dcp)

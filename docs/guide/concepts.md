@@ -46,6 +46,31 @@ the details in separate fields; secrets are redacted by key and never logged.
 - `runs` and `repro` exit `1` for a well-formed run id that is not in the store and `2` for a
   missing project, an invalid project or a malformed run id (see [Settings](../reference/settings.md)).
 
+## Datasets prepared with DataCopilot
+
+[DataCopilot](https://github.com/B4teShai/DataCopilot) converts and audits a dataset into a
+versioned `dataset.dcp` directory. Pass that directory as `dataset_uri` and the run records the
+dataset by its version instead of hashing every file:
+
+```bash notest
+# in a DataCopilot clone (uv sync once): prints the version, for example 3b87778c...
+uv run datacopilot ingest data/annotations.json --format coco -o /data/fridge.dcp
+```
+
+```python notest
+import cvpilot
+
+run = cvpilot.init("fridge-sku", task="detection", dataset_uri="/data/fridge.dcp")
+```
+
+`cvpilot runs show RUN` then prints `dataset_hash: dcp:<version>`, the same version DataCopilot
+printed, so a gate result, a checkpoint manifest and a reproduction script all name the exact
+dataset version the model was trained on. CV-Pilot reads only the `version` field of
+`dataset.dcp/manifest.json` (at most 64 MiB, parsed as JSON, nothing executed); without a readable
+version it falls back to a `merkle:` hash of the directory's files. The two packages do not depend
+on each other: install both in the same environment, or run DataCopilot from its own clone.
+`tests/unit/test_api.py` checks this with a manifest copied from a real `datacopilot ingest` run.
+
 ## Send metrics to a tracker and hook into a framework
 
 ```python notest
