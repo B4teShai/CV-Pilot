@@ -291,6 +291,11 @@ class CheckpointManager:
                 location = parse_remote_uri(remote)
             except ValueError as exc:
                 raise CheckpointPathError(str(exc)) from None
+            if location.scheme == "memory" and settings.env != "dev":
+                raise CheckpointPathError(
+                    "a memory:// remote lives in this process only and keeps nothing: it is for "
+                    "tests and development (CVPILOT_ENV=dev); use s3://, gs:// or az://"
+                )
             self._mirror = Mirror(
                 location,
                 remote_store

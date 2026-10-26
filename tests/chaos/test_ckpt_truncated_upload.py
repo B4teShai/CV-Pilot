@@ -199,8 +199,9 @@ def scenario(tmp_path: Path, i: int, completed: list[tuple[Any, int]]) -> dict[s
 
 
 def test_a_cut_upload_is_never_restored_and_the_newest_complete_one_is(
-    tmp_path: Path, completed: list[tuple[Any, int]]
+    tmp_path: Path, completed: list[tuple[Any, int]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("CVPILOT_ENV", "dev")  # memory:// is for tests and development only
     results = [scenario(tmp_path, i, completed) for i in range(ITERATIONS)]
     assert len(results) == ITERATIONS
     assert all(r["cut_done"] for r in results)  # every iteration really cut an upload

@@ -101,3 +101,15 @@ def test_a_rank_value_that_is_not_plain_ascii_digits_counts_as_rank_zero_and_nev
     for raw in ("²", "٣", "1e3", "abc", "0x1", "", " ", "1" * 40, "--1"):
         assert is_rank_zero({"RANK": raw}) is True, raw
     assert is_rank_zero({"RANK": " 1 "}) is False and is_rank_zero({"LOCAL_RANK": "-1"}) is False
+
+
+def test_production_settings_refuse_a_memory_checkpoint_remote() -> None:
+    # memory:// is an in-process store that vanishes with the process: configured for a real job
+    # it would look like a working mirror and keep nothing
+    with pytest.raises(SettingsError, match="CVPILOT_CHECKPOINT_REMOTE"):
+        load_settings({"CVPILOT_CHECKPOINT_REMOTE": "memory://bucket/run"})
+    with pytest.raises(SettingsError, match="CVPILOT_CHECKPOINT_REMOTE"):
+        load_settings({"CVPILOT_ENV": "staging", "CVPILOT_CHECKPOINT_REMOTE": "memory://b/r"})
+    assert load_settings({"CVPILOT_CHECKPOINT_REMOTE": "s3://bucket/run"}).checkpoint_remote
+    dev = load_settings({"CVPILOT_ENV": "dev", "CVPILOT_CHECKPOINT_REMOTE": "memory://b/r"})
+    assert dev.checkpoint_remote == "memory://b/r"

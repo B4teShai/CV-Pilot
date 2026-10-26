@@ -111,7 +111,10 @@ def test_a_memory_location_url_parses_back_to_itself() -> None:
     assert parse_remote_uri(s3.url) == s3
 
 
-def test_a_checkpoint_manager_saves_and_mirrors_to_a_memory_remote(tmp_path: Path) -> None:
+def test_a_checkpoint_manager_saves_and_mirrors_to_a_memory_remote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CVPILOT_ENV", "dev")  # memory:// is for tests and development only
     import numpy as np
     from ckpt_support import run_meta
 
@@ -129,4 +132,28 @@ def test_a_checkpoint_manager_saves_and_mirrors_to_a_memory_remote(tmp_path: Pat
     store = fsspec_store.open_remote(parse_remote_uri(uri))
     assert store.size(f"{run.run_id}/last/step_000000001.safetensors") == manifest.size_bytes
     manager.close()
+    run.finish()
+
+
+def test_the_manager_refuses_a_memory_remote_outside_dev(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import numpy as np  # noqa: F401
+    from ckpt_support import run_meta
+
+    from cvpilot import runs
+    from cvpilot.ckpt.manager import CheckpointManager
+    from cvpilot.core.errors import CheckpointPathError
+
+    meta, repro = run_meta()
+    run = runs.start_run(meta, repro, store_dir=tmp_path / "store")
+    monkeypatch.delenv("CVPILOT_ENV", raising=False)
+    with pytest.raises(CheckpointPathError, match="memory://"):
+        CheckpointManager(
+            run, dir=tmp_path / "ckpt", remote="memory://t/x", install_signal_handlers=False
+        )
+    monkeypatch.setenv("CVPILOT_ENV", "dev")
+    CheckpointManager(
+        run, dir=tmp_path / "ckpt2", remote="memory://t/x", install_signal_handlers=False
+    ).close()
     run.finish()

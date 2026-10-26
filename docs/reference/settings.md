@@ -16,7 +16,7 @@ the settings of parts that are not built yet, is in
 | `CVPILOT_FORWARD_HOSTS` | host names (comma separated) | empty | Only these hosts may be tracker endpoints |
 | `CVPILOT_ALERTS` | a file | none | The alert configuration (JSON) used when `init` is not given `alerts=`; see [Alerts](../guide/alerts.md) |
 | `CVPILOT_CHECKPOINT_DIR` | a directory | none | Where `CheckpointManager` writes checkpoints |
-| `CVPILOT_CHECKPOINT_REMOTE` | `s3://`, `gs://` or `az://` URL | none | Also copy checkpoints to this bucket |
+| `CVPILOT_CHECKPOINT_REMOTE` | `s3://`, `gs://` or `az://` URL | none | Also copy checkpoints to this bucket (`memory://` is accepted only with `CVPILOT_ENV=dev`: it keeps nothing after the process ends) |
 | `CVPILOT_CKPT_KEY` | a secret, 32 to 1024 bytes | none | Signs checkpoints so a forged one is refused; see [Trust model](../guide/trust.md) |
 | `CVPILOT_CKPT_REQUIRE_TRUST` | `any`, `anchored`, `authenticated` | `any` | The weakest proof a restore accepts; use `authenticated` for a shared or bucket-backed directory |
 | `CVPILOT_CKPT_MIN_STEP` | a step number | none | Refuse a checkpoint older than this step |

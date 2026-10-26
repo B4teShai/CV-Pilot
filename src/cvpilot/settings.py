@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator
 
 Env = Literal["dev", "staging", "prod"]
 Level = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
@@ -149,6 +149,15 @@ class Settings(BaseModel, frozen=True):
     @classmethod
     def _forward_to(cls, value: Any) -> tuple[str, ...]:
         return parse_forwarders(value)
+
+    @field_validator("checkpoint_remote")
+    @classmethod
+    def _checkpoint_remote(cls, value: str | None, info: ValidationInfo) -> str | None:
+        """``memory://`` is an in-process store that disappears with the process: only ``dev``
+        (tests, notebooks) may name it, never a configured job (``env`` is validated first)."""
+        if value is not None and value.startswith("memory:") and info.data.get("env") != "dev":
+            raise ValueError("memory:// remotes are for CVPILOT_ENV=dev only")
+        return value
 
     @field_validator("project")
     @classmethod
