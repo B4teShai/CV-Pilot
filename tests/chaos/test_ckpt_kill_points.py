@@ -79,7 +79,8 @@ def test_every_kill_inside_a_save_restores_the_newest_complete_checkpoint(
     for r in rows:
         if r["place"] == "data_bytes":
             assert r["temp_files"] >= 1  # the torn file was on disk, and it was not loaded
-        if r["place"] == "manifest_linked":
-            assert "data_missing" in r["skipped"]  # a manifest without its data: skipped
+        if r["place"] == "manifest_linked":  # a manifest without its data is refused: as
+            # data_missing, or first as not_anchored when the anchored policy is required
+            assert {"data_missing", "not_anchored"} & set(r["skipped"]), r
         if point != "random_moment":
             assert r["restored"] == r["expected"]
