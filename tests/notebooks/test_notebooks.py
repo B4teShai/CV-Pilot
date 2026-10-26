@@ -17,9 +17,11 @@ NAMES = (
     "02_edge_cases.ipynb",
     "03_alerts_and_hf_trainer.ipynb",
     "04_real_checkpoints.ipynb",
+    "05_chaos_and_rfdetr.ipynb",
 )
 ALERTS_NB = NAMES[2]
 REAL_NB = NAMES[3]
+CHAOS_NB = NAMES[4]
 MAX_BYTES = 1_500_000
 MAX_PNG = 8
 HEX64 = re.compile(r"\b[0-9a-f]{64}\b")
@@ -457,3 +459,56 @@ def test_the_authenticated_level_was_exercised_on_the_real_framework_file() -> N
     assert re.search(r"last\s+0+\d+\s+valid\s+authenticated", out)
     assert "key_changed" in out and "needs the key in CVPILOT_CKPT_KEY" in out
     assert "the key never appears in any output: True" in out
+
+
+# -- notebook 05: 1,000 kills, cut uploads and a real RF-DETR run ----------------------------
+
+
+def test_every_computed_check_of_the_chaos_and_rfdetr_notebook_holds() -> None:
+    out = all_output(CHAOS_NB)
+    checks = [ln for ln in out.splitlines() if ln.startswith("CHECK:")]
+    assert len(checks) >= 15, len(checks)
+    assert not [ln for ln in checks if not ln.endswith(": True")], checks
+    summary = re.search(r"checks: (\d+), failed: (\d+)", out)
+    assert summary is not None and int(summary.group(1)) == len(checks) and summary.group(2) == "0"
+
+
+def test_the_kill_table_has_two_hundred_correct_restarts_per_place() -> None:
+    out = all_output(CHAOS_NB)
+    rows = {
+        m.group(1): (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+        for m in re.finditer(r"^(\w+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+\d+", out, re.M)
+    }
+    for point in (
+        "before_temp_write",
+        "mid_write",
+        "after_write_before_rename",
+        "after_rename_before_chain",
+        "random_moment",
+    ):
+        kills, killed, right = rows[point]
+        assert kills >= 200 and killed == kills and right == kills, (point, rows[point])
+    assert "truncated uploads: 200 cuts" in out
+
+
+def test_licences_are_checked_before_the_weights_are_downloaded_and_the_pins_hold() -> None:
+    codes = [source(c) for c in code_cells(load(CHAOS_NB))]
+    licence = next(i for i, s in enumerate(codes) if "RFDETRNanoConfig().license" in s)
+    fetch = next(i for i, s in enumerate(codes) if "urlopen" in s)
+    assert licence < fetch
+    code = "\n".join(codes)
+    assert "d8d6b9ee57d4d0ed2b1f305163624712a0532cb7bce0c747317984fc5457440d" in code
+    assert 'NANO_MD5 = "fb6504cce7fbdc783f7a46991f07639f"' in code
+    for banned in ("trust_checkpoint=True", "weights_only=False", "accept_platform_model_license"):
+        assert banned not in code, banned
+    assert 'HF_HUB_OFFLINE="1"' in code
+    out = all_output(CHAOS_NB)
+    assert out.count("(matches the pin)") >= 2
+
+
+def test_the_real_rfdetr_run_was_recorded_and_matches_the_frameworks_own_log() -> None:
+    out = all_output(CHAOS_NB)
+    assert "status: finished | framework: rfdetr==" in out
+    assert "largest difference: 0.0" in out
+    assert "train raised: " in out and "| run status: failed" in out
+    assert "strict scan: refused unsafe_archive: the pickle refers to argparse.Namespace" in out
