@@ -15,6 +15,7 @@ target.
 | Chaos | `tests/chaos/` | The system survives interrupted writes, truncated files, killed processes | nightly or on touch |
 | Docs | `tests/docs/` | The documentation builds strictly with no remote assets, every command of the tutorial runs and prints what the page says, the generated CLI reference matches the code | every push (the `docs` job also builds the site) |
 | Release | `tests/release/` | The wheel and sdist contain exactly what they should (license, NOTICE, `py.typed`, only the documented core dependencies, nothing from the repository), `twine check --strict` passes, the wheel installs and runs in clean environments | every push (the `package` job) |
+| Clone | `tests/release/test_clone.py` | A fresh clone of the current commit installs with `pip install .` into a new virtual environment and runs `--version`, `doctor` and the README quick start (`scripts/check_clone.sh`) | manual, `pytest -m clone`; off by default because the dependencies come from the network |
 | Smoke | `tests/smoke/` | A real tracker or framework library works with the adapter | manual, `pytest -m real_libs`; off by default (`addopts` deselects the `real_libs` marker), skips when the library is absent, needs no network |
 | Benchmark | `benchmarks/` | A performance budget is met on a named reference input | manual, before release |
 

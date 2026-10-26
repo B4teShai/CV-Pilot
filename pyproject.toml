@@ -172,9 +172,10 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m 'not real_libs'"
+addopts = "-ra --strict-markers -m 'not real_libs and not clone'"
 markers = [
   "chaos: kills a subprocess mid-write and checks recovery",
+  "clone: installs a fresh clone with pip in a new virtual environment (needs the network for dependencies); off by default (pytest -m clone)",
   "parity: compares metrics with the pycocotools reference",
   "packaging: builds the wheel and the sdist and inspects them (nothing is uploaded)",
   "real_libs: smoke test against the real tracker or framework library; off by default (pytest -m real_libs)",
