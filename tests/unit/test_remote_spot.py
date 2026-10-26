@@ -194,3 +194,38 @@ def test_the_named_gcp_host_is_still_accepted_when_asked_for_explicitly() -> Non
     assert spot.GcpPreemptionNotice(base_url="http://metadata.google.internal")._host == (
         "metadata.google.internal"
     )
+
+
+@pytest.mark.parametrize(
+    "token",
+    [b"abc\r\nX-Injected: 1", b"has space", b"semi;colon", b"caf\xc3\xa9", b"a\x00b", b"tok/en"],
+)
+def test_a_token_that_is_not_plain_text_is_refused_as_an_oserror_before_it_is_used(
+    server: str, token: bytes
+) -> None:
+    # the token comes from the metadata answer and is sent back as a header value: a CR LF in it
+    # would inject a header (http.client raises ValueError, which must not escape the poller)
+    Handler.routes[("PUT", "/latest/api/token")] = (200, token, {})
+    notice = spot.AwsSpotNotice(base_url=server, timeout=2.0)
+    with pytest.raises(OSError, match="token"):
+        notice.check()
+    assert [s["path"] for s in Handler.seen] == ["/latest/api/token"]  # nothing was sent with it
+
+
+def test_a_header_value_that_the_client_library_rejects_becomes_an_oserror(
+    server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import http.client
+
+    Handler.routes[("PUT", "/latest/api/token")] = (200, b"validtoken", {})
+    real = http.client.HTTPConnection.request
+
+    def request(self: Any, method: str, url: str, *args: Any, **kwargs: Any) -> Any:
+        if method == "GET":
+            raise ValueError("Invalid header value")  # what http.client raises for a bad value
+        return real(self, method, url, *args, **kwargs)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "request", request)
+    notice = spot.AwsSpotNotice(base_url=server, timeout=2.0)
+    with pytest.raises(OSError, match="ValueError"):
+        notice.check()

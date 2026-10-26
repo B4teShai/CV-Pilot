@@ -16,6 +16,7 @@ from __future__ import annotations
 import http.client
 import json
 import math
+import re
 import urllib.parse
 
 from cvpilot.core.errors import NoticeUnavailable
@@ -62,7 +63,8 @@ class _Metadata:
             conn.request(method, path, headers=headers)
             response = conn.getresponse()
             body = response.read(MAX_BODY + 1)
-        except (http.client.HTTPException, TimeoutError) as exc:
+        except (http.client.HTTPException, TimeoutError, ValueError) as exc:
+            # ValueError: http.client refuses a header value with a control character
             raise OSError(f"metadata request failed: {type(exc).__name__}") from None
         finally:
             conn.close()
@@ -70,6 +72,8 @@ class _Metadata:
             raise OSError("the metadata answer is too large")
         return response.status, body
 
+
+_TOKEN = re.compile(rb"[A-Za-z0-9_=-]{1,512}")
 
 INTERRUPTION_ACTIONS = ("terminate", "stop", "hibernate")
 
@@ -103,10 +107,14 @@ class AwsSpotNotice(_Metadata):
             raise NoticeUnavailable(f"metadata token request answered {status}", status)
         if status != 200 or not token or len(token) > 512:
             raise OSError(f"metadata token request answered {status}")
+        if not _TOKEN.fullmatch(token):
+            # the answer is untrusted text that is sent back as a header value: only the
+            # characters IMDS tokens use, so a CR LF cannot inject a header
+            raise OSError("the metadata token has characters a token never has")
         status, body = self._request(
             "GET",
             "/latest/meta-data/spot/instance-action",
-            {"X-aws-ec2-metadata-token": token.decode("ascii", "replace")},
+            {"X-aws-ec2-metadata-token": token.decode("ascii")},
         )
         if status == 200:
             return _interruption(body)
