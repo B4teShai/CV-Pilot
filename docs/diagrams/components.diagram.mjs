@@ -31,7 +31,7 @@ const runs = component("runs", ...at(1, 1), "runs/", "lifecycle, bounded buffer"
 const evalPkg = component("eval", ...at(1, 2), "eval/", "evaluate, CIs, slices", true);
 const compare = component("compare", ...at(1, 3), "compare/ + gate", "baselines, deltas, gate", true);
 const ckpt = component("ckpt", ...at(1, 5), "ckpt/", "atomic save, verified restore", true);
-const alerts = component("alerts", ...at(1, 6), "alerts/", "rule engine");
+const alerts = component("alerts", ...at(1, 6), "alerts/", "rule engine", true);
 
 // Domain (between columns).
 const schema = component("schema", ...at(2, 0.5), "core/schema.py", "RunMeta, MetricPoint, ...", true);
@@ -43,10 +43,10 @@ const capture = component("capture", ...at(3, 0), "capture/", "env, git, GPU", t
 const forward = component("forward", ...at(3, 1), "forward/", "MLflow, W&B, Trackio", true);
 const sync = component("sync", ...at(3, 2), "sync/", "HTTPS, (run_id, seq)");
 const storePkg = component("store", ...at(3, 3), "store/", "SQLite WAL, Parquet, CAS", true);
-const hooks = component("hooks", ...at(3, 4), "hooks/", "Lightning, YOLO callbacks", true);
+const hooks = component("hooks", ...at(3, 4), "hooks/", "five frameworks", true);
 const remote = component("remote", ...at(3, 5), "remote/", "fsspec upload, spot notices", true);
-const notify = component("notify", ...at(3, 6), "notify/", "Telegram, Slack, SMTP");
-const server = component("server", ...at(3, 7), "server/", "FastAPI; imports domain only");
+const notify = component("notify", ...at(3, 6), "notify/", "webhook, Slack, Telegram", true);
+const server = component("server", ...at(3, 7), "server/", "read-only first (ADR-0011)");
 
 // Side lanes: cross-cutting modules and plugin entry-point groups.
 const SIDE_X = LANE_X + LANE_W + 30, SIDE_W = 230, SIDE_BOX_W = 200;
@@ -57,7 +57,7 @@ const ENTRY_H = 40 + 6 * (BOX_H + 16) + 4;
 const entry = lane("le", SIDE_X, LANE_Y[2], SIDE_W, ENTRY_H, "Entry-point groups");
 const epHooks = component("ep_hooks", SIDE_X + 15, LANE_Y[2] + 40, SIDE_BOX_W, BOX_H, "cvpilot.hooks", "registry: hooks/", true);
 const epForward = component("ep_forward", SIDE_X + 15, LANE_Y[2] + 40 + (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.forwarders", "registry: forward/", true);
-const epChannels = component("ep_channels", SIDE_X + 15, LANE_Y[2] + 40 + 2 * (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.channels", "registry: notify/");
+const epChannels = component("ep_channels", SIDE_X + 15, LANE_Y[2] + 40 + 2 * (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.channels", "registry: notify/", true);
 const epStores = component("ep_stores", SIDE_X + 15, LANE_Y[2] + 40 + 3 * (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.stores", "registry: store/", true);
 const epCapturers = component("ep_capturers", SIDE_X + 15, LANE_Y[2] + 40 + 4 * (BOX_H + 16), SIDE_BOX_W, BOX_H, "cvpilot.capturers", "registry: capture/", true);
 

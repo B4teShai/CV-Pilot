@@ -38,6 +38,6 @@ export default {
       steps,
     }),
     c4Legend(40, totalH + 20),
-    note("n1", "Built: capture, hooks (Lightning, YOLO), forwarders, log_eval, the eval engine, baselines, compare and gate. Forwarders run on their own threads and never block step 2. Logged events: run_started, hook_attached, metrics_flushed, eval_completed, compare_completed or compare_refused, gate_passed or gate_failed, run_finished.", 40, totalH + 60, 14),
+    note("n1", "Built: capture, hooks (Lightning, Hugging Face, YOLO, MMEngine, RF-DETR), forwarders, log_eval, the eval engine, baselines, compare and gate. Forwarders run on their own threads and never block step 2. Logged events: run_started, hook_attached, metrics_flushed, eval_completed, compare_completed or compare_refused, gate_passed or gate_failed, run_finished.", 40, totalH + 60, 14),
   ],
 };

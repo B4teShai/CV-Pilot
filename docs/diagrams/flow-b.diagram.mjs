@@ -37,7 +37,7 @@ export default {
       steps,
     }),
     c4Legend(40, totalH + 20),
-    note("n1", "Built and covered by the chaos tests (SIGKILL inside a save, truncated, forged, replaced and raced files, real signals).", 40, totalH + 60, 14),
+    note("n1", "Built and covered by the chaos tests: 1,000 seeded SIGKILLs inside saves and 200 cut uploads, all restored correctly; truncated, forged, replaced and raced files; real signals.", 40, totalH + 60, 14),
     note("n2", "Logged events: checkpoint_saved, checkpoint_verified, checkpoint_uploaded, preemption_signal_received, run_preempted, checkpoint_skipped_corrupt or checkpoint_untrusted, checkpoint_restored, run_resumed.", 40, totalH + 84, 14),
   ],
 };

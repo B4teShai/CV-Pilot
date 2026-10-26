@@ -10,7 +10,7 @@ const at = (c, r, span = 1) => {
 
 // Row 0: inputs that drive a run.
 const datacopilot = external("datacopilot", ...at(0, 0), "DataCopilot", "sibling: manifest.version");
-const frameworks = external("frameworks", ...at(1, 0), "Training frameworks", "Ultralytics, Lightning, HF, MMEngine");
+const frameworks = external("frameworks", ...at(1, 0), "Training frameworks", "Ultralytics, Lightning, HF, MMEngine, RF-DETR");
 const nvml = external("nvml", ...at(2, 0), "GPU telemetry", "NVML via pynvml");
 const scheduler = external("scheduler", ...at(3, 0), "Scheduler / cloud", "SkyPilot, SLURM, spot notices");
 
@@ -45,6 +45,6 @@ export default {
     arrow(cvpilot, storage, "checkpoints, artifacts"),
 
     c4Legend(40, 800),
-    note("n1", "Arrows point from caller to callee. Built: the CLI, the local run store, framework hooks, tracker forwarders and checkpoint mirrors to object storage; the server, alert channels and sync are planned.", 40, 840, 14),
+    note("n1", "Arrows point from caller to callee. Built: the CLI, the local run store, framework hooks, tracker forwarders, alert channels (webhook, Slack, Telegram) and checkpoint mirrors to object storage; the server, SMTP and sync are planned.", 40, 840, 14),
   ],
 };

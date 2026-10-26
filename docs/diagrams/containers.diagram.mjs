@@ -27,7 +27,7 @@ const evalEngine = container("eval", ...at(1, 2), "eval engine", "mAP, per-class
 const sync = container("sync", ...at(2, 2), "sync client", "offline-first outbox");
 const forward = container("forward", ...at(0, 3), "forwarders", "MLflow, W&B, Trackio", true);
 const core = container("core", ...at(1, 3), "core library", "schema, hashing, store port", true);
-const alertsClient = container("alertsc", ...at(2, 3), "client alert rules", "nan_loss, no_progress");
+const alertsClient = container("alertsc", ...at(2, 3), "client alert rules", "nan_loss, no_progress", true);
 const runStore = store("runstore", ...at(1, 4), "local run store", "~/.cvpilot/<proj>/", true);
 
 // Server containers.
@@ -37,7 +37,7 @@ const alertsServer = container("alertss", ...at(3, 3), "server alert rules", "re
 
 // Right column and bottom row: externals.
 const reviewer = actor("reviewer", g(4, 2).x, g(4, 2).y, "Reviewer\nbrowser", 200);
-const channels = external("channels", ...at(3, 4), "Alert channels", "Telegram, Slack, SMTP");
+const channels = external("channels", ...at(3, 4), "Alert channels", "webhook, Slack, Telegram");
 const tracker = external("tracker", ...at(0, 5), "User's tracker", "MLflow, W&B, Trackio");
 
 export default {
@@ -71,6 +71,6 @@ export default {
 
     c4Legend(40, 1000),
     statusLegend(40, 1040),
-    note("n1", "Blue containers are planned; green is built and tested today. Sync, alerts and the server are planned; hooks and the checkpoint manager live in the trainer process and are built.", 400, 1042, 14),
+    note("n1", "Blue containers are planned; green is built and tested today. Client alert rules, hooks and the checkpoint manager live in the trainer process and are built; sync and the server are planned (the first server step, read-only, is designed in ADR-0011).", 400, 1042, 14),
   ],
 };
