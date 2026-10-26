@@ -51,7 +51,9 @@ def test_the_reported_bypass_is_refused() -> None:
 
 
 def test_a_plain_allowed_stack_global_still_passes() -> None:
-    module, attr = next(iter(ALLOWED))
+    # a fixed pick: iterating a frozenset of strings changes order with PYTHONHASHSEED, and the
+    # codec call is the one global with its own rule (see the codec tests)
+    module, attr = sorted(ALLOWED - {("_codecs", "encode")})[0]
     assert not refuses(stream(s(module), MEMOIZE, s(attr), MEMOIZE, STACK_GLOBAL, MEMOIZE))
 
 
