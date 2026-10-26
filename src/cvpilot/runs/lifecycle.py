@@ -382,8 +382,9 @@ class RunHandle:
     def _reader(self) -> Iterator[RunStore]:
         """The store for a checkpoint lookup. Once ``finish`` closed it, a short-lived connection
         opened with SQLite's ``mode=ro`` that runs nothing that writes, so it never takes the
-        project's write lock (a live run elsewhere keeps logging): a preempted run is marked as soon as its checkpoint is safe, and the upload
-        and retention that follow still need the run store as their anchor."""
+        project's write lock (a live run elsewhere keeps logging): a preempted run is marked as soon
+        as its checkpoint is safe, and the upload and retention that follow still need the run
+        store as their anchor."""
         if not self._closed:
             yield self._store
             return

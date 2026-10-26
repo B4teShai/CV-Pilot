@@ -32,13 +32,24 @@ def new_run_id() -> str:
 
 
 def sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
-    """Lower-case hex SHA-256 of the file's bytes, read in chunks."""
+    """Lower-case hex SHA-256 of the file's bytes, read in chunks.
+
+    Raises:
+        OSError: the path cannot be opened or is not a regular file (a FIFO would make a plain
+            ``open`` wait for a writer for ever, so it is opened without blocking and refused).
+    """
     if chunk_size < 1:
         raise ValueError("chunk_size must be positive")
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(chunk_size):
-            digest.update(chunk)
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{path.name} is not a regular file")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            while chunk := handle.read(chunk_size):
+                digest.update(chunk)
+    finally:
+        os.close(fd)
     return digest.hexdigest()
 
 
@@ -104,10 +115,18 @@ def _manifest_version(directory: Path) -> str | None:
     """The ``version`` of a DataCopilot manifest, or None for anything unusable (the caller then
     falls back to the Merkle hash). The file is opened without following a link, must be a regular
     file of at most ``MAX_MANIFEST_BYTES`` and is read from the descriptor; deeply nested JSON and
-    versions outside ``[A-Za-z0-9._-]{1,190}`` are not used."""
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-    try:
-        fd = os.open(directory / _MANIFEST, flags)
+    versions outside ``[A-Za-z0-9._-]{1,190}`` are not used. A FIFO, device, folder or link at the
+    path is refused by ``lstat`` before any open, so a hostile dataset cannot make ``init`` wait."""
+    path = directory / _MANIFEST
+    try:  # refuse a link, a FIFO, a device or a folder before opening: opening a FIFO would wait
+        info = os.lstat(path)  # for a writer for ever
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_MANIFEST_BYTES:
+        return None
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    try:  # O_NONBLOCK and the fstat below close the window in which the path is swapped
+        fd = os.open(path, flags)
     except OSError:
         return None
     try:

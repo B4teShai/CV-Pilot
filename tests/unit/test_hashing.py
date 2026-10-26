@@ -2,7 +2,9 @@ import hashlib
 import itertools
 import json
 import os
+import stat
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -218,3 +220,82 @@ def test_a_manifest_that_is_not_a_regular_file_falls_back(tmp_path: Path) -> Non
     make_tree(tmp_path)
     (tmp_path / "manifest.json").mkdir()
     assert dataset_hash(str(tmp_path)).startswith("merkle:")
+
+
+def _within(seconds: float, fn: Any) -> Any:
+    """Run ``fn`` in a thread; a regression that blocks fails the test instead of hanging it."""
+    import threading
+
+    box: list[Any] = []
+    thread = threading.Thread(target=lambda: box.append(fn()), daemon=True)
+    thread.start()
+    thread.join(seconds)
+    assert not thread.is_alive(), "dataset_hash blocked"
+    return box[0]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_a_fifo_named_manifest_json_does_not_block_init(tmp_path: Path) -> None:
+    make_tree(tmp_path)
+    os.mkfifo(tmp_path / "manifest.json")  # opening it for reading would wait for a writer forever
+    assert _within(10, lambda: dataset_hash(str(tmp_path))).startswith("merkle:")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_a_fifo_swapped_in_after_the_check_does_not_block_either(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # lstat sees a regular file, then the path becomes a FIFO before the open: O_NONBLOCK and the
+    # fstat on the descriptor close that window
+    from cvpilot.core import hashing
+
+    make_tree(tmp_path)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"version": "abc"}))
+    real_lstat = os.lstat
+
+    def lstat_then_swap(path: Any, *a: Any, **kw: Any) -> os.stat_result:
+        result = real_lstat(path, *a, **kw)
+        if str(path).endswith("manifest.json") and manifest.is_file():
+            manifest.unlink()
+            os.mkfifo(manifest)
+        return result
+
+    monkeypatch.setattr(hashing.os, "lstat", lstat_then_swap)
+    assert _within(10, lambda: hashing._manifest_version(tmp_path)) is None
+
+
+def test_a_device_file_named_manifest_json_is_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cvpilot.core import hashing
+
+    make_tree(tmp_path)
+    (tmp_path / "manifest.json").write_text("{}")
+    real_lstat = os.lstat
+
+    class Device:  # what lstat reports for /dev/zero: a character device (cannot be created here)
+        st_mode = stat.S_IFCHR | 0o666
+        st_size = 0
+
+    monkeypatch.setattr(
+        hashing.os,
+        "lstat",
+        lambda p, *a, **k: Device() if str(p).endswith("manifest.json") else real_lstat(p, *a, **k),
+    )
+    assert hashing._manifest_version(tmp_path) is None
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_sha256_file_refuses_a_fifo_instead_of_waiting_for_a_writer(tmp_path: Path) -> None:
+    fifo = tmp_path / "artifact"
+    os.mkfifo(fifo)
+
+    def attempt() -> str:
+        try:
+            sha256_file(fifo)
+        except OSError as exc:
+            return type(exc).__name__
+        return "read"
+
+    assert _within(10, attempt) != "read"
