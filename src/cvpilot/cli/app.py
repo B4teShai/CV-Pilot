@@ -18,6 +18,7 @@ from cvpilot.cli.runs_cmds import repro_command, runs_app
 from cvpilot.core.errors import CvpilotError
 from cvpilot.core.text import safe_text
 from cvpilot.logging import clear_request_context, configure_logging, get_logger, scrub
+from cvpilot.registry import hooks
 from cvpilot.settings import SettingsError, load_settings
 
 ERROR_LINE_CHARS = 2000
@@ -61,12 +62,16 @@ app.command("eval-file", hidden=True)(eval_command)
 
 
 def _hook_problems() -> list[str]:
-    """``"<hook>: <why>"`` for each installed framework whose hook would silently record nothing
-    (a patch target the hook relies on is gone). Reads source text only; imports no framework."""
-    from cvpilot.hooks import rfdetr
-
-    found = {"rfdetr": rfdetr.compatibility()}
-    return [f"{name}: {why}" for name, why in found.items() if why is not None]
+    """``"<hook>: <why>"`` for each registered hook whose framework would make it silently record
+    nothing (a patch target it relies on is gone). Hooks answer through an optional
+    ``compatibility()`` that reads source text only: no framework is imported."""
+    found: list[str] = []
+    for name in hooks.names():
+        check = getattr(hooks.get(name), "compatibility", None)
+        why = check() if callable(check) else None
+        if why is not None:
+            found.append(f"{name}: {why}")
+    return found
 
 
 def _run_doctor() -> None:

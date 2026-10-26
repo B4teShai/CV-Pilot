@@ -61,7 +61,9 @@ def open_root(path: Path, *, create: bool) -> int:
     """A descriptor for the resolved checkpoint root; the caller closes it.
 
     The root itself may be reached through a symlink (a mounted bucket is usually one): it is
-    resolved once, here. Everything below it is opened without following symlinks.
+    resolved once, here. Everything below it is opened without following symlinks. The root must
+    belong to the calling user and have no group or world access (checked with ``fstat`` on the
+    descriptor): anyone who can write the root could plant or rename a run directory in it.
     """
     require_posix()
     try:
@@ -73,11 +75,28 @@ def open_root(path: Path, *, create: bool) -> int:
     try:
         if create:
             resolved.mkdir(parents=True, exist_ok=True, mode=0o700)
-        return os.open(resolved, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        fd = os.open(resolved, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except OSError as exc:
         raise CheckpointPathError(
             f"cannot open the checkpoint directory {resolved}: {exc}"
         ) from exc
+    try:  # judged on the descriptor, so the directory cannot be swapped after the check
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid():
+            raise CheckpointPathError(
+                f"the checkpoint directory {resolved} is not owned by the user running this "
+                "process: refusing to trust checkpoints another account controls"
+            )
+        if info.st_mode & 0o077:
+            raise CheckpointPathError(
+                f"the checkpoint directory {resolved} is accessible to its group or to others "
+                f"(mode {stat.S_IMODE(info.st_mode):04o}): run chmod 700 on it, or use a "
+                "per-user directory"
+            )
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def open_subdir(parent_fd: int, name: str, *, create: bool, mode: int = 0o700) -> int:

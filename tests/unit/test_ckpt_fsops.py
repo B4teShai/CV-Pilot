@@ -12,7 +12,12 @@ from typing import Any
 import pytest
 
 from cvpilot.ckpt import fsops
-from cvpilot.core.errors import CheckpointBusyError, CheckpointCorruptError, CheckpointError
+from cvpilot.core.errors import (
+    CheckpointBusyError,
+    CheckpointCorruptError,
+    CheckpointError,
+    CheckpointPathError,
+)
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX directory fds")
 
@@ -215,3 +220,45 @@ def test_the_lock_file_gives_up_after_bounded_retries(
     with pytest.raises(CheckpointError):
         with fsops.lock(root_fd, timeout=1.0):
             pass
+
+
+@pytest.mark.parametrize("mode", [0o770, 0o707, 0o755, 0o777, 0o750])
+def test_a_root_that_others_can_enter_or_write_is_refused(tmp_path: Path, mode: int) -> None:
+    root = tmp_path / "shared"
+    root.mkdir()
+    root.chmod(mode)
+    with pytest.raises(CheckpointPathError, match="chmod 700"):
+        fsops.open_root(root, create=False)
+
+
+def test_a_root_the_caller_owns_with_no_group_or_world_access_is_opened(tmp_path: Path) -> None:
+    root = tmp_path / "mine"
+    root.mkdir()
+    root.chmod(0o700)
+    os.close(fsops.open_root(root, create=False))
+    os.close(fsops.open_root(tmp_path / "created", create=True))
+    assert stat.S_IMODE((tmp_path / "created").stat().st_mode) == 0o700
+
+
+def test_a_root_owned_by_someone_else_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "theirs"
+    root.mkdir(mode=0o700)
+    mine = os.getuid()
+    monkeypatch.setattr(fsops.os, "getuid", lambda: mine + 1)
+    with pytest.raises(CheckpointPathError, match="owned by"):
+        fsops.open_root(root, create=False)
+
+
+def test_a_root_is_checked_through_its_descriptor_not_its_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the mode is read with fstat on the opened descriptor, so a swap after the open changes nothing
+    root = tmp_path / "swap"
+    root.mkdir(mode=0o700)
+    calls: list[int] = []
+    real = os.fstat
+    monkeypatch.setattr(fsops.os, "fstat", lambda fd: calls.append(fd) or real(fd))
+    os.close(fsops.open_root(root, create=False))
+    assert calls

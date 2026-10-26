@@ -18,7 +18,7 @@ workdir: .  # the repository clone, synced to every node
 
 envs:
   CVPILOT_PROJECT: fridge-sku
-  CVPILOT_CHECKPOINT_DIR: /tmp/cvpilot-ckpt  # node-local; the bucket is what survives
+  CVPILOT_CHECKPOINT_DIR: ~/cvpilot-ckpt  # per-user and node-local (mode 0700, created by CV-Pilot); the bucket is what survives
   CVPILOT_CHECKPOINT_REMOTE: s3://my-bucket/cvpilot/fridge-sku  # one prefix per job
   CVPILOT_CKPT_REQUIRE_TRUST: authenticated  # restore only checkpoints written with your key
   SPOT_NOTICE: aws  # poll the instance metadata for the two-minute notice (gcp on Google Cloud)
@@ -29,8 +29,9 @@ secrets:
   CVPILOT_CKPT_KEY: null  # given with --secret at launch; never written in this file
 
 setup: |
-  python3 -m venv ~/cvpilot-venv
-  ~/cvpilot-venv/bin/pip install -e ".[safetensors,remote-s3]"
+  # the environment of the committed lock (uv.lock), not whatever pip resolves today
+  python3 -m pip install --user "uv==0.11.7"
+  ~/.local/bin/uv sync --locked --extra safetensors --extra remote-s3
 
 run: |
-  ~/cvpilot-venv/bin/python examples/skypilot/train.py
+  ~/.local/bin/uv run --no-sync python examples/skypilot/train.py

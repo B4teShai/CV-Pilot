@@ -33,6 +33,15 @@ def test_the_task_file_asks_for_spot_recovery_and_keeps_the_key_out_of_it() -> N
     envs = task["envs"]
     assert "CVPILOT_CKPT_KEY" not in envs
     assert envs["CVPILOT_CKPT_REQUIRE_TRUST"] == "authenticated"
+    # a per-user directory, never a shared one such as /tmp: the manager refuses a root that
+    # others can write, and a predictable name there would let another account plant a run
+    assert envs["CVPILOT_CHECKPOINT_DIR"].startswith("~/")
+    assert "/tmp" not in envs["CVPILOT_CHECKPOINT_DIR"]
+    # the environment comes from the committed lock, not from whatever pip resolves today
+    setup = task["setup"]
+    assert "uv sync --locked" in setup and "pip install -e" not in setup
+    assert "uv==" in setup  # the installer itself is pinned
+    assert "--no-sync" in task["run"] or "--locked" in task["run"]
     assert envs["CVPILOT_CHECKPOINT_REMOTE"].startswith("s3://")
     assert not any(w in k.lower() for k in envs for w in ("token", "secret", "password"))
     assert "examples/skypilot/train.py" in task["run"] and SCRIPT.exists()

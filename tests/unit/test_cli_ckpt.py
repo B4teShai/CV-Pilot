@@ -103,7 +103,7 @@ def test_verify_exits_1_and_lists_the_corrupt_file_on_stdout(
 def test_verify_of_an_empty_directory_has_nothing_valid_and_exits_1(
     invoke: Invoke, tmp_path: Path
 ) -> None:
-    (tmp_path / "ckpt").mkdir()
+    (tmp_path / "ckpt").mkdir(mode=0o700)
     res = invoke("ckpt", "verify", str(tmp_path / "ckpt"))
     assert res.code == 1 and "no checkpoints" in res.human
 
