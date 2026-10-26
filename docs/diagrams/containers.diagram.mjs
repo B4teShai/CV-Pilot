@@ -10,7 +10,7 @@ const at = (c, r) => {
 const pitchX = 340, pitchY = 144;
 
 // Boundaries: the pip package (cols 0-2, rows 1-4) and the server image (col 3, rows 1-3).
-const pkg = boundary("pkg", g(0, 1).x - 20, g(0, 1).y - 40, 3 * pitchX - 120 + 40, 4 * pitchY - 60 + 60, "cvpilot package  (pip install cvpilot)");
+const pkg = boundary("pkg", g(0, 1).x - 20, g(0, 1).y - 40, 3 * pitchX - 120 + 40, 4 * pitchY - 60 + 60, "cvpilot package  (installed from a clone)");
 const srv = boundary("srv", g(3, 1).x - 20, g(3, 1).y - 40, 220 + 40, 3 * pitchY - 60 + 60, "cvpilot server  (Docker image, [server] extra)");
 
 // Row 0: external callers.

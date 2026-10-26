@@ -12,7 +12,8 @@ Everything runs on your machine from Python or the command line; no server is ne
 
 ## I want to try it
 
-- [Install](guide/install.md) it with `pip install cvpilot` (Python 3.10 or newer).
+- [Install](guide/install.md) it from a clone of the repository (Python 3.10 or newer; no package
+  index is needed).
 - Follow the [Tutorial](tutorial.md): a synthetic run from logging to a failed gate to a resume.
   Every command in it is executed by a test.
 - Look up a command in the [command line reference](reference/cli.md) or a function in the

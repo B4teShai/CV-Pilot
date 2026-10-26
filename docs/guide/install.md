@@ -4,23 +4,66 @@ CV-Pilot needs Python 3.10 or newer. The core install is small and CPU-only: it 
 `click`, `numpy`, `pyarrow`, `pydantic`, `structlog` and `typer`, never a deep-learning
 framework, a web framework or a database server.
 
-## From source
+CV-Pilot is installed from its git repository. It is not on PyPI or any other package index, so
+`pip install cvpilot` does not work; every command below works without one.
+
+## From a clone
+
+With [uv](https://docs.astral.sh/uv/):
 
 ```bash notest
-git clone <repository-url> cv-pilot
-cd cv-pilot
+git clone https://github.com/B4teShai/CV-Pilot.git
+cd CV-Pilot
 uv sync
 uv run cvpilot --version
 uv run cvpilot doctor
 ```
 
-`uv sync` also installs the documentation and test tools (`docs` and `dev` groups). A published
-package is pending: nothing has been uploaded to any index, and the maintainer decides when.
+`uv sync` creates `.venv` and also installs the documentation and test tools (`docs` and `dev`
+groups); `source .venv/bin/activate` makes `cvpilot` and `python` the ones in that environment.
+
+With plain `pip` (no uv):
+
+```bash notest
+git clone https://github.com/B4teShai/CV-Pilot.git
+cd CV-Pilot
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/cvpilot --version
+.venv/bin/cvpilot doctor
+```
+
+`pip install .` (without `-e`) copies the package into the environment instead of linking the
+clone. `scripts/check_clone.sh` does exactly this in a temporary directory, from a fresh clone of
+the current commit and a fresh virtual environment, and then runs the README quick start.
+
+## Use it in your own project
+
+Point your project's installer at the repository or at a local clone:
+
+```bash notest
+uv add git+https://github.com/B4teShai/CV-Pilot                    # a uv project
+pip install "cvpilot @ git+https://github.com/B4teShai/CV-Pilot"    # any virtual environment
+pip install -e ../CV-Pilot                                          # a local clone, editable
+```
+
+Add `@<commit or tag>` to the URL (`git+https://github.com/B4teShai/CV-Pilot@<commit>`) to pin
+an exact version; `uv add` records the commit it resolved in your `uv.lock` either way.
 
 ## Extras
 
 Each extra is imported lazily inside the code that needs it, and the error names the extra to
-install.
+install. From a clone, add extras like this:
+
+```bash notest
+uv sync --extra safetensors --extra lightning      # with uv
+pip install -e '.[safetensors,lightning]'          # with pip
+pip install "cvpilot[safetensors] @ git+https://github.com/B4teShai/CV-Pilot"  # in your project
+uv add "cvpilot[safetensors] @ git+https://github.com/B4teShai/CV-Pilot"      # in a uv project
+```
+
+When an error message says `pip install "cvpilot[hf]"`, it names the extra: install that extra in
+one of the ways above.
 
 | Extra | Adds | Notes |
 |---|---|---|

@@ -16,11 +16,17 @@ line; no server is needed.
 
 ## Quick start
 
-Install it (Python 3.10 or newer):
+Install it from a clone (Python 3.10 or newer; no package index is needed):
 
 ```bash notest
-pip install cvpilot
+git clone https://github.com/B4teShai/CV-Pilot.git && cd CV-Pilot
+uv sync && source .venv/bin/activate
+# without uv: python3 -m venv .venv && . .venv/bin/activate && pip install -e .
 ```
+
+To use it in your own project, run `uv add git+https://github.com/B4teShai/CV-Pilot` or
+`pip install "cvpilot @ git+https://github.com/B4teShai/CV-Pilot"`. Extras and local paths are in
+the [install guide](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/install.md).
 
 Record a run from your training code:
 

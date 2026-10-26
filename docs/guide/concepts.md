@@ -52,11 +52,11 @@ the details in separate fields; secrets are redacted by key and never logged.
 import cvpilot
 
 run = cvpilot.init("fridge-sku", task="detection", forward_to=["mlflow"])  # or CVPILOT_FORWARD_TO
-# Lightning: pip install "cvpilot[lightning]"; the Trainer gets a logger and a callback
+# Lightning (extra cvpilot[lightning]): the Trainer gets a logger and a callback
 run = cvpilot.autolog(trainer, project="fridge-sku", task="detection")
-# Ultralytics: pip install "cvpilot[ultralytics]"; see the license note in the install guide
+# Ultralytics (extra cvpilot[ultralytics]): see the license note in the install guide
 run = cvpilot.autolog(yolo_model, project="fridge-sku", task="detection")
-# MMEngine: pip install "cvpilot[mmengine]"; a hook on the Runner (call runner.train() and runner.test() after)
+# MMEngine (extra cvpilot[mmengine]): a hook on the Runner (call runner.train() and runner.test() after)
 run = cvpilot.autolog(runner, project="fridge-sku", task="detection")
 ```
 
