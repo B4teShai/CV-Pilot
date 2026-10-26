@@ -57,7 +57,8 @@ rules:
 
 1. Read-only routes, JSON only, versioned under `/api/v1`: `GET /api/v1/projects/{project}/runs`
    (the `runs list` columns, paged, at most 200 per page), `GET /api/v1/projects/{project}/runs/{run_id}`
-   (the `runs show` fields: status, task, timestamps, config as stored (already redacted), metric
+   (the `runs show` fields: status, task, timestamps, an allow-listed subset of the config (see
+   the threat model), metric
    keys with point counts and step range, snapshot ids), and
    `GET /api/v1/projects/{project}/runs/{run_id}/metrics?key=...&after_step=...` (points of up to 20
    keys, at most 10 000 points per response). `GET /healthz` is the only unauthenticated route and
@@ -77,23 +78,33 @@ rules:
 4. Bearer tokens per project, 32 random bytes, created by `cvpilot server token add PROJECT` (shown
    once). The server stores only `sha256(token)` in a file named by `CVPILOT_SERVER_TOKEN_HASHES`
    (mode 0600, refused if group or world readable), compares with `hmac.compare_digest`, and a
-   token grants read access to its own project only. HTTP routes take the token only in the
+   token grants read access to its own project only. An unknown project and a wrong token answer
+   identically (the same status and body), so the response does not reveal which projects exist. HTTP routes take the token only in the
    `Authorization` header (a token in a query string is refused, because URLs end up in logs and
    browser history). The websocket takes it in the first message, which must arrive within 5 s.
 5. Every route except `/healthz` requires a token; a test enumerates the app's routes and fails if one
-   answers without a token. Failed authentication is rate-limited per client address (10 per minute)
-   and logged as `auth_failed` without the presented value.
+   answers without a token. Failed authentication is rate-limited and logged as `auth_failed` without the
+   presented value. The limit is keyed on the connecting address or, behind a proxy, on the address in
+   a header the operator names with `--trusted-proxy-header`, and only when the connection comes from
+   `--trusted-proxy`; the server never trusts `X-Forwarded-For` on its own, because a client could
+   then choose its own key. A global pre-authentication limit (60 failed attempts per minute in total)
+   applies on top, so a distributed guesser is slowed even when per-address keys are cheap.
 
 **Transport and limits.**
 
-6. The server binds to `127.0.0.1` by default. Binding another address requires
+6. The server binds to `127.0.0.1` by default and checks the `Host` header against an allow-list
+   (`--allowed-host`, default the bind address), so a DNS-rebinding page cannot reach it under another
+   name. Binding another address requires
    `--behind-proxy` (TLS is terminated by a reverse proxy; the server never handles certificates) or
    `CVPILOT_ENV=dev`. No CORS headers are sent; websocket connections with an `Origin` header that is
    not in `--allow-origin` are refused.
 7. Bounds, as constants with boundary tests: request body 0 bytes (no route reads a body), 64
-   concurrent websockets in total and 4 per token, a send queue of 100 messages per socket (a client
+   authenticated websockets in total and 4 per token, and at most 8 sockets that have not yet
+   authenticated (counted separately, so unauthenticated connections cannot use up the capacity of the
+   authenticated ones; the 5 s authentication timeout closes them), a send queue of 100 messages per socket (a client
    that does not read is disconnected, never buffered without bound), 600 requests per minute per
-   token, response sizes as in rule 1, a 30 s idle timeout.
+   token, response sizes as in rule 1, at most 200 000 rows scanned per `/metrics` request (a request that
+   would scan more is answered with an error asking for a narrower `after_step`), a 30 s idle timeout.
 8. Logging per the organisation standard: one `request_completed` or `request_failed` event per
    request with method, route template (not the raw path), status code, duration, project and request
    id; tokens, `Authorization` headers and query strings are never logged.
@@ -111,7 +122,10 @@ machine that runs the server. Trust boundaries: browser or script ↔ reverse pr
 | Guessing a token | auth | 256-bit tokens; constant-time comparison; failed attempts rate-limited and logged |
 | Reading another project's data with a valid token | routes | the token's project must equal the path's project; checked before the store is opened |
 | Path traversal through `project` or `run_id` | routes | pattern and ULID checks before any path is built; the store resolves and contains every path (ADR-0005) |
-| Data the store must not reveal (diffs, command lines with secrets, checkpoint files) | run detail | the git diff, the stored command line and every file (artifacts, checkpoints) are not served at all; the config is served as stored, which is already redacted by key |
+| Data the store must not reveal (diffs, command lines with secrets, checkpoint files) | run detail | the git diff, the stored command line and every file (artifacts, checkpoints) are not served at all; the stored config is redacted by key name only, which is best effort: a secret under an innocent key name, or inside a string, is not caught, so the server serves only an allow-list of config fields (`CVPILOT_SERVER_CONFIG_FIELDS`, default none: the run detail then has no config) |
+| DNS rebinding and host confusion | browser | `Host` allow-list; no CORS; an unknown project and a bad token answer identically |
+| Pre-authentication resource use | websocket and HTTP | pre-authentication sockets counted separately and capped at 8, a 5 s authentication timeout, a global failed-attempt limit, rate limits keyed on a trusted-proxy address only |
+| One request scanning the whole metrics table | `/metrics` | at most 200 000 rows scanned per request, 20 keys, 10 000 points returned |
 | Denial of service: many sockets, slow readers, huge pages | server | the limits of rule 7; one store poll per run per second however many viewers |
 | The server disturbing training (locks, writes) | store | read-only connection, no writes, WAL readers do not block the writer; polling at most once per second |
 | Cross-site use from a browser (CSRF, other origins) | browser | no cookies (bearer tokens), no CORS, origin check on websockets, no state-changing route exists |
@@ -122,6 +136,21 @@ machine that runs the server. Trust boundaries: browser or script ↔ reverse pr
 Out of the model: a host where the attacker can already read the store files (they can read the
 data directly), and a proxy misconfigured to strip TLS.
 
+## Must be tested before the server is built
+
+- **`mode=ro` on a WAL database.** A read-only connection to a database in WAL mode needs the `-shm`
+  file (and `-wal`) to exist or to be creatable in the directory. It was exercised for the checkpoint
+  lookups of a finished run on a writable local disk only; it must be tested on a read-only mount, on
+  a network file system and while a training process is writing before the server relies on it. If it
+  fails there, the server must refuse to start with a clear message, not fall back to a read-write
+  connection.
+- Rate limiting behind a proxy: that the key is the address the proxy supplies and that a
+  client-supplied `X-Forwarded-For` changes nothing.
+- The pre-authentication socket cap and the global failed-attempt limit under a flood.
+- That an unknown project and a wrong token give byte-identical responses.
+- That the config allow-list drops everything else, nested keys included.
+- The rows-scanned cap on a metrics table with the maximum number of keys.
+
 ## What is deliberately not built
 
 - Any write API: no ingest, no run creation, no status changes, no baseline pins, no deletes.
@@ -129,6 +158,9 @@ data directly), and a proxy misconfigured to strip TLS.
 - A database of the server's own, migrations, Postgres.
 - Web pages (htmx or other); the API is JSON and a separate viewer can be built on it later.
 - Share links, users, roles, SSO, token expiry and rotation beyond adding and removing a hash line.
+- Serving the run config by default, and any claim that stored configs hold no secrets: redaction is
+  by key name and best effort.
+- Trusting `X-Forwarded-For` or any other client-supplied address.
 - Server-side alerts and Telegram or Slack commands; alerts stay in the training process (ADR-0009).
 - Serving files: artifacts, checkpoints, reports, the git diff, the reproduction script.
 - `gate --from-server`; CI keeps reading a store or a checked-out copy.
