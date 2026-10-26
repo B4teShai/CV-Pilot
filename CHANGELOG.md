@@ -43,7 +43,7 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   (found by the SkyPilot walk-through).
 - The preemption checkpoint was not uploaded after the run was marked `preempted` (with a key, or for a
   resumed run): the run store was closed and every lookup failed. Lookups after `finish` now use a
-  short-lived read-only connection (found by the SkyPilot walk-through).
+  short-lived `mode=ro` connection that takes no write lock (found by the SkyPilot walk-through).
 
 - Notebooks: the download cache was `<tmp>/cvpilot-notebooks`, shared and predictable on Linux, so
   another local user could plant or swap a file between its digest check and its use, and an unpacked

@@ -109,10 +109,18 @@ class LocalRunStore:
         *,
         create: bool = True,
         migrations: Sequence[_migrations.Migration] | None = None,
+        read_only: bool = False,
     ) -> LocalRunStore:
-        """Open (and, with ``create``, initialise or migrate) the store of ``project``."""
+        """Open (and, with ``create``, initialise or migrate) the store of ``project``.
+
+        ``read_only`` opens an existing store with SQLite's ``mode=ro`` and runs nothing that
+        writes (no journal-mode pragma, no ``BEGIN IMMEDIATE``, no migration, no folder creation),
+        so it never takes the project's write lock; a store that needs a migration is refused.
+        """
         path = resolve_project_dir(root, project)
         db = path / DB_NAME
+        if read_only:
+            return cls._open_read_only(path, db, project)
         if not db.exists():
             if not create:
                 raise StoreNotFoundError(f"no run store for project {project!r} at {path}")
@@ -135,6 +143,28 @@ class LocalRunStore:
             raise
         for sub in ("metrics", "artifacts", "evals"):
             (path / sub).mkdir(exist_ok=True, mode=0o700)
+        return cls(path, conn, version)
+
+    @classmethod
+    def _open_read_only(cls, path: Path, db: Path, project: str) -> LocalRunStore:
+        if not db.exists():
+            raise StoreNotFoundError(f"no run store for project {project!r} at {path}")
+        try:
+            conn = sqlite3.connect(
+                f"{db.resolve().as_uri()}?mode=ro",
+                uri=True,
+                timeout=_BUSY_TIMEOUT_S,
+                isolation_level=None,
+                check_same_thread=False,
+            )
+            conn.execute("PRAGMA query_only=ON")
+            version = cls._read_version(conn)
+        except sqlite3.Error as exc:
+            raise StoreError(f"cannot open {db} read-only: {exc}") from exc
+        target = _migrations.discover()[-1].version if _migrations.discover() else 0
+        if version != target:
+            conn.close()
+            raise StoreVersionError(version, target)
         return cls(path, conn, version)
 
     @staticmethod
@@ -882,6 +912,8 @@ class LocalRunStore:
         return _checkpoints.list_manifests(self, run_id)
 
 
-def open_store(project: str, root: Path | None = None, *, create: bool = True) -> LocalRunStore:
+def open_store(
+    project: str, root: Path | None = None, *, create: bool = True, read_only: bool = False
+) -> LocalRunStore:
     """Factory registered as ``cvpilot.stores:local``."""
-    return LocalRunStore.open(project, root, create=create)
+    return LocalRunStore.open(project, root, create=create, read_only=read_only)

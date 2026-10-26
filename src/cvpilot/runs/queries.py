@@ -22,12 +22,16 @@ from cvpilot.registry import stores
 from cvpilot.settings import load_settings
 
 
-def open_store(project: str, store_dir: Path | None, *, create: bool = True) -> RunStore:
+def open_store(
+    project: str, store_dir: Path | None, *, create: bool = True, read_only: bool = False
+) -> RunStore:
     """Open a project's store through the ``stores`` registry (default adapter ``local``).
 
     ``store_dir=None`` means ``CVPILOT_STORE_DIR`` (default ``~/.cvpilot``), as for ``init``."""
     if store_dir is None:
         store_dir = load_settings().store_dir
+    if read_only:
+        return stores.get("local")(project, store_dir, create=False, read_only=True)
     return stores.get("local")(project, store_dir, create=create)
 
 

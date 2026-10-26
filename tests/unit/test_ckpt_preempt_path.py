@@ -202,3 +202,43 @@ def test_a_resumed_run_also_uploads_its_preemption_checkpoint(
     names = [e["message"] for e in events()]
     assert "preemption_upload_deferred" not in names and "checkpoint_anchor_failed" not in names
     mgr.close()
+
+
+def test_the_lookups_of_a_finished_run_are_read_only_and_do_not_block_a_writer(
+    tmp_path: Path,
+) -> None:
+    # the reader used for a finished run must not take the project's write lock: it was a normal
+    # connection that ran PRAGMA journal_mode=WAL, BEGIN IMMEDIATE and the migration check
+    import sqlite3
+    import threading
+
+    run, mgr = build(tmp_path)
+    mgr.save_now(1, model={"w": np.ones(2)})
+    run.finish("preempted")
+    db = tmp_path / "store" / "p" / "runs.sqlite"
+    writer = sqlite3.connect(db, isolation_level=None, timeout=0.2)
+    writer.execute("BEGIN IMMEDIATE")  # another process holds the write lock, as a live run does
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    def spying_connect(*args: Any, **kw: Any) -> sqlite3.Connection:
+        conn = real_connect(*args, **kw)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    result: list[Any] = []
+    sqlite3.connect = spying_connect  # type: ignore[assignment]
+    try:
+        thread = threading.Thread(
+            target=lambda: result.append(run.checkpoint_max_step(run.run_id, "last"))
+        )
+        thread.start()
+        thread.join(timeout=5)
+    finally:
+        sqlite3.connect = real_connect  # type: ignore[assignment]
+        writer.execute("ROLLBACK")
+        writer.close()
+    assert not thread.is_alive() and result == [1]
+    text = " ".join(statements).upper()
+    for forbidden in ("BEGIN IMMEDIATE", "JOURNAL_MODE", "CREATE TABLE", "INSERT", "UPDATE"):
+        assert forbidden not in text, (forbidden, statements)

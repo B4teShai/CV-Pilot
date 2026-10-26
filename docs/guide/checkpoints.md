@@ -189,7 +189,7 @@ as the local checkpoint is verified; the upload then gets only what is left of t
 `if ckpt.preempted(): break` never leaves without the preemption save, even when the signal lands
 between the two calls (the next `maybe_save` handles it); `ckpt.flag.is_set` is the raw request.
 The upload and retention after the run was marked still read the run store, through a short-lived
-read-only connection.
+connection opened with SQLite's `mode=ro` that runs nothing that writes, so it takes no write lock.
 
 Platform notices are optional and off by default: `notice_source="aws"` or `"gcp"` polls the
 instance metadata service (the fixed link-local address, so no DNS answer can redirect it; short

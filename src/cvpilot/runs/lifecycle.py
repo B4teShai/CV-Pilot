@@ -380,13 +380,14 @@ class RunHandle:
 
     @contextlib.contextmanager
     def _reader(self) -> Iterator[RunStore]:
-        """The store for a checkpoint lookup. Once ``finish`` closed it, a short-lived read-only
-        connection: a preempted run is marked as soon as its checkpoint is safe, and the upload
+        """The store for a checkpoint lookup. Once ``finish`` closed it, a short-lived connection
+        opened with SQLite's ``mode=ro`` that runs nothing that writes, so it never takes the
+        project's write lock (a live run elsewhere keeps logging): a preempted run is marked as soon as its checkpoint is safe, and the upload
         and retention that follow still need the run store as their anchor."""
         if not self._closed:
             yield self._store
             return
-        store = open_store(self.meta.project, self._store.path.parent, create=False)
+        store = open_store(self.meta.project, self._store.path.parent, read_only=True)
         try:
             yield store
         finally:
