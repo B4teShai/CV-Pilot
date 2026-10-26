@@ -36,7 +36,7 @@ def test_the_task_file_asks_for_spot_recovery_and_keeps_the_key_out_of_it() -> N
     # a per-user directory, never a shared one such as /tmp: the manager refuses a root that
     # others can write, and a predictable name there would let another account plant a run
     assert envs["CVPILOT_CHECKPOINT_DIR"].startswith("~/")
-    assert "/tmp" not in envs["CVPILOT_CHECKPOINT_DIR"]
+    assert not envs["CVPILOT_CHECKPOINT_DIR"].startswith(("/tmp", "/var/tmp"))  # noqa: S108
     # the environment comes from the committed lock, not from whatever pip resolves today
     setup = task["setup"]
     assert "uv sync --locked" in setup and "pip install -e" not in setup

@@ -62,7 +62,8 @@ MAX_SOURCE_BYTES = 1024 * 1024
 def compatibility() -> str | None:
     """Why the hook would silently record nothing, or None. Reads the source of the framework's
     ``rfdetr/training/__init__.py`` (bounded) for the name ``build_trainer`` that the hook patches,
-    without importing the framework: ``cvpilot doctor`` calls it, and an import would load the whole training stack.
+    without importing the framework: ``cvpilot doctor`` calls it, and an import would load the
+    whole training stack.
     A framework that is not installed has nothing to report."""
     try:  # the top-level package only: finding a submodule would import (run) its parent
         spec = importlib.util.find_spec(PACKAGE)
