@@ -322,3 +322,24 @@ def test_environment_variables_are_not_consulted_for_the_setting(
     monkeypatch.setenv("CVPILOT_STORE_COMMAND_LINE", "false")
     assert "--lr" in capture.capture_command(argv=["t.py", "--lr", "1"])["command_line"]
     assert os.environ["CVPILOT_STORE_COMMAND_LINE"] == "false"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_a_lockfile_swapped_for_a_fifo_does_not_make_init_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    os.mkfifo(tmp_path / "uv.lock")  # reading it would wait for a writer for ever
+    real_is_file = Path.is_file
+    monkeypatch.setattr(
+        Path, "is_file", lambda self: True if self.name == "uv.lock" else real_is_file(self)
+    )  # the check passed, then the file was swapped
+    box: list[dict[str, object]] = []
+    thread = threading.Thread(
+        target=lambda: box.append(capture.capture_packages(cwd=tmp_path)), daemon=True
+    )
+    thread.start()
+    thread.join(10)
+    assert not thread.is_alive(), "capture_packages blocked on a FIFO"
+    assert len(str(box[0]["packages_lock_sha256"])) == 64  # fell back to the installed set

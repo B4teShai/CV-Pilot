@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import sys
 import threading
 from collections.abc import Callable
@@ -285,3 +286,41 @@ def test_every_checkout_in_every_workflow_drops_the_credentials() -> None:
                     assert (step.get("with") or {}).get("persist-credentials") is False
     assert PARAMS and add_snapshot  # keep shared helpers imported
     assert sys.version_info >= (3, 10)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_put_artifact_refuses_a_fifo_swapped_in_after_the_check_without_waiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    store = open_project(tmp_path)
+    try:
+        run = make_run(store)
+        fifo = tmp_path / "artifact.bin"
+        os.mkfifo(fifo)
+        real_stat = Path.stat
+
+        class Regular:  # what the pre-check saw before the file was swapped for a FIFO
+            st_mode = 0o100644
+
+        monkeypatch.setattr(
+            Path,
+            "stat",
+            lambda self, *a, **k: Regular() if self == fifo else real_stat(self, *a, **k),
+        )
+        outcome: list[str] = []
+
+        def attempt() -> None:
+            try:
+                store.put_artifact(run, fifo, "predictions", {})
+            except StoreError:
+                outcome.append("refused")
+
+        thread = threading.Thread(target=attempt, daemon=True)
+        thread.start()
+        thread.join(10)
+        assert not thread.is_alive(), "put_artifact blocked on a FIFO"
+        assert outcome == ["refused"]
+    finally:
+        store.close()

@@ -23,6 +23,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from cvpilot.core.hashing import sha256_file
+
 MAX_DIFF_BYTES = 10 * 1024 * 1024
 _TOOL_TIMEOUT_S = 10.0
 _COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -99,7 +101,10 @@ def capture_packages(*, cwd: Path | None = None) -> dict[str, Any]:
     where = (Path.cwd() if cwd is None else Path(cwd)).resolve()
     lock = _lockfile(where)
     if lock is not None:
-        return {"packages_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest()}
+        try:  # nonblocking, regular files only: a FIFO swapped in after is_file() cannot hang
+            return {"packages_lock_sha256": sha256_file(lock)}
+        except OSError:
+            pass  # unreadable or not a regular file any more: hash the installed set instead
     lines = sorted(
         {
             f"{(dist.metadata['Name'] or '').lower()}=={dist.version}"
