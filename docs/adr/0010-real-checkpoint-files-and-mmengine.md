@@ -117,13 +117,18 @@ Measured (notebook 04, macOS arm64, local SSD, Python 3.13, median of 9 steady-s
 a seeded random order inside each round, against `torch.save` of the same state written and `fsync`ed to
 the same disk). Over three runs of the notebook the YOLO11n ratio ranged from 1.5 to 2.0 (47 % to 103 %
 over `torch.save`) and the ResNet-18 ratio from 3.2 to 3.5, because the framework's own save takes only
-about 12 ms; the table is the committed run:
+about 12 ms; the table is the run committed with this record (2026-10-18):
 
 | State | Bytes | `save_now` | `torch.save` | Ratio | Two SHA-256 passes |
 |---|---|---|---|---|---|
 | tiny Lightning classifier | 15 692 | 4.48 ms | 0.44 ms | 10.2 x | under 1 % |
 | YOLO11n weights (float32) | 10 653 476 | 19.34 ms | 12.05 ms | 1.6 x | 36 % |
 | ResNet-18 weights | 44 790 276 | 52.71 ms | 16.67 ms | 3.2 x | 56 % |
+
+Notebook 04 was re-executed on 2026-10-26 (its download cache moved to a private folder, ADR-0012) and
+gave, on the same machine: the tiny classifier 4.40 ms against 0.38 ms, YOLO11n weights 23.50 ms
+against 13.70 ms (1.7 x, two SHA-256 passes 29 %), ResNet-18 weights 54.12 ms against 16.44 ms (3.3 x,
+54 %), 0.0090 % of the wall time at the default interval. Both runs are inside the ranges above.
 
 Where the time goes for ResNet-18 (exclusive times, nothing counted twice): writing the file while hashing it
 40.3 %, reading it back and hashing it again (the verification that makes a save trustworthy) 33.2 %,

@@ -512,3 +512,33 @@ def test_the_real_rfdetr_run_was_recorded_and_matches_the_frameworks_own_log() -
     assert "largest difference: 0.0" in out
     assert "train raised: " in out and "| run status: failed" in out
     assert "strict scan: refused unsafe_archive: the pickle refers to argparse.Namespace" in out
+
+
+# -- the download cache is private: no shared temporary folder, nothing trusted by existence ------
+
+
+def test_the_download_cache_is_a_private_folder_never_the_shared_temporary_one(name: str) -> None:
+    code = "\n".join(source(c) for c in code_cells(load(name)))
+    assert "gettempdir" not in code  # /tmp is shared and predictable on Linux
+    assert "<tmp>/cvpilot-notebooks" not in code
+    assert 'Path.home() / ".cache" / "cvpilot-notebooks"' in code
+    assert "mode=0o700" in code and "st_uid != os.getuid()" in code and "& 0o022" in code
+    assert "S_ISLNK" in code
+
+
+def test_downloads_are_loaded_from_a_checked_private_copy(name: str) -> None:
+    codes = [source(c) for c in code_cells(load(name))]
+    fetch_cell = next(s for s in codes if "urlopen" in s)
+    assert "def private_copy(" in fetch_cell and "WORK /" in fetch_cell
+    recheck = r"digest = sha256_of\(dest\)\s+if digest != PINNED_SHA256\[name\]:"
+    assert re.search(recheck, fetch_cell)
+    # an unpacked folder is checked against the archive, never trusted because it exists
+    assert re.search(r"if target\.exists\(\):\s+return\b", fetch_cell) is None
+    assert "unpacked_matches(" in fetch_cell
+    for code in codes:
+        assert 'DATA / "resnet18-pinned"' not in code
+
+
+def test_the_notebook_readme_names_the_private_default() -> None:
+    text = (NOTEBOOKS / "README.md").read_text()
+    assert "~/.cache/cvpilot-notebooks" in text and "<tmp>/cvpilot-notebooks" not in text

@@ -78,6 +78,16 @@ extra without `roboflow`, which training does not import.
    spot instance or SkyPilot run was available. A docs test runs the script as two nodes against a
    directory-backed bucket with a real `SIGTERM`.
 
+6. **The notebooks' download cache is private.** A security review found that all five notebooks
+   cached downloads in `<tmp>/cvpilot-notebooks` (shared and predictable on Linux) and trusted an
+   unpacked folder because it existed, so another local user could swap a file between its digest
+   check and its use. The cache is now `~/.cache/cvpilot-notebooks` (mode 0700; it and
+   `CVPILOT_NOTEBOOK_DATA` must be a real folder owned by the user and writable by nobody else), every
+   download is loaded from a private copy in the run's folder whose SHA-256 is checked again, and an
+   unpacked folder must hold exactly the archive's files and bytes or it is unpacked again. A static
+   test forbids a data folder under the system's temporary directory. All five notebooks were
+   re-executed; notebook 04's save-cost numbers moved within the ranges ADR-0010 records.
+
 ## What was deliberately not built
 
 - **A resume helper for RF-DETR.** The framework's `train(resume=...)` reads the file with its own

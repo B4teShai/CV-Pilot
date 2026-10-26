@@ -45,6 +45,14 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
   resumed run): the run store was closed and every lookup failed. Lookups after `finish` now use a
   short-lived read-only connection (found by the SkyPilot walk-through).
 
+- Notebooks: the download cache was `<tmp>/cvpilot-notebooks`, shared and predictable on Linux, so
+  another local user could plant or swap a file between its digest check and its use, and an unpacked
+  folder that already existed was trusted. The cache is now `~/.cache/cvpilot-notebooks` (mode 0700;
+  `CVPILOT_NOTEBOOK_DATA` gets the same check: a link, another owner or group or world write access is
+  refused), every download is loaded from a private copy in the run's own folder whose SHA-256 is
+  checked again, and an unpacked folder must hold exactly the archive's files with the archive's bytes
+  or it is unpacked again. All five notebooks were re-executed.
+
 ### Changed (Phase 7)
 
 - `preempted()` semantics, as above. Code that polled it to learn about the signal itself should read
