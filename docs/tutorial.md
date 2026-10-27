@@ -1,10 +1,9 @@
-# Tutorial: a synthetic run from log to resume
+# Tutorial: from a first run to a resume
 
-This tutorial walks through the whole loop on generated data: record a run, evaluate it, pin
-a baseline, gate a candidate, survive a preemption and a damaged checkpoint, and turn on
-authenticated checkpoints. It needs no GPU, no dataset and no network. **Every command on this
-page is executed by `tests/docs/test_tutorial.py`**, and the lines under "Expected" are checked
-against the real output, so what you read here is what the code does.
+You will record a run, get preempted, resume, pin a baseline, fail a bad model at the gate and
+sign your checkpoints. It needs no GPU, no dataset and no network. A test runs every command on
+this page, and the lines marked "expect" are checked against the real output. Words you do not know
+are in the [glossary](guide/concepts.md#glossary).
 
 Run the commands in an empty directory, in one shell, from the top.
 
@@ -24,8 +23,7 @@ ok
 json: message=doctor_completed status=ok
 ```
 
-`doctor` prints `ok` on `stdout` and one JSON log line on `stderr`. Everything cvpilot logs is
-structured JSON on `stderr`; results go to `stdout`.
+Results go to `stdout`. Everything cvpilot logs is one JSON line per event on `stderr`.
 
 ## 2. Choose where things live
 
@@ -35,13 +33,13 @@ export CVPILOT_STORE_DIR="$PWD/store"
 export CVPILOT_CHECKPOINT_DIR="$PWD/ckpt"
 ```
 
-The store holds run rows, metrics and evaluation snapshots; the checkpoint directory holds one
-folder per run. Neither needs to exist yet.
+The store holds runs, metrics and evaluation snapshots. The checkpoint directory holds one folder
+per run. Neither needs to exist yet.
 
 ## 3. Generate a synthetic evaluation set
 
-A detection set of 60 images with two classes and three cameras, the ground truth, one set of
-good predictions and one in which a third of the images are missed.
+A detection set of 60 images, two classes and three cameras: the ground truth, good predictions,
+and predictions that miss a third of the images.
 
 ```python file=make_data.py
 from pathlib import Path
@@ -51,44 +49,22 @@ import pyarrow.parquet as pq
 
 n = 60
 ids = [f"img{i:03d}" for i in range(n)]
-classes = [i % 2 for i in range(n)]
-box = (10.0, 10.0, 50.0, 50.0)
-far = (120.0, 120.0, 180.0, 180.0)
+cls = pa.array([i % 2 for i in range(n)], pa.int64())
+near, far = (10.0, 10.0, 50.0, 50.0), (120.0, 120.0, 180.0, 180.0)
 
 
-def predictions(broken: int) -> pa.Table:
-    boxes = [far if i < broken else box for i in range(n)]
-    return pa.table(
-        {
-            "image_id": ids,
-            "cls": classes,
-            "score": [0.9] * n,
-            "x1": [b[0] for b in boxes],
-            "y1": [b[1] for b in boxes],
-            "x2": [b[2] for b in boxes],
-            "y2": [b[3] for b in boxes],
-        }
-    )
+def table(broken: int, **extra: list) -> pa.Table:
+    boxes = [far if i < broken else near for i in range(n)]
+    cols = {"image_id": ids, "cls": cls, **extra}
+    for j, name in enumerate(["x1", "y1", "x2", "y2"]):
+        cols[name] = [b[j] for b in boxes]
+    return pa.table(cols)
 
 
-pq.write_table(
-    pa.table(
-        {
-            "image_id": ids,
-            "cls": pa.array(classes, type=pa.int64()),
-            "x1": [box[0]] * n,
-            "y1": [box[1]] * n,
-            "x2": [box[2]] * n,
-            "y2": [box[3]] * n,
-            "width": [200] * n,
-            "height": [200] * n,
-            "camera": [f"cam{i % 3}" for i in range(n)],
-        }
-    ),
-    "gts.parquet",
-)
-pq.write_table(predictions(0), "preds_good.parquet")
-pq.write_table(predictions(20), "preds_bad.parquet")
+cameras = [f"cam{i % 3}" for i in range(n)]
+pq.write_table(table(0, width=[200] * n, height=[200] * n, camera=cameras), "gts.parquet")
+pq.write_table(table(0, score=[0.9] * n), "preds_good.parquet")
+pq.write_table(table(20, score=[0.9] * n), "preds_bad.parquet")
 Path("classes.txt").write_text("cat\ndog\n")
 print("wrote gts.parquet, preds_good.parquet, preds_bad.parquet, classes.txt")
 ```
@@ -103,9 +79,9 @@ wrote gts.parquet, preds_good.parquet, preds_bad.parquet, classes.txt
 
 ## 4. A training script that checkpoints and resumes
 
-`train.py` is a stand-in for a training loop. It looks for a checkpoint to resume from, logs a
-metric per step, and hands its state to a `CheckpointManager`. `--preempt-at N` sends the
-process a `SIGTERM` at step N, which is what a scheduler or a spot instance does.
+`train.py` stands in for a training loop. It looks for a checkpoint to resume from, logs a metric
+per step and hands its state to a `CheckpointManager`. `--preempt-at N` sends the process a
+`SIGTERM` at step N, as a scheduler or spot instance does.
 
 ```python file=train.py
 import argparse
@@ -176,8 +152,8 @@ json: message=checkpoint_saved step=14 kind=last
 json: message=run_preempted signal=SIGTERM step=14 saved=True
 ```
 
-The handler only set a flag. The next `maybe_save` wrote a checkpoint outside its normal
-interval, marked the run `preempted` and returned; the loop saw `ckpt.preempted()` and stopped.
+The signal handler only set a flag. The next `maybe_save` wrote an extra checkpoint, marked the
+run `preempted` and returned, and the loop stopped.
 
 ```bash
 cvpilot runs list
@@ -191,7 +167,7 @@ RUN_ID                      STATUS     STARTED                    NAME
 {*}  last  000000010  valid    anchored
 ```
 
-Two checkpoints exist: step 10 from the interval and step 14 from the preemption.
+Step 10 came from the interval and step 14 from the preemption. Both are `anchored`.
 
 ## 6. Damage the newest checkpoint
 
@@ -210,8 +186,8 @@ cvpilot ckpt verify "$CVPILOT_CHECKPOINT_DIR" --project demo || echo "verify exi
 verify exit code: 1
 ```
 
-`verify` hashes every file and exits 1 for anything that is corrupt, truncated, forged or not
-trusted enough. Nothing was loaded.
+`verify` hashes every file and exits 1 for anything corrupt, truncated, forged or not trusted
+enough. It loads nothing.
 
 ```bash
 python -c "import cvpilot; print(cvpilot.resume_path('demo'))"
@@ -225,8 +201,8 @@ python -c "import cvpilot; print(cvpilot.resume_path('demo'))"
 json: message=checkpoint_skipped_corrupt step=14 reason=size_mismatch
 ```
 
-`resume_path` skipped the damaged file and returned the previous valid one. It never returns the
-string `"last"` and never a file it has not verified.
+`resume_path` skipped the damaged file and returned the previous valid one. It only returns a file
+it has verified.
 
 ## 7. Resume
 
@@ -239,7 +215,7 @@ resumed from step 10 of run {*}
 finished at step 29
 ```
 
-The new run is a child of the preempted one (`parent_run_id`) and continues its step timeline.
+The new run is a child of the preempted one (`parent_run_id`) and continues its steps.
 
 ```bash
 RUN2=$(cat run_id.txt)
@@ -268,10 +244,9 @@ json: message=eval_completed step=29 task=detection n_images=60
 json: message=baseline_set tag=prod replaced=False
 ```
 
-These runs have finished, so evaluating into them needs the explicit `--allow-closed`; inside a
-training script you would call `run.log_eval(...)` while the run is open. The snapshot is
-immutable and the pin is append-only: replacing a tag needs `--replace` and
-keeps the old pin in the history.
+These runs are finished, so `eval` needs `--allow-closed`; in a training script you call
+`run.log_eval(...)` while the run is open. A snapshot is never edited, and replacing a pin needs
+`--replace` and keeps the old one.
 
 ## 9. Gate a regression, then a good run
 
@@ -316,14 +291,13 @@ gate: PASS (1 checks, 0 slices skipped) run {*} step 29 vs baseline tag:prod
 json: message=gate_passed n_violations=0
 ```
 
-The gate fails closed: a missing metric, a different evaluation set, a snapshot or baseline that
-fails its integrity check, or too few images all exit 1. Read [Gating in CI](guide/gating-ci.md)
+The gate is fail-closed: anything it cannot check exits 1. Read [Gating in CI](guide/gating-ci.md)
 before using it on pull requests.
 
 ## 10. Authenticate the checkpoints
 
-Digests and chains inside a checkpoint directory catch damage. They do not stop someone who can
-write the directory from forging a consistent set of files. A key that only you hold does:
+Hashes inside a checkpoint folder catch damage, but not someone who can write the folder and forge
+a consistent set of files. A secret key that only you hold does:
 
 ```bash
 export CVPILOT_CKPT_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
@@ -343,16 +317,15 @@ finished at step 29
 verify exit code: 1
 ```
 
-The checkpoints just written carry an HMAC tag and verify as `authenticated`. The earlier run
-has none, so under `authenticated` it is refused (`auth_missing`) instead of being trusted. Use
-this for any directory that is shared, restored from a bucket or writable by others. See
-[Trust model](guide/trust.md).
+The new checkpoints carry an HMAC tag and verify as `authenticated`. The earlier run has none, so
+it is refused (`auth_missing`). Use this for any folder that is shared, restored from a bucket or
+writable by others. See [Trust model](guide/trust.md).
 
 ## What you used
 
 | Step | Feature | Reference |
 |---|---|---|
-| 5, 7 | preemption, resume, run lineage | [Checkpoints and resume](guide/checkpoints.md) |
+| 5, 7 | preemption and resume | [Checkpoints and resume](guide/checkpoints.md) |
 | 6 | verified restore, `ckpt verify` | [Command line](reference/cli.md) |
 | 8, 9 | snapshots, baselines, the gate | [Gating in CI](guide/gating-ci.md) |
 | 10 | authenticated checkpoints | [Trust model](guide/trust.md) |

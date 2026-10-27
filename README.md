@@ -76,11 +76,12 @@ steps: 0..2
 ## Learn more
 
 - [Tutorial](https://github.com/B4teShai/CV-Pilot/blob/main/docs/tutorial.md): a full run from logging to a failed gate to a resume.
-- [User guide](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/concepts.md): concepts, install, gating in CI.
-- [How it works](https://github.com/B4teShai/CV-Pilot/blob/main/docs/architecture/README.md): the architecture.
+- [Concepts](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/concepts.md): every term in plain words.
+- [Gating in CI](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/gating-ci.md): fail a pull request that makes the model worse.
+- [How it works](https://github.com/B4teShai/CV-Pilot/blob/main/docs/architecture/README.md): the architecture in one picture.
 - [Checkpoints](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/checkpoints.md) and [trust](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/trust.md): resuming safely.
 - [Settings](https://github.com/B4teShai/CV-Pilot/blob/main/docs/reference/settings.md) and exit codes.
-- [What is built and what is planned](https://github.com/B4teShai/CV-Pilot/blob/main/docs/status.md).
+- [Project status](https://github.com/B4teShai/CV-Pilot/blob/main/docs/status.md): what works today.
 - [Contributing](https://github.com/B4teShai/CV-Pilot/blob/main/CONTRIBUTING.md) and the [changelog](https://github.com/B4teShai/CV-Pilot/blob/main/CHANGELOG.md).
 
 ## License

@@ -1,62 +1,62 @@
 # Concepts
 
-**Run.** One training or evaluation job: an id (a ULID), a project, a status (`running`,
-`resumed`, `finished`, `failed`, `preempted`), the captured environment (`Repro`), and metric
-points. A run that continues a preempted or failed one is a *new* run whose `parent_run_id` points
-at it; the step timeline continues, the history stays separate.
+Every term the docs use is defined once, in the glossary below. Other pages link here instead of
+repeating a definition.
 
-**Store.** `CVPILOT_STORE_DIR/<project>/`: SQLite in WAL mode for rows, batched Parquet for
-metric points, a content-addressed directory for artifacts. A process killed with `SIGKILL`
-leaves a readable store; its run stays `running` until `recover_run` marks it `failed` (it refuses while the run's checkpoint
-lease is held, and when it cannot tell, unless you pass `force=True`).
+## Glossary
 
-**Snapshot.** An immutable evaluation of one run on one evaluation set at one step: COCO-style
-mAP, per-class AP, confusion, slices and bootstrap intervals, keyed by
-`(run, eval set hash, step)`. The evaluation set hash covers the ground truth and class list, so
-two machines evaluating the same set agree.
+| Term | Plain meaning |
+|---|---|
+| Run | One training or evaluation job: an id, a project and a status (`running`, `resumed`, `finished`, `failed`, `preempted`). |
+| Project | A name that groups runs. Each project has its own folder in the store. |
+| Store | The folder holding your runs (`CVPILOT_STORE_DIR`, default `~/.cvpilot`): plain files and one SQLite database. |
+| ULID | The 26-character run id. Ids sort by creation time. |
+| WAL | SQLite's write-ahead log mode. Readers never block the writer, and a killed process leaves a readable database. |
+| Content-addressed | Stored under the hash of its bytes: identical files are kept once, and a changed file is noticed. |
+| Evaluation set | The images and ground-truth boxes you score a model on. |
+| Eval set hash | A fingerprint of the ground truth and class list. Equal hashes mean two runs scored the same data. |
+| Snapshot | The saved result of scoring one run on one evaluation set at one step: mAP, per-class AP, confusion matrix. Never edited. |
+| Slice | The images that share a metadata value, such as `camera=cam3`, scored on their own. |
+| Bootstrap interval | A range around a metric from re-scoring random resamples of the images. It tells noise from a real change. |
+| Baseline | A named pin (such as `prod`) to a snapshot you trust. Pins are only added, never overwritten. |
+| Hash chain | Each record stores a hash that covers the record before it. Editing, deleting or reordering an earlier record breaks the chain. |
+| Gate | `cvpilot gate`: compares a run with a baseline and exits `1` if the run is worse. |
+| Fail-closed | When something cannot be checked (missing metric, different eval set, failed integrity check) the gate fails instead of passing. |
+| Forwarder | A background thread that copies metrics to MLflow, W&B or Trackio, so a slow tracker never blocks training. |
+| Event | One JSON log line on `stderr` with a fixed `message` such as `run_started`. Secrets are never logged. |
+| Checkpoint | A saved training state (weights, optimizer, random state) and its manifest. |
+| Manifest | A small file beside a checkpoint: its size, SHA-256, a hash-chain link and, with a key, an HMAC tag. |
+| HMAC tag | A short code made from the manifest and your secret key. Only a holder of the key can produce it. |
+| LATEST pointer | A file naming the newest checkpoint. A shortcut that is checked, never trusted alone. |
+| Preempted | The scheduler or cloud asked the job to stop. CV-Pilot saves a checkpoint and marks the run `preempted`. |
+| Trust level | How a restored checkpoint was vouched for: `authenticated`, `anchored` or `local_chain_only`. |
+| `authenticated` | The manifest has an HMAC tag made with your key (`CVPILOT_CKPT_KEY`). The strongest level. |
+| `anchored` | The manifest's hash is also recorded in the run store, so deleting or swapping the file is noticed. |
+| `local_chain_only` | Only the checkpoint folder's own hash chain vouches for it. Catches damage, not a person who can write the folder. |
+| Rollback floor | The newest step known to have been saved (from the store, the pointer or `CVPILOT_CKPT_MIN_STEP`). Anything older is refused. |
+| Lease | A lock a live run holds on its checkpoint folder. `recover_run` will not mark a run failed while it is held. |
+| Liveness | Whether a run's process is still alive. If CV-Pilot cannot tell, it assumes alive. |
+| Quarantine | A list of refused checkpoint steps. Nothing is moved or deleted; the steps still raise the floor. |
+| Debris | Temporary or half-written files left by a killed save. The next save removes them. |
 
-**Baseline.** A named, append-only pin of a snapshot (`prod`, `staging`). Replacing a tag keeps the
-old pin in the history; every read re-verifies digests and a hash chain.
+## Recording a run
 
-**Gate.** `compare` shows the differences; `gate` decides. It fails closed: a missing or
-non-finite metric, a different evaluation set, a snapshot that fails its integrity check, too few
-images or a threshold that gated nothing all exit `1`. See [Gating in CI](gating-ci.md).
-
-**Checkpoint.** A file with a *manifest* (size, SHA-256, a chain value linking it to the previous
-manifest, optionally an HMAC tag) and pointers (`LATEST`). A restore walks back from the newest
-and loads the first that verifies. See [Checkpoints and resume](checkpoints.md).
-
-**Trust level.** How a restored checkpoint was vouched for: `authenticated` (HMAC key),
-`anchored` (a digest in the run store) or `local_chain_only` (the directory's own chain). See
-[Trust model](trust.md).
-
-**Events.** Everything cvpilot logs is one JSON object per line on `stderr` with a constant
-`message` (`run_started`, `checkpoint_saved`, `checkpoint_skipped_corrupt`, `gate_failed`, ...) and
-the details in separate fields; secrets are redacted by key and never logged.
-
-## Recording a run: what to expect
-
-- `init` works outside a git repository and without a GPU: absent facts are recorded as none.
-- A step must be strictly greater than the last step logged for the same metric key.
-- `log` buffers up to 10 000 points and writes one Parquet file when the buffer is full or 2 s
-  have passed; `finish` flushes and compacts them.
-- Secrets in the config and on the command line are redacted before storage (best effort for free
-  text). Set `CVPILOT_STORE_COMMAND_LINE=false` to store only the executable name and the number of
-  arguments; `cvpilot repro` then cannot re-run the command. `repro RUN` prints a bash script:
-  checkout, the stored diff and the command.
-- `runs` and `repro` exit `1` for a well-formed run id that is not in the store and `2` for a
-  missing project, an invalid project or a malformed run id (see [Settings](../reference/settings.md)).
+- `init` works outside a git repository and without a GPU: missing facts are stored as none.
+- A step must be larger than the last step logged for the same metric.
+- `log` buffers points and writes them in batches; `finish` flushes and compacts them.
+- Secrets in the config and command line are redacted before storage (best effort).
+  `CVPILOT_STORE_COMMAND_LINE=false` stores only the program name, and `cvpilot repro` then cannot
+  re-run the command.
+- `cvpilot repro RUN` prints a bash script: check out the commit, apply the stored diff, run the
+  command.
+- A well-formed run id that is not in the store exits `1`; a malformed id or missing project
+  exits `2` ([exit codes](../reference/settings.md#exit-codes)).
 
 ## Datasets prepared with DataCopilot
 
-[DataCopilot](https://github.com/B4teShai/DataCopilot) converts and audits a dataset into a
-versioned `dataset.dcp` directory. Pass that directory as `dataset_uri` and the run records the
-dataset by its version instead of hashing every file:
-
-```bash notest
-# in a DataCopilot clone (uv sync once): prints the version, for example 3b87778c...
-uv run datacopilot ingest data/annotations.json --format coco -o /data/fridge.dcp
-```
+[DataCopilot](https://github.com/B4teShai/DataCopilot) turns a dataset into a versioned
+`dataset.dcp` folder. Pass it as `dataset_uri` and the run records that version instead of hashing
+every file:
 
 ```python notest
 import cvpilot
@@ -64,47 +64,22 @@ import cvpilot
 run = cvpilot.init("fridge-sku", task="detection", dataset_uri="/data/fridge.dcp")
 ```
 
-`cvpilot runs show RUN` then prints `dataset_hash: dcp:<version>`, the same version DataCopilot
-printed, so a gate result, a checkpoint manifest and a reproduction script all name the exact
-dataset version the model was trained on. CV-Pilot reads only the `version` field of
-`dataset.dcp/manifest.json` (a regular file, not a link, at most 1 MiB, parsed as JSON, nothing
-executed, a version of at most 190 characters from `A-Z a-z 0-9 . _ -`); without a usable version it
-falls back to a `merkle:` hash of the directory's files. The `dcp:` value names the version the manifest
-claims: it does not cover the files' contents, and neither does `merkle:` (paths, sizes, times).
-The two packages do not depend
-on each other: install both in the same environment, or run DataCopilot from its own clone.
-`tests/unit/test_api.py` checks this with a manifest copied from a real `datacopilot ingest` run.
+`cvpilot runs show RUN` then prints `dataset_hash: dcp:<version>`. CV-Pilot reads only the
+`version` field of `dataset.dcp/manifest.json` and does not check it against the files. Without a
+usable version it hashes the folder's file names, sizes and times (`merkle:`). The two packages do
+not depend on each other.
 
-## Send metrics to a tracker and hook into a framework
+## Trackers and training frameworks
 
 ```python notest
 import cvpilot
 
 run = cvpilot.init("fridge-sku", task="detection", forward_to=["mlflow"])  # or CVPILOT_FORWARD_TO
-# Lightning (extra cvpilot[lightning]): the Trainer gets a logger and a callback
-run = cvpilot.autolog(trainer, project="fridge-sku", task="detection")
-# Ultralytics (extra cvpilot[ultralytics]): see the license note in the install guide
-run = cvpilot.autolog(yolo_model, project="fridge-sku", task="detection")
-# MMEngine (extra cvpilot[mmengine]): a hook on the Runner (call runner.train() and runner.test() after)
-run = cvpilot.autolog(runner, project="fridge-sku", task="detection")
-# RF-DETR (extra cvpilot[rfdetr]): call model.train(...) after; the run ends when it returns
-run = cvpilot.autolog(model, project="fridge-sku", task="detection")
+run = cvpilot.autolog(trainer, project="fridge-sku", task="detection")  # Lightning, YOLO, ...
 ```
 
-Forwarders (`cvpilot[mlflow]`, `[wandb]`, `[trackio]`) run on their own threads behind bounded
-queues: a tracker that is down, slow or hung is counted and logged once and never raises into or
-blocks training (`finish` waits at most 5 s). Tokens stay in the tracker SDK's own environment
-variables; CV-Pilot refuses credentials in URLs, plain http outside `CVPILOT_ENV=dev` and disabled
-TLS verification. Hook callbacks never raise into the framework. The `ultralytics` package is
-AGPL-3.0: using `cvpilot[ultralytics]` makes your combined work subject to AGPL-3.0; CV-Pilot never
-imports it. These integrations are tested with fake trainers and injected fake SDK modules; smoke
-tests against the real libraries exist behind `pytest -m real_libs`, and notebooks 03, 04 and 05
-ran the Hugging Face, Lightning, Ultralytics, MMEngine and RF-DETR hooks on real training runs. Design: [ADR-0008](../adr/0008-forwarders.md).
-
-## Layers
-
-Interface (`cli/`, the public API) uses application packages (`runs/`, `eval/`, `compare/`,
-`ckpt/`), which use the domain (`core/`: schemas, hashing, errors) and reach infrastructure
-(`store/`, `hooks/`, `forward/`, `remote/`) only through registries. Optional dependencies are
-imported inside the function that needs them. [ADR-0004](../adr/0004-layering-and-dependency-rule.md)
-has the rule and a test enforces it.
+`autolog` picks the hook that matches the object: Lightning `Trainer`, Hugging Face `Trainer`,
+Ultralytics `YOLO`, MMEngine `Runner` or an RF-DETR model. Each needs its [extra](install.md#extras).
+Forwarders and hooks never raise into training. A tracker that is down is counted and logged once.
+Tracker tokens stay in the tracker's own environment variables, and CV-Pilot refuses credentials
+in URLs, plain http outside `CVPILOT_ENV=dev` and disabled TLS verification.
