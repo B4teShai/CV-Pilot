@@ -1,40 +1,30 @@
-// Flow B: atomic checkpoint save, preemption, restore_latest_valid on restart.
-import { sequence } from "../../../tools/diagrams/lib/sequence.mjs";
-import { note } from "../../../tools/diagrams/lib/scene.mjs";
+// Flow B: save, preemption, restore. Eight boxes, left to right.
+import { box, arrow, note, COLORS } from "../../../tools/diagrams/lib/scene.mjs";
 
-const steps = [
-  { from: "trainer", to: "ckpt", text: "maybe_save(step, state, metrics)" },
-  { from: "ckpt", to: "disk", text: "temp file + fsync, then 0444" },
-  { from: "ckpt", to: "disk", text: "write manifest, rename it, then the data" },
-  { from: "ckpt", to: "ckpt", text: "re-hash; record digest in the store" },
-  { from: "ckpt", to: "disk", text: "rewrite LATEST (after the data)" },
-  { from: "ckpt", to: "s3", text: "upload .part, verify, rename; manifest last" },
-  { note: "previous valid checkpoint kept until this one verifies", at: "ckpt" },
-  { divider: "preemption" },
-  { from: "sched", to: "trainer", text: "SIGTERM sets a flag (or spot notice)" },
-  { from: "trainer", to: "ckpt", text: "next maybe_save: save, mark preempted, then upload" },
-  { divider: "restart on a new node" },
-  { from: "trainer", to: "ckpt", text: "restore_latest_valid()" },
-  { from: "ckpt", to: "disk", text: "walk back; skip bad files; refuse a rollback" },
-  { from: "ckpt", to: "s3", text: "none valid locally: fetch, verify" },
-  { from: "ckpt", to: "trainer", text: "state (model, optimizer, rng…) or None", kind: "return" },
-];
-const totalH = 80 + 64 + 30 + steps.length * 64 + 40;
+const W = 240, H = 150, GAP = 110, FS = 30;
+const x = (i) => 40 + i * (W + GAP);
+const R1 = 40, R2 = 330;
+const o = { fontSize: FS, strokeWidth: 2 };
+const a = { fontSize: 26, strokeWidth: 2 };
+
+const save = box("save", x(0), R1, W, H, "maybe_save", COLORS.core, o);
+const temp = box("temp", x(1), R1, W, H, "Write and\nhash temp\nfiles", COLORS.store, o);
+const link = box("link", x(2), R1, W, H, "Link manifest,\nthen data", COLORS.store, o);
+const last = box("last", x(3), R1, W, H, "Record digest,\nmove LATEST", COLORS.store, o);
+const term = box("term", x(0), R2, W, H, "SIGTERM\nsets a flag", COLORS.external, o);
+const now = box("now", x(1), R2, W, H, "Save now,\nmark\npreempted", COLORS.core, o);
+const up = box("up", x(2), R2, W, H, "Upload with\ntime left", COLORS.external, o);
+const rest = box("rest", x(3), R2, W, H, "New run\nrestores\nnewest valid", COLORS.core, o);
 
 export default {
   elements: [
-    sequence({
-      gap: 170,
-      title: "Flow B: atomic checkpoint → preemption → restore_latest_valid",
-      actors: [
-        { id: "sched", label: "scheduler / spot notice", kind: "external" },
-        { id: "trainer", label: "trainer process" },
-        { id: "ckpt", label: "ckpt/ manager" },
-        { id: "disk", label: "local disk /checkpoint", kind: "store" },
-        { id: "s3", label: "object storage", kind: "external" },
-      ],
-      steps,
-    }),
-    note("n1", "Logged events: checkpoint_saved, checkpoint_verified, checkpoint_uploaded, preemption_signal_received, run_preempted, checkpoint_skipped_corrupt or checkpoint_untrusted, checkpoint_restored, run_resumed.", 40, totalH + 20, 14),
+    save, temp, link, last, term, now, up, rest,
+    arrow(save, temp, "", a),
+    arrow(temp, link, "", a),
+    arrow(link, last, "", a),
+    arrow(term, now, "", a),
+    arrow(now, up, "", a),
+    arrow(up, rest, "restart", a),
+    note("cap", "Restore skips bad files, refuses a rollback and falls back to the bucket.", 40, 530, 26),
   ],
 };

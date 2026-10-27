@@ -1,114 +1,29 @@
-// Entities of the local run store with keys, foreign keys and cardinalities.
-import { grid, entity, arrow, heading, note, COLORS } from "../../../tools/diagrams/lib/scene.mjs";
+// The records of the run store and how they relate. Fields are listed in 03-data-model.md.
+import { box, arrow, note, COLORS } from "../../../tools/diagrams/lib/scene.mjs";
 
-const W = 330;
-const g = grid({ x: 60, y: 110, colW: W, rowH: 340, gapX: 90, gapY: 80 });
-const at = (c, r) => [g(c, r).x, g(c, r).y];
+const W = 330, H = 170, GX = 120, GY = 110, FS = 24;
+const x = (c) => 40 + c * (W + GX);
+const y = (r) => 40 + r * (H + GY);
+const o = { fontSize: FS, strokeWidth: 2 };
+const a = { fontSize: 22, strokeWidth: 2 };
 
-const repro = entity("repro", ...at(0, 0), W, "Repro", [
-  "run_id: str            PK FK",
-  "git_commit: str?",
-  "git_dirty: bool",
-  "git_diff_sha256: str?",
-  "packages_lock_sha256: str",
-  "python_version: str",
-  "cuda: str?",
-  "gpu_names: list[str]",
-  "dataset_uri: str",
-  "dataset_hash: str",
-  "config: json",
-  "seed: int?",
-  "command_line: str (redacted)",
-], COLORS.store);
-
-const baseline = entity("baseline", ...at(1, 0), W, "Baseline", [
-  "project: str",
-  "tag: str               newest row wins",
-  "run_id: str            FK",
-  "eval_set_hash: str     FK",
-  "step: int              FK",
-  "snapshot_sha256: str",
-  "pinned_at: datetime",
-], COLORS.store);
-
-const manifest = entity("manifest", ...at(2, 0), W, "CheckpointManifest", [
-  "run_id: str            PK FK",
-  "step: int              PK",
-  "kind: last | best      PK",
-  "path: str",
-  "uri: str?  (intended)",
-  "sha256: str",
-  "size_bytes: int",
-  "format: safetensors | pt",
-  "metric_key/value/mode?",
-  "versions: json",
-  "git_commit: str?",
-  "dataset_hash: str",
-  "created_at: datetime",
-  "prev_manifest_sha256",
-  "prev_chain_sha256",
-  "chain_sha256",
-  "auth_tag: str? (HMAC)",
-], COLORS.store);
-
-const metric = entity("metric", ...at(0, 1), W, "MetricPoint", [
-  "run_id: str            PK FK",
-  "key: str               PK",
-  "step: int              PK",
-  "epoch: int?",
-  "value: float64",
-  "wall_time: float64",
-], COLORS.store);
-
-const run = entity("run", ...at(1, 1), W, "RunMeta", [
-  "run_id: str (ULID)     PK",
-  "project: str",
-  "name: str",
-  "status: enum",
-  "parent_run_id: str?    FK",
-  "task: detection | classification",
-  "framework: str",
-  "host: str",
-  "started_at: datetime",
-  "ended_at: datetime?",
-  "schema_version: int",
-], COLORS.store);
-
-const artifact = entity("artifact", ...at(2, 1), W, "Artifact", [
-  "run_id: str            PK FK",
-  "sha256: str            PK",
-  "kind: enum",
-  "uri: str",
-  "size_bytes: int",
-  "meta: json",
-  "created_at: datetime",
-], COLORS.store);
-
-const snapshot = entity("snapshot", ...at(1, 2), W, "EvalSnapshot", [
-  "run_id: str            PK FK",
-  "eval_set_hash: str     PK",
-  "step: int              PK",
-  "task, class_names, n_images",
-  "metrics: json",
-  "per_class: json",
-  "slices: json",
-  "ci: json, bootstrap: json?",
-  "confusion_sha256: str  FK",
-  "predictions_sha256: str FK",
-], COLORS.store);
+const repro = box("repro", x(0), y(0), W, H, "Repro\ngit, environment,\ndataset, seed", COLORS.store, o);
+const baseline = box("baseline", x(1), y(0), W, H, "Baseline\ntag to pinned\nsnapshot", COLORS.store, o);
+const manifest = box("manifest", x(2), y(0), W, H, "CheckpointManifest\nstep, SHA-256,\nchain, HMAC tag", COLORS.store, o);
+const metric = box("metric", x(0), y(1), W, H, "MetricPoint\nkey, step, value", COLORS.store, o);
+const run = box("run", x(1), y(1), W, H, "RunMeta\nrun_id, project,\nstatus, parent_run_id", COLORS.core, o);
+const artifact = box("artifact", x(2), y(1), W, H, "Artifact\nSHA-256, kind, size", COLORS.store, o);
+const snapshot = box("snapshot", x(1), y(2), W, H, "EvalSnapshot\neval set hash, step,\nmetrics, per class,\nslices", COLORS.store, o);
 
 export default {
   elements: [
-    heading("t", "CV-Pilot: run store data model", 40, 30),
     repro, baseline, manifest, metric, run, artifact, snapshot,
-
-    arrow(repro.box, run.box, "0..1 → 1"),
-    arrow(baseline.box, run.box, "0..* → 1"),
-    arrow(manifest.box, run.box, "0..* → 1"),
-    arrow(metric.box, run.box, "0..* → 1"),
-    arrow(artifact.box, run.box, "0..* → 1"),
-    arrow(snapshot.box, run.box, "0..* → 1"),
-
-    note("n1", "PK = primary key, FK = foreign key, ? = nullable. Arrows point from the referencing entity to the referenced one, labelled with cardinality.", 40, 1270, 14),
+    arrow(repro, run, "one", a),
+    arrow(baseline, run, "many", a),
+    arrow(manifest, run, "many", a),
+    arrow(metric, run, "many", a),
+    arrow(artifact, run, "many", a),
+    arrow(snapshot, run, "many", a),
+    note("cap", "Every record belongs to one run. Fields are listed on the data model page.", 40, y(2) + H + 40, 22),
   ],
 };

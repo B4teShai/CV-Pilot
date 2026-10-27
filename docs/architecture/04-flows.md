@@ -10,16 +10,24 @@ refused comparison included), `2` usage or configuration error, `130` interrupte
 Purpose: record metrics and an evaluation snapshot from a training framework without changing the
 loop, then fail a CI job when the new run is worse than the pinned baseline.
 
-Needs: a run started by `cvpilot.init()` or `cvpilot.autolog()`; predictions and ground truth at the
-end of a validation epoch; for the gate, a pinned baseline and a CI runner that can read the store.
+Needs: a run started by `cvpilot.init()` or `cvpilot.autolog()`; predictions and ground truth after
+validation; for the gate, a pinned baseline and a CI runner that can read the store.
 
-![Flow A: from a framework callback to a CI verdict](../diagrams/png/flow-a.png)
+![Flow A: log metrics, score predictions, gate in CI](../diagrams/png/flow-a.png)
+
+| Step | Events logged |
+|---|---|
+| Start and log | `run_started`, `hook_attached`, `metrics_flushed` |
+| Score | `eval_completed` |
+| Gate | `compare_completed` or `compare_refused`, then `gate_passed` or `gate_failed` |
+| End | `run_finished` |
 
 1. The framework fires a callback. The hook converts its scalars to `MetricPoint`s and calls
    `sink.log(points, step=...)`.
 2. `runs/` validates the batch, appends it to the store, offers it to the forwarders and runs the
    `nan_loss`, `loss_spike` and `no_progress` alert rules.
-3. At the end of validation the hook calls `sink.log_eval(preds, gts, step=...)`.
+3. At the end of validation you call `run.log_eval(preds, gts, step=...)`, or run `cvpilot eval` on
+   Parquet files. Hooks log scalars only; they never evaluate.
 4. `eval/` hashes the evaluation set, matches detections, and writes the predictions, the confusion
    matrix and the snapshot. It logs `eval_completed`.
 5. In CI, `cvpilot gate RUN --baseline tag:prod ...` loads the baseline and the candidate snapshot.
@@ -49,9 +57,7 @@ How it fails:
 | Everything holds (gains never fail) | Verdict printed | 0 | `gate_passed` |
 | Ctrl-C | Partial output discarded | 130 | none |
 
-Events in order: `run_started`, `hook_attached`, `metrics_flushed`, `eval_completed`,
-`compare_completed`, then `gate_passed` or `gate_failed`, then `run_finished`. Evaluating into a
-finished run needs `--allow-closed`.
+Evaluating into a finished run needs `--allow-closed`.
 
 ## Flow B: save, preemption, restore
 
@@ -66,14 +72,20 @@ lineage resume a run store and folder that survive the restart. On a node with n
 
 ![Flow B: an atomic save, a preemption and a verified restore](../diagrams/png/flow-b.png)
 
+| Step | Events logged |
+|---|---|
+| Save | `checkpoint_saved`, `checkpoint_verified`, then `checkpoint_uploaded` with a remote |
+| Preemption | `preemption_signal_received`, `run_preempted` |
+| Restore | `checkpoint_skipped_corrupt` or `checkpoint_untrusted` for bad candidates, then `checkpoint_restored`, `run_resumed` |
+
 Saving:
 
 1. `maybe_save` decides: interval passed, `best` improved, or a preemption flag is set.
 2. The state is split into tensors and a JSON part and checked against the bounds a restore applies.
    Under the folder lock, leftovers of a killed save are removed. The data goes to a private temp
    file, is hashed while written, and is synced.
-3. The manifest is written the same way, renamed into place, then the data file is renamed. The
-   folder is synced.
+3. The manifest is written the same way. It is linked into place first, then the data file, and a
+   link never replaces an existing file. The folder is synced.
 4. The data is re-read and re-hashed, the manifest digest is recorded in the run store, and only
    then is `LATEST` rewritten. The events are `checkpoint_saved` and `checkpoint_verified`.
 5. With a remote, the data goes to a `.part` object, size and SHA-256 are read back, it is renamed,
@@ -122,7 +134,4 @@ How it fails:
 | `cvpilot ckpt` on a path that is not a checkpoint folder | Usage error, exit 2 | none |
 | The metadata service of a cloud notice fails | Retried with backoff; the thread says why it ends | `notice_poller_degraded`, `preemption_poller_stopped` |
 
-Events in order: `checkpoint_saved`, `checkpoint_verified`, `checkpoint_uploaded`,
-`preemption_signal_received`, `run_preempted`, then `checkpoint_skipped_corrupt` or
-`checkpoint_untrusted`, `checkpoint_restored`, `run_resumed`. Tests: `tests/unit/test_ckpt_*.py` and
-`tests/chaos/`.
+Tests: `tests/unit/test_ckpt_*.py` and `tests/chaos/`.

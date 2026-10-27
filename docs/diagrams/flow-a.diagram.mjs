@@ -1,41 +1,30 @@
-// Flow A: framework hook -> log -> eval -> gate in CI.
-import { sequence } from "../../../tools/diagrams/lib/sequence.mjs";
-import { note } from "../../../tools/diagrams/lib/scene.mjs";
+// Flow A: log metrics, score predictions, gate in CI. Eight boxes, left to right.
+import { box, arrow, note, COLORS } from "../../../tools/diagrams/lib/scene.mjs";
 
-const steps = [
-  { from: "fw", to: "hook", text: "on_fit_epoch_end(metrics)" },
-  { from: "hook", to: "api", text: "sink.log(points, step)" },
-  { from: "api", to: "store", text: "append MetricPoint batch" },
-  { divider: "validation epoch" },
-  { from: "fw", to: "hook", text: "on_val_end(preds, gts)" },
-  { from: "hook", to: "api", text: "sink.log_eval(preds, gts, step)" },
-  { from: "api", to: "eval", text: "evaluate(task, class_names, slices)" },
-  { from: "eval", to: "store", text: "EvalSnapshot, predictions, confusion", kind: "return" },
-  { divider: "CI:  cvpilot gate <run_id> --baseline tag:prod --max-drop mAP50_95=0.5" },
-  { from: "ci", to: "gate", text: "gate(run, baseline, thresholds)" },
-  { from: "gate", to: "store", text: "verify + load baseline row and snapshots" },
-  { note: "mismatch → compare_refused", at: "gate" },
-  { from: "gate", to: "gate", text: "deltas, stored CIs, slices; fail closed" },
-  { from: "gate", to: "ci", text: "exit 0 passed / 1 failed", kind: "return" },
-];
-const totalH = 80 + 64 + 30 + steps.length * 64 + 40;
+const W = 240, H = 150, GAP = 110, FS = 30;
+const x = (i) => 40 + i * (W + GAP);
+const R1 = 40, R2 = 330;
+const o = { fontSize: FS, strokeWidth: 2 };
+const a = { fontSize: 26, strokeWidth: 2 };
+
+const code = box("code", x(0), R1, W, H, "Training code", COLORS.external, o);
+const log = box("log", x(1), R1, W, H, "log() or\nautolog", COLORS.core, o);
+const store = box("store", x(2), R1, W, H, "Run store", COLORS.store, o);
+const ci = box("ci", x(3), R1, W, H, "CI: exit\n0 or 1", COLORS.external, o);
+const data = box("data", x(0), R2, W, H, "Predictions\n+ ground\ntruth", COLORS.external, o);
+const ev = box("ev", x(1), R2, W, H, "cvpilot eval\nor log_eval()", COLORS.core, o);
+const snap = box("snap", x(2), R2, W, H, "Snapshot", COLORS.store, o);
+const gate = box("gate", x(3), R2, W, H, "cvpilot gate\nvs baseline", COLORS.core, o);
 
 export default {
   elements: [
-    sequence({
-      gap: 100,
-      title: "Flow A: hook → log → eval → gate",
-      actors: [
-        { id: "fw", label: "training framework", kind: "external" },
-        { id: "hook", label: "hooks/ adapter" },
-        { id: "api", label: "api.py + runs/" },
-        { id: "store", label: "store/ (run store)", kind: "store" },
-        { id: "eval", label: "eval/" },
-        { id: "gate", label: "compare/ + gate" },
-        { id: "ci", label: "CI runner", kind: "external" },
-      ],
-      steps,
-    }),
-    note("n1", "Logged events: run_started, hook_attached, metrics_flushed, eval_completed, compare_completed or compare_refused, gate_passed or gate_failed, run_finished.", 40, totalH + 20, 14),
+    code, log, store, ci, data, ev, snap, gate,
+    arrow(code, log, "", a),
+    arrow(log, store, "", a),
+    arrow(data, ev, "", a),
+    arrow(ev, snap, "", a),
+    arrow(snap, gate, "", a),
+    arrow(gate, ci, "verdict", a),
+    note("cap", "Hooks and log() send scalars. Scoring and the gate are separate steps that you call.", 40, 530, 26),
   ],
 };
