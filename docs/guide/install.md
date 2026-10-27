@@ -3,7 +3,8 @@
 CV-Pilot needs Python 3.10 or newer. The core install is small and CPU-only. It never pulls in a
 deep-learning framework, a web framework or a database server.
 
-It is installed from its git repository. It is not on PyPI, so `pip install cvpilot` does not work.
+CV-Pilot itself is installed from its git repository. It is not on PyPI, so `pip install cvpilot`
+does not work. Its dependencies still come from PyPI.
 
 ## From a clone
 

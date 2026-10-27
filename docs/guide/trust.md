@@ -52,11 +52,15 @@ instead of serving an older one. Going back on purpose is `accept_rollback_to=N`
 ## A key proves who, not when
 
 A key stops forgery. It does not stop rollback: an attacker who can write the folder can put back
-an older, genuine, tagged checkpoint. Freshness needs something the attacker cannot rewrite: the run
-store, versioned or write-once bucket storage, or a step you supply (`CVPILOT_CKPT_MIN_STEP`,
-`--expect-min-step`). A fresh machine that has only the key cannot know that newer checkpoints
-existed. Turn on bucket versioning and object lock, keep the run store out of the bucket writers'
-reach, and pass the last step you saw as `CVPILOT_CKPT_MIN_STEP`.
+an older, genuine, tagged checkpoint. Freshness needs something the attacker cannot rewrite:
+
+- the run store;
+- versioned or write-once bucket storage;
+- a step you supply (`CVPILOT_CKPT_MIN_STEP`, `--expect-min-step`).
+
+A fresh machine that has only the key cannot know that newer checkpoints existed. So turn on bucket
+versioning and object lock, keep the run store out of the bucket writers' reach, and pass the last
+step you saw as `CVPILOT_CKPT_MIN_STEP`.
 
 ## Keys
 

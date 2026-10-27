@@ -5,38 +5,56 @@ repeating a definition.
 
 ## Glossary
 
+### Runs
+
 | Term | Plain meaning |
 |---|---|
 | Run | One training or evaluation job: an id, a project and a status (`running`, `resumed`, `finished`, `failed`, `preempted`). |
 | Project | A name that groups runs. Each project has its own folder in the store. |
 | Store | The folder holding your runs (`CVPILOT_STORE_DIR`, default `~/.cvpilot`): plain files and one SQLite database. |
-| ULID | The 26-character run id. Ids sort by creation time. |
-| WAL | SQLite's write-ahead log mode. Readers never block the writer, and a killed process leaves a readable database. |
-| Content-addressed | Stored under the hash of its bytes: identical files are kept once, and a changed file is noticed. |
+| `recover_run` | The call that marks a run `failed` after its process died without finishing. It refuses unless it can show the process is gone. |
+| Preempted | The scheduler or cloud asked the job to stop. CV-Pilot saves a checkpoint and marks the run `preempted`. |
+| Forwarder | A background thread that copies metrics to MLflow, W&B or Trackio, so a slow tracker never blocks training. |
+| Event | One JSON log line on `stderr` with a fixed `message` such as `run_started`. Secrets are never logged. |
+
+### Evaluation and gating
+
+| Term | Plain meaning |
+|---|---|
 | Evaluation set | The images and ground-truth boxes you score a model on. |
 | Eval set hash | A fingerprint of the ground truth and class list. Equal hashes mean two runs scored the same data. |
 | Snapshot | The saved result of scoring one run on one evaluation set at one step: mAP, per-class AP, confusion matrix. Never edited. |
 | Slice | The images that share a metadata value, such as `camera=cam3`, scored on their own. |
 | Bootstrap interval | A range around a metric from re-scoring random resamples of the images. It tells noise from a real change. |
 | Baseline | A named pin (such as `prod`) to a snapshot you trust. Pins are only added, never overwritten. |
-| Hash chain | Each record stores a hash that covers the record before it. Editing, deleting or reordering an earlier record breaks the chain. |
 | Gate | `cvpilot gate`: compares a run with a baseline and exits `1` if the run is worse. |
 | Fail-closed | When something cannot be checked (missing metric, different eval set, failed integrity check) the gate fails instead of passing. |
-| Forwarder | A background thread that copies metrics to MLflow, W&B or Trackio, so a slow tracker never blocks training. |
-| Event | One JSON log line on `stderr` with a fixed `message` such as `run_started`. Secrets are never logged. |
+| Hash chain | Each record stores a hash that covers the record before it. Editing, deleting or reordering an earlier record breaks the chain. |
+
+### Checkpoints and trust
+
+| Term | Plain meaning |
+|---|---|
 | Checkpoint | A saved training state (weights, optimizer, random state) and its manifest. |
 | Manifest | A small file beside a checkpoint: its size, SHA-256, a hash-chain link and, with a key, an HMAC tag. |
 | HMAC tag | A short code made from the manifest and your secret key. Only a holder of the key can produce it. |
 | LATEST pointer | A file naming the newest checkpoint. A shortcut that is checked, never trusted alone. |
-| Preempted | The scheduler or cloud asked the job to stop. CV-Pilot saves a checkpoint and marks the run `preempted`. |
 | Trust level | How a restored checkpoint was vouched for: `authenticated`, `anchored` or `local_chain_only`. |
 | `authenticated` | The manifest has an HMAC tag made with your key (`CVPILOT_CKPT_KEY`). The strongest level. |
 | `anchored` | The manifest's hash is also recorded in the run store, so deleting or swapping the file is noticed. |
-| `local_chain_only` | Only the checkpoint folder's own hash chain vouches for it. Catches damage, not a person who can write the folder. |
+| `local_chain_only` | Only the checkpoint folder's own hash chain vouches for it. Catches damage, not a person who can write the folder. This is the default. |
 | Rollback floor | The newest step known to have been saved (from the store, the pointer or `CVPILOT_CKPT_MIN_STEP`). Anything older is refused. |
-| Lease | A lock a live run holds on its checkpoint folder. `recover_run` will not mark a run failed while it is held. |
-| Liveness | Whether a run's process is still alive. If CV-Pilot cannot tell, it assumes alive. |
 | Quarantine | A list of refused checkpoint steps. Nothing is moved or deleted; the steps still raise the floor. |
+
+### Internals
+
+| Term | Plain meaning |
+|---|---|
+| ULID | The 26-character run id. Ids sort by creation time. |
+| WAL | SQLite's write-ahead log mode. Readers never block the writer, and a killed process leaves a readable database. |
+| Content-addressed | Stored under the hash of its bytes: identical files are kept once, and a changed file is noticed. |
+| Lease | A lock a live run holds on its checkpoint folder. `recover_run` never marks a run failed while it is held. |
+| Liveness | Whether a run's process is still alive. If that is unknown, `recover_run` refuses unless you pass `force=True`. |
 | Debris | Temporary or half-written files left by a killed save. The next save removes them. |
 
 ## Recording a run
@@ -64,10 +82,10 @@ import cvpilot
 run = cvpilot.init("fridge-sku", task="detection", dataset_uri="/data/fridge.dcp")
 ```
 
-`cvpilot runs show RUN` then prints `dataset_hash: dcp:<version>`. CV-Pilot reads only the
-`version` field of `dataset.dcp/manifest.json` and does not check it against the files. Without a
-usable version it hashes the folder's file names, sizes and times (`merkle:`). The two packages do
-not depend on each other.
+`cvpilot runs show RUN` then prints `dataset_hash: dcp:<version>`. `dcp:<version>` means the
+version DataCopilot gave the dataset, copied from `dataset.dcp/manifest.json` and not checked
+against the files. `merkle:<hex>` means CV-Pilot hashed the folder's file names, sizes and times
+itself, because no usable version was there. The two packages do not depend on each other.
 
 ## Trackers and training frameworks
 

@@ -1,9 +1,9 @@
 # Tutorial: from a first run to a resume
 
 You will record a run, get preempted, resume, pin a baseline, fail a bad model at the gate and
-sign your checkpoints. It needs no GPU, no dataset and no network. A test runs every command on
-this page, and the lines marked "expect" are checked against the real output. Words you do not know
-are in the [glossary](guide/concepts.md#glossary).
+sign your checkpoints. It needs no GPU, no dataset and no network. Every command is meant to be run
+as written; the lines marked "expect" are what you should see. Words you do not know are in the
+[glossary](guide/concepts.md#glossary).
 
 Run the commands in an empty directory, in one shell, from the top.
 
@@ -23,7 +23,8 @@ ok
 json: message=doctor_completed status=ok
 ```
 
-Results go to `stdout`. Everything cvpilot logs is one JSON line per event on `stderr`.
+Results go to `stdout`. Log events (one JSON line each) and the occasional plain `note:` or `error:`
+line go to `stderr`.
 
 ## 2. Choose where things live
 
@@ -103,7 +104,8 @@ args = parser.parse_args()
 
 CKPT = Path(os.environ["CVPILOT_CHECKPOINT_DIR"])
 point = None if args.fresh else find_resume_point("demo", checkpoint_dir=CKPT)
-if point is not None and point.needs_recover:  # the earlier process was killed outright
+if point is not None and point.needs_recover:  # the last run was killed and never marked
+    # mark it failed; refused unless its process is provably gone
     recover_run("demo", point.run_id)
 run = cvpilot.init(
     "demo",
@@ -167,7 +169,8 @@ RUN_ID                      STATUS     STARTED                    NAME
 {*}  last  000000010  valid    anchored
 ```
 
-Step 10 came from the interval and step 14 from the preemption. Both are `anchored`.
+Step 10 came from the interval and step 14 from the preemption. `anchored` means the run store also
+recorded each checkpoint's hash, so a deleted or swapped file is noticed.
 
 ## 6. Damage the newest checkpoint
 
@@ -244,13 +247,16 @@ json: message=eval_completed step=29 task=detection n_images=60
 json: message=baseline_set tag=prod replaced=False
 ```
 
-These runs are finished, so `eval` needs `--allow-closed`; in a training script you call
+`--slices camera=camera` scores each value of the `camera` column on its own (KEY=COLUMN), and
+`--step 29` labels the snapshot. These runs are finished, so `eval` needs `--allow-closed`; in a
+training script you call
 `run.log_eval(...)` while the run is open. A snapshot is never edited, and replacing a pin needs
 `--replace` and keeps the old one.
 
 ## 9. Gate a regression, then a good run
 
-A candidate whose predictions miss a third of the images:
+A candidate whose predictions miss a third of the images. `--max-drop mAP50_95=1` allows a drop of
+1 point on a 0..100 scale:
 
 ```bash
 python train.py --steps 30 --fresh

@@ -3,7 +3,7 @@
 `CheckpointManager` saves your training state so that a killed job can continue where it stopped.
 It writes each [checkpoint](concepts.md#glossary) so that a kill at any instant leaves either the
 previous one or a complete new one, and it restores only a checkpoint that verifies. A preemption
-signal makes it save at once instead of crashing. Design: [ADR-0006](../adr/0006-checkpoint-semantics.md).
+signal makes it save at once instead of crashing. Background: [ADR-0006](../adr/0006-checkpoint-semantics.md).
 Security: [Trust model](trust.md).
 
 ## Save and restore
@@ -57,6 +57,9 @@ a restore never runs code.
 - `keep_last` and `keep_best` (default 3 and 2) delete older ones after a save. The newest valid
   checkpoint of each kind is never deleted, and with a remote nothing is deleted until the newest
   one is confirmed uploaded. `cvpilot ckpt prune` applies the same rules by hand.
+- **bfloat16, the float8 types and quantised tensors have no NumPy equivalent**, so a save that
+  meets one raises `CheckpointError` naming the tensor. Cast first (`tensor.float()`) and cast back
+  after restoring.
 
 ## Resume after a restart
 
@@ -170,25 +173,24 @@ checkpoint. That format is pickle-based, so it needs `allow_pt_format=True` or
 | File | Result |
 |---|---|
 | Lightning `last.ckpt` | Accepted and resumed with identical weights. |
-| Ultralytics `last.pt` | Refused: it pickles the whole model object. Resume it with Ultralytics. |
+| Ultralytics `last.pt` | Refused: it pickles the whole model object. A helper exists, but this file never passes, so resume with Ultralytics itself. |
 | MMEngine `epoch_N.pth` | Refused: it pickles a class. Resume it with MMEngine. |
-| Hugging Face `Trainer` folder | Refused: a folder, not a file. Save with `CheckpointManager` instead. |
+| Hugging Face `Trainer` folder | Refused: a folder, not a file, and its files pickle objects. Save the model and optimizer with `CheckpointManager` instead: they restore bit-identical. |
 
-A `pt` file the scan refuses is reported (`resume_point_skipped`), not returned as `None`. Facts
-behind the table: [ADR-0010](../adr/0010-real-checkpoint-files-and-mmengine.md).
+A `pt` file the scan refuses is reported (`resume_point_skipped`), not returned as `None`. The table
+comes from real training runs. Background: [ADR-0010](../adr/0010-real-checkpoint-files-and-mmengine.md).
 
 ## Limits
 
 - POSIX only. A restore holds the whole file in memory once (`max_checkpoint_bytes`, default 8 GiB);
   `pt` archives over 4 GiB are refused.
 - Restore returns NumPy arrays for safetensors checkpoints. Convert with `torch.from_numpy`.
-- Tensor types float16, float32, float64, the integer types and bool round-trip. **bfloat16, the
-  float8 types and quantised tensors have no NumPy equivalent**, so a save raises `CheckpointError`
-  naming the tensor. Cast first (`tensor.float()`) and cast back after restoring.
+- Tensor types float16, float32, float64, the integer types and bool round-trip.
 - Non-tensor state: integers below 2**64, at most 100 000 nodes, 32 levels and 1 MiB of JSON.
   Anything a restore would refuse is refused at save.
-- A save costs about 1.5 to 3.5 times a plain `torch.save`, because it hashes the file twice
-  ([measured](../adr/0010-real-checkpoint-files-and-mmengine.md)).
+- A save costs about 1.5 to 3.5 times a plain `torch.save` of the same state, because it hashes the
+  file twice (one machine, local SSD). At the default 10-minute interval that is under 0.01% of the
+  run. Background: [ADR-0010](../adr/0010-real-checkpoint-files-and-mmengine.md).
 - Random state: `rng=True` stores the Python, NumPy (legacy global) and framework CPU generators.
   **Restoring does not touch your generators**: call `cvpilot.ckpt.apply_rng(state["rng"])`
   yourself. It checks everything first and changes nothing if the state is malformed. CUDA

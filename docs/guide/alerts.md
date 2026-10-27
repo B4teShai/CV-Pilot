@@ -61,7 +61,7 @@ Metric rules run on the calling thread in microseconds. `eval_regression` runs o
 comparison per `log_eval` snapshot. Delivery runs on background threads, so a closed port, a silent
 endpoint or a redirect costs only the alerts, which are counted and logged once
 (`alert_delivery_failed`). Each rule sends at most one alert per `rate_limit_s` and 20 per run, and
-only rank zero of a distributed job alerts. At the end of a run `finish` waits up to 5 seconds for
+only rank zero of a distributed job alerts (`init` checks `RANK` and `LOCAL_RANK`). At the end of a run `finish` waits up to 5 seconds for
 tracker forwarders and up to 12 for alert channels, so the worst case with dead endpoints is about
 17 seconds. `finish` logs one `alert_summary` with the counts.
 
@@ -81,8 +81,7 @@ comparison and prints `would fire: ...` lines. It sends nothing. Exit code `2` m
 configuration or a channel that cannot be built.
 
 To receive alerts on your own machine set `CVPILOT_ENV=dev`. It allows `http://` endpoints that
-resolve to loopback addresses, and nothing else. The notebook
-`notebooks/03_alerts_and_hf_trainer.ipynb` does this with a local listener.
+resolve to loopback addresses, and nothing else.
 
 ## Hugging Face Trainer
 

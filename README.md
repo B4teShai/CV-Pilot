@@ -5,18 +5,19 @@ CV-Pilot stops you from shipping a worse vision model and from losing training p
 ## What is it?
 
 A new model can quietly get worse on one class or one camera while the average score looks fine,
-and a long training job can die and lose hours of progress. CV-Pilot works next to the experiment
-tracker you already use (MLflow, Weights & Biases, Trackio). It records each training run, measures
-detection and classification quality per class, compares every new model with your current best and
-fails your CI build if something got worse. It also saves crash-proof checkpoints, so a preempted
-or killed job resumes where it stopped. Everything runs on your machine from Python or the command
-line; no server is needed.
+and a long training job can die and lose hours of progress. Trackers such as MLflow, Weights & Biases
+and Trackio record experiments. CV-Pilot adds a per-class regression gate and crash-safe
+checkpoints, and forwards its metrics to your tracker. It records each training run, scores
+detection and classification per class, compares every new model with your current best and fails
+your CI build if something got worse. A preempted or killed job resumes where it stopped.
+Everything runs on your machine; no server is needed.
 
 ![CV-Pilot records your training, compares the new model with your best one and tells CI pass or fail](https://raw.githubusercontent.com/B4teShai/CV-Pilot/main/docs/diagrams/png/overview.png)
 
 ## Quick start
 
-Install it from a clone (Python 3.10 or newer; no package index is needed):
+CV-Pilot itself is not on PyPI, so install it from a clone (Python 3.10 or newer; its dependencies
+come from PyPI):
 
 ```bash notest
 git clone https://github.com/B4teShai/CV-Pilot.git && cd CV-Pilot
@@ -41,7 +42,9 @@ cvpilot.finish()
 print(run.run_id)
 ```
 
-Then list and inspect it:
+Then list and inspect it. The commands also print log events as JSON lines on `stderr`; add
+`2>/dev/null` to hide them. The table below is `stdout`, and `{*}` stands for a value that differs on
+every run:
 
 ```bash
 RUN=$(python train.py)    # prints the run id; log lines go to stderr
@@ -60,12 +63,13 @@ n_points: 3
 steps: 0..2
 ```
 
-`{*}` stands for a value that differs on every run, and `runs show` prints more fields than this.
+`runs show` prints more fields than this.
 
 ## What you can do
 
 - Record runs and reproduce them: `cvpilot.init`, `cvpilot.log`, `cvpilot repro`.
-- Measure detection and classification quality per class: `cvpilot eval`, `cvpilot.log_eval`.
+- Measure detection and classification quality per class: `cvpilot eval`, `cvpilot.log_eval`. They
+  read Parquet files of predictions and ground-truth boxes ([format](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/gating-ci.md)).
 - Compare a new model with your current best and fail CI on a drop: `cvpilot gate`, `cvpilot compare`.
 - Run that check on every pull request with the GitHub Action.
 - Send metrics to MLflow, W&B or Trackio: `cvpilot.init(forward_to=["mlflow"])`.

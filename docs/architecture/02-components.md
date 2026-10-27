@@ -123,7 +123,7 @@ errors.
 |---|---|---|
 | Lightning | Scalars through a logger and a callback, rank zero only | Yes |
 | Hugging Face | `train/` and `eval/` metrics, saves as events | No |
-| Ultralytics | Losses, mAP, per-class AP per epoch | Yes |
+| Ultralytics | Losses, mAP, per-class AP per epoch | A helper exists, but a real `last.pt` is refused |
 | MMEngine | `train/`, `val/` and `test/` metrics at `runner.iter` | No |
 | RF-DETR | Every scalar the framework logs | No |
 

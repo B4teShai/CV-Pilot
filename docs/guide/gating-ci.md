@@ -57,12 +57,16 @@ error: run 01M4... has no snapshot for eval set 65d37ab51abe        # event comp
 exit=1
 ```
 
-The gate is [fail-closed](concepts.md#glossary). It exits `1` for a missing or non-finite metric, a
-missing or too small slice, fewer than `--min-images` images (default 30), a threshold that gated
-nothing, a failed integrity check, an unknown tag, and a different
-[eval set hash](concepts.md#glossary), task, class list or evaluation setting. With no threshold at
-all it is a usage error (exit `2`). `--skip-small-slices` is the one opt-in, capped by
-`--max-skipped` (default 0).
+The gate is [fail-closed](concepts.md#glossary). It exits `1` when:
+
+- a metric is missing or not finite;
+- a slice is missing or too small;
+- there are fewer than `--min-images` images (default 30);
+- a threshold gated nothing, or an integrity check failed, or the tag is unknown;
+- the [eval set hash](concepts.md#glossary), task, class list or evaluation setting differs.
+
+With no threshold at all it is a usage error (exit `2`). `--skip-small-slices` is the one opt-in,
+capped by `--max-skipped` (default 0).
 
 `--report` writes static HTML with no script, and `--report-json` writes the canonical JSON. Reports
 must stay inside `--report-dir` (default: the current directory), outside the store, and an existing
