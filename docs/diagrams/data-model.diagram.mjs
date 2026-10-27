@@ -1,5 +1,5 @@
 // Entities of the local run store with keys, foreign keys and cardinalities.
-import { grid, entity, arrow, heading, note, legend, COLORS } from "../../../tools/diagrams/lib/scene.mjs";
+import { grid, entity, arrow, heading, note, COLORS } from "../../../tools/diagrams/lib/scene.mjs";
 
 const W = 330;
 const g = grid({ x: 60, y: 110, colW: W, rowH: 340, gapX: 90, gapY: 80 });
@@ -19,7 +19,7 @@ const repro = entity("repro", ...at(0, 0), W, "Repro", [
   "config: json",
   "seed: int?",
   "command_line: str (redacted)",
-], COLORS.built);
+], COLORS.store);
 
 const baseline = entity("baseline", ...at(1, 0), W, "Baseline", [
   "project: str",
@@ -29,7 +29,7 @@ const baseline = entity("baseline", ...at(1, 0), W, "Baseline", [
   "step: int              FK",
   "snapshot_sha256: str",
   "pinned_at: datetime",
-], COLORS.built);
+], COLORS.store);
 
 const manifest = entity("manifest", ...at(2, 0), W, "CheckpointManifest", [
   "run_id: str            PK FK",
@@ -49,7 +49,7 @@ const manifest = entity("manifest", ...at(2, 0), W, "CheckpointManifest", [
   "prev_chain_sha256",
   "chain_sha256",
   "auth_tag: str? (HMAC)",
-], COLORS.built);
+], COLORS.store);
 
 const metric = entity("metric", ...at(0, 1), W, "MetricPoint", [
   "run_id: str            PK FK",
@@ -58,7 +58,7 @@ const metric = entity("metric", ...at(0, 1), W, "MetricPoint", [
   "epoch: int?",
   "value: float64",
   "wall_time: float64",
-], COLORS.built);
+], COLORS.store);
 
 const run = entity("run", ...at(1, 1), W, "RunMeta", [
   "run_id: str (ULID)     PK",
@@ -72,7 +72,7 @@ const run = entity("run", ...at(1, 1), W, "RunMeta", [
   "started_at: datetime",
   "ended_at: datetime?",
   "schema_version: int",
-], COLORS.built);
+], COLORS.store);
 
 const artifact = entity("artifact", ...at(2, 1), W, "Artifact", [
   "run_id: str            PK FK",
@@ -82,7 +82,7 @@ const artifact = entity("artifact", ...at(2, 1), W, "Artifact", [
   "size_bytes: int",
   "meta: json",
   "created_at: datetime",
-], COLORS.built);
+], COLORS.store);
 
 const snapshot = entity("snapshot", ...at(1, 2), W, "EvalSnapshot", [
   "run_id: str            PK FK",
@@ -95,7 +95,7 @@ const snapshot = entity("snapshot", ...at(1, 2), W, "EvalSnapshot", [
   "ci: json, bootstrap: json?",
   "confusion_sha256: str  FK",
   "predictions_sha256: str FK",
-], COLORS.built);
+], COLORS.store);
 
 export default {
   elements: [
@@ -109,9 +109,6 @@ export default {
     arrow(artifact.box, run.box, "0..* → 1"),
     arrow(snapshot.box, run.box, "0..* → 1"),
 
-    legend(40, 1260, [[COLORS.built, "built (table in runs.sqlite; MetricPoint also in Parquet)"], [COLORS.planned, "planned"]]),
-    note("n1", "PK = primary key, FK = foreign key, ? = nullable. Arrows point from the referencing entity to the referenced one, labelled with cardinality.", 40, 1300, 14),
-    note("n2", "RunMeta.parent_run_id references RunMeta.run_id (resumed run → preempted parent). Baseline pins the EvalSnapshot (run_id, eval_set_hash, step) and its digest; rows are append-only, digested and chained. EvalSnapshot FKs reference Artifact.sha256.", 40, 1324, 14),
-    note("n3", "CheckpointManifest rows (checkpoint_manifest) hold the digest of each manifest file, append-only; the files live in the checkpoint directory.", 40, 1348, 14),
+    note("n1", "PK = primary key, FK = foreign key, ? = nullable. Arrows point from the referencing entity to the referenced one, labelled with cardinality.", 40, 1270, 14),
   ],
 };
