@@ -1,13 +1,12 @@
 # Settings
 
 CV-Pilot reads its settings from environment variables with the `CVPILOT_` prefix, once at
-process start. Nothing here is required: the defaults work on a laptop. The full table, including
-the settings of parts that are not built yet, is in
-[Runtime and configuration](../architecture/05-runtime.md).
+process start. Nothing is required: the defaults work on a laptop. An explicit function argument or
+command option beats the variable, and the variable beats the default.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
-| `CVPILOT_ENV` | `dev`, `staging`, `prod` | `prod` | Sets the `env` field of the logs; debug logging and plain http to a tracker are allowed only in `dev` |
+| `CVPILOT_ENV` | `dev`, `staging`, `prod` | `prod` | The `env` field of the logs. Debug logging and plain http are allowed only in `dev`. |
 | `CVPILOT_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | `INFO` | How much is logged to `stderr` (one JSON object per line) |
 | `CVPILOT_PROJECT` | a name such as `fridge-sku` | none | The project used when a command or `init` leaves it out |
 | `CVPILOT_STORE_DIR` | a directory | `~/.cvpilot` | Where runs, metrics and evaluation snapshots are stored |
@@ -22,29 +21,23 @@ the settings of parts that are not built yet, is in
 | `CVPILOT_CKPT_MIN_STEP` | a step number | none | Refuse a checkpoint older than this step |
 | `CVPILOT_CKPT_ALLOW_PT` | `true`, `false` | `false` | Allow the pickle-based `pt` checkpoint format |
 
-Alert channels read their address and credential from `CVPILOT_ALERT_WEBHOOK_URL`, `CVPILOT_ALERT_WEBHOOK_TOKEN`, `CVPILOT_ALERT_SLACK_URL`, `CVPILOT_ALERT_TELEGRAM_TOKEN` and `CVPILOT_ALERT_TELEGRAM_CHAT` (environment only, https only, never logged); `CVPILOT_FORWARD_HOSTS` also limits them. Tracker tokens stay in the tracker's own environment variables. CV-Pilot refuses credentials in
-URLs, plain http outside `CVPILOT_ENV=dev` and disabled TLS verification.
-
-## Extras
-
-The core install has no deep-learning framework. Add what you use (see
-[Install](../guide/install.md) for how to install an extra from a clone): `cvpilot[safetensors]`
-(checkpoints), `[remote-s3]`, `[remote-gcs]`, `[remote-azure]` or `[remote]` (copy checkpoints to a
-bucket), `[lightning]`, `[hf]`, `[mmengine]`, `[rfdetr]`, `[ultralytics]` (the Ultralytics package
-is AGPL-3.0, see [Install](../guide/install.md)), `[mlflow]`, `[wandb]`, `[trackio]`.
+Alert channels read their address and credential from `CVPILOT_ALERT_WEBHOOK_URL`,
+`CVPILOT_ALERT_WEBHOOK_TOKEN`, `CVPILOT_ALERT_SLACK_URL`, `CVPILOT_ALERT_TELEGRAM_TOKEN` and
+`CVPILOT_ALERT_TELEGRAM_CHAT`: environment only, https only, never logged. Tracker tokens stay in
+the tracker's own variables. Extras are listed on the [install page](../guide/install.md#extras).
 
 ## Exit codes
 
 Every command uses the same codes: `0` success, `1` failure, `2` usage or configuration error,
-`130` interrupted. The full contract is in
-[Errors and logging](../engineering/errors-and-logging.md), and the generated
-[command line reference](cli.md) lists each command.
+`130` interrupted. The generated [command line reference](cli.md) lists each command, and the
+contract is in [Errors and logging](../engineering/errors-and-logging.md).
 
 | Command | `1` means | `2` means |
 |---|---|---|
-| `runs show`, `repro` | a well-formed run id that is not in the store | a missing or invalid project, a malformed run id |
-| `eval` | invalid inputs, a closed run (add `--allow-closed` to evaluate into a finished run), an unknown run, a snapshot whose digest does not match, or an existing snapshot (snapshots are immutable per set and step) | a bad `--slices`, a step or seed out of range |
-| `alerts check` | the run to replay is not found or cannot be read | an invalid configuration, a channel that cannot be built from the environment, a missing project, a malformed run id |
-| `gate` | the model regressed, or anything could not be verified (see [Gating in CI](../guide/gating-ci.md)) | no threshold given |
+| `runs show`, `repro` | A well-formed run id that is not in the store. | A missing or invalid project, or a malformed run id. |
+| `eval` | Invalid inputs, a closed run (add `--allow-closed`), an unknown run, a bad snapshot digest or an existing snapshot. | A bad `--slices`, or a step or seed out of range. |
+| `alerts check` | The run to replay cannot be found or read. | An invalid configuration, a channel that cannot be built, or a missing project. |
+| `gate` | The model regressed, or anything could not be checked ([Gating in CI](../guide/gating-ci.md)). | No threshold given. |
+| `ckpt verify` | A corrupt, truncated, forged or untrusted checkpoint. | Not a checkpoint folder. |
 
-`cvpilot doctor` prints `ok` on `stdout` and one JSON log line (`doctor_completed`) on `stderr`.
+`cvpilot doctor` prints `ok` on `stdout` and logs `doctor_completed` on `stderr`.
