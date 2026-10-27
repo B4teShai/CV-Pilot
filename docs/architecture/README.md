@@ -1,49 +1,26 @@
 # CV-Pilot architecture
 
-## The 30-second picture
+CV-Pilot is a Python library and command line that sits next to your training code. It records each
+run in a local folder, scores models, compares them with a baseline and saves checkpoints you can
+trust after a crash. For what it does and how to use it, start with the [tutorial](../tutorial.md).
+What works today is on the [status page](../status.md). Terms are in the
+[glossary](../guide/concepts.md#glossary).
 
 ![CV-Pilot records your training, compares the new model with your best one and tells CI pass or fail](../diagrams/png/overview.png)
 
-- Your training code (Lightning, Ultralytics or plain Python) calls CV-Pilot.
-- CV-Pilot records each run, evaluates the model per class and saves checkpoints.
-- A new model is compared with your best one, and CI passes or fails.
-- Metrics can also go to your tracker (MLflow, Weights & Biases, Trackio).
-- It all runs on your machine; no server is needed. The sections below are the technical detail.
+## The pages
 
-## The technical index
+| Page | Question it answers |
+|---|---|
+| [01 Overview](01-overview.md) | Who uses it, what is in and out of scope, what must hold. |
+| [02 Components](02-components.md) | Which packages exist, what each owns and what may import what. |
+| [03 Data model](03-data-model.md) | Which records are stored, how they relate and where they live on disk. |
+| [04 Flows](04-flows.md) | How logging, gating and checkpointing run end to end, and how each fails. |
+| [05 Runtime](05-runtime.md) | Which threads run, where data goes and which settings exist. |
+| [06 Cross-cutting](06-cross-cutting.md) | Logging, errors, security, the CI trust model and licensing. |
+| [ADRs](../adr/0001-scope-and-license.md) | Why it is built this way. |
 
-This directory is the single source of truth for how CV-Pilot is built. It follows the
-[C4 model](https://c4model.com) from the outside in, then covers data, runtime behaviour,
-deployment and cross-cutting concerns. Decisions that shaped it are recorded as ADRs.
-
-| Document | Question it answers | Diagram |
-|---|---|---|
-| [01-overview.md](01-overview.md) | What is the system, who uses it, what must it guarantee, what is out of scope | `context`, `containers` |
-| [02-components.md](02-components.md) | What are the packages, what does each own, what may depend on what | `components` |
-| [03-data-model.md](03-data-model.md) | What are the entities, their keys, relations, invariants and on-disk layout | `data-model` |
-| [04-flows.md](04-flows.md) | How the key operations run end to end, including failure paths and exit codes | `flow-a`, `flow-b` |
-| [05-runtime.md](05-runtime.md) | Where code runs, what it reads and writes, where config and secrets live | `runtime` |
-| [06-cross-cutting.md](06-cross-cutting.md) | Logging, configuration, errors, security, licensing, observability | — |
-| [ADRs](../adr/0001-scope-and-license.md) (all in `../adr/`) | Why it is this way | — |
-
-## How to read the diagrams
-
-- Diagrams are generated from `docs/diagrams/*.diagram.mjs`. The PNG embeds the scene, so any
-  PNG can be dropped into [excalidraw.com](https://excalidraw.com) and edited.
-- Colours: blue = this system or one of its containers, orange = external system, purple =
-  person, yellow = data store, green = built and tested today, grey = planned.
-- Arrows point in the direction of the dependency or call. In the component view they only
-  point downward between layers (see [ADR-0004](../adr/0004-layering-and-dependency-rule.md)).
-
-## Status markers
-
-Every component and flow is marked **built** or **planned**. "Built" means it exists in
-`src/`, has tests, and its commands appear in the README from a real run. Anything else is
-planned, however detailed its description. Marking is updated in the same change that ships
-the code.
-
-## Keeping this current
-
-A change that adds a package, a public interface, a stored entity or an external dependency
-updates the matching document and diagram in the same pull request. The review checklist in
-[../engineering/workflow.md](../engineering/workflow.md) enforces this.
+The diagrams are generated from `docs/diagrams/*.diagram.mjs`. Each PNG embeds its scene, so you
+can open it in [excalidraw.com](https://excalidraw.com) and edit it. A change that adds a package, a
+public interface, a stored record or an outside dependency updates the matching page and diagram in
+the same pull request ([workflow](../engineering/workflow.md)).

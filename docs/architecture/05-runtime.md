@@ -1,117 +1,65 @@
 # 05 Runtime
 
-![Runtime and deployment](../diagrams/png/runtime.png)
+Where CV-Pilot code runs, what it reads and writes, and where configuration and secrets live.
 
 ## Process model
 
 | Where | What runs | Threads and subprocesses |
 |---|---|---|
-| Training process (built: `api.py`, `runs/`, `eval/`, `ckpt/`, hooks, forwarders, store and capture in-process; alert rules in-process) | the framework, the hook adapter, `api.py`, `runs/`, `eval/`, `ckpt/`, client-side `alerts/`, forwarders | main thread: training, the hook callbacks and the alert rules (microseconds per `log` call); `cvpilot-forward-<name>` daemon thread per forwarder (built); `cvpilot-forward-<channel>` daemon thread per alert channel (built, same fan-out);  `cvpilot-sync` daemon thread: outbox → HTTPS; `cvpilot-nvml` daemon thread: NVML sample every 10 s; `cvpilot-spot-poll` daemon thread (built, off by default): asks the instance metadata service for a preemption notice, at most once per second per source, retries a failing service with backoff and logs it, and says why it stopped; signal handlers for SIGTERM/SIGUSR1 set a flag only (built). No subprocess except `git` once at `init`. |
-| `cvpilot` CLI (built: `--version`, `doctor`, `runs`, `repro`, `eval`, `baseline`, `compare`, `gate`, `ckpt`) | one command per invocation, single-threaded except `eval`, whose bootstrap uses up to 4 worker threads | none; `compare` and `gate` do no resampling (they read the intervals stored in the snapshots), so they use no thread pool |
-| Server container (planned) | Uvicorn with one FastAPI worker per CPU, websocket broadcaster, alert delivery worker | each worker is a process; alert delivery is an asyncio task; SQLite requires one worker, Postgres allows several |
-| CI runner (built) | `cvpilot gate` as a step, or the composite action `action.yml` that wraps it; the exit code gates the job | same as CLI; the action starts one `bash` |
+| Your training process | Your framework, the hook, `api.py`, `runs/`, `eval/`, `ckpt/`, alert rules, forwarders, store and capture | The main thread does the training, the hook callbacks and the alert rules (microseconds per `log`). One daemon thread per forwarder and per alert channel. One optional daemon thread polls a cloud preemption notice. No subprocess except `git`, once at `init`. |
+| The `cvpilot` CLI | One command per invocation | Single-threaded, except `eval`, whose bootstrap uses up to 4 worker threads. |
+| A CI runner | `cvpilot gate` as a step, or the composite action `action.yml` that wraps it | The exit code gates the job. |
 
-The hook never blocks training on I/O: `log()` appends to an in-memory buffer bounded at
-10 000 points; the store flush happens on the caller's thread when the buffer is full or 2 s
-have passed since the last flush, checked on each `log()` call (one Parquet write, tens of
-milliseconds, built; a failed write keeps the points and raises `StoreError`); forwarders are called after the flush and their failures are logged,
-not raised; forwarders run on their own daemon threads behind bounded queues (`runs/forwarding.py`, ADR-0008) and own all tracker network I/O; the sync thread, when it exists, owns the server I/O.
+The hook never blocks training on I/O. `log()` appends to a buffer of at most 10,000 points. The
+buffer is written on the caller's thread when it is full or 2 seconds have passed: one Parquet write
+of tens of milliseconds. A failed write keeps the points and raises `StoreError`. Forwarders and
+alert channels own all network I/O, behind bounded queues ([ADR-0008](../adr/0008-forwarders.md)).
 
-## Deployment nodes
+Signal handlers for `SIGTERM` and `SIGUSR1` only set a flag.
 
-| Node | Runs | Reads | Writes |
-|---|---|---|---|
-| Developer machine | `cvpilot` CLI (built), Python API in notebooks (planned) | local run store, checkpoint dirs, optional server over HTTPS | local run store, reports |
-| GPU training machine (spot, SLURM node, workstation) | training process with hooks, sync thread, NVML sampler, checkpoint manager | dataset, DataCopilot `manifest.json`, NVML, preemption metadata endpoint | local run store, `/checkpoint`, object storage (via fsspec), tracker, server (via sync), channels (client-side alerts) |
-| CI runner | `cvpilot gate`, `cvpilot compare --report`, or the composite action `action.yml` (built) | project store (checked-out copy or mounted bucket) or server snapshots over HTTPS | report artifact uploaded by the CI job |
-| Object storage (S3, GCS, any fsspec backend) | nothing | — | checkpoint mirror (`<remote>/<run_id>/{last,best}/...`), exported artifacts |
-| Server host (optional) | `cvpilot-server` Docker image behind a TLS reverse proxy; SQLite file volume or Postgres | ingest from sync clients, snapshots for CI and browsers | server DB, alert deliveries, share links |
-| Notification channels | Telegram Bot API, Slack, webhook endpoints, SMTP relay | — | — |
+## Where things live
 
-## Storage locations and defaults
+| Node | Runs | Writes |
+|---|---|---|
+| Your machine | CLI, notebooks | The run store, reports |
+| GPU machine (spot, SLURM, workstation) | The training process with hooks and the checkpoint manager | The run store, the checkpoint folder, object storage, trackers, alert channels |
+| CI runner | `cvpilot gate` or `compare --report` | A report, uploaded by the CI job |
+| Object storage | Nothing | The checkpoint mirror, `<remote>/<run_id>/{last,best}/...` |
 
-| Data | Default location | Override | Notes |
-|---|---|---|---|
-| Run store (built) | `$HOME/.cvpilot/<project>/` | `CVPILOT_STORE_DIR` or `init(store_dir=...)` | layout in [03-data-model.md](03-data-model.md); one directory per project |
-| Checkpoints (built) | `CheckpointManager(dir=...)`, no default | `CVPILOT_CHECKPOINT_DIR` | a mounted bucket path on SkyPilot; one directory per run, mode 0700 |
-| Checkpoint mirror (built) | none | `CheckpointManager(remote=...)` or `CVPILOT_CHECKPOINT_REMOTE` | `s3://`, `gs://`, `az://` URL without credentials, query or user info; credentials come from the backend's own environment |
-| Compare reports | the `--report` and `--report-json` paths only; nothing is written to the store | `--report`, `--report-json` | static HTML (no script, strict CSP), at most 8 MiB; the prediction-diff gallery is planned |
-| Server database | `/data/cvpilot.sqlite` inside the container | `CVPILOT_SERVER_DATABASE_URL` | `sqlite:///...` or `postgresql://...` |
-| Logs | `stderr` | none | collected by the process supervisor or container runtime |
+| Data | Default location | Override |
+|---|---|---|
+| Run store | `~/.cvpilot/<project>/` | `CVPILOT_STORE_DIR` or `init(store_dir=...)` |
+| Checkpoints | None; one folder per run, mode 0700 | `CVPILOT_CHECKPOINT_DIR` |
+| Checkpoint mirror | None | `CVPILOT_CHECKPOINT_REMOTE` (`s3://`, `gs://`, `az://`, no credentials in the URL) |
+| Reports | Only the `--report` and `--report-json` paths | Those options |
+| Logs | `stderr` | Your process supervisor |
+
+The folder layout is in [03 Data model](03-data-model.md).
 
 ## Configuration
 
-All configuration is environment variables with the `CVPILOT_` prefix, read once at process
-start by `settings.py`; an invalid value is reported on `stderr` with exit 2 before logging
-is configured. Precedence, highest first: explicit function argument or CLI option; environment
-variable; default. There is no configuration file.
-
-| Variable | Type / values | Default | Used by | Status |
-|---|---|---|---|---|
-| `CVPILOT_ENV` | `dev`, `staging`, `prod` | `prod` | logging (`env` field, DEBUG only in `dev`) | built |
-| `CVPILOT_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR` | `INFO` | logging | built |
-| `CVPILOT_PROJECT` | project name `[a-z0-9][a-z0-9_-]{0,63}` | none | `init()` and CLI commands when the project is omitted | built |
-| `CVPILOT_STORE_DIR` | directory path, expanded and resolved; not a file or `/` | `$HOME/.cvpilot` | store, CLI | built |
-| `CVPILOT_STORE_COMMAND_LINE` | `true`, `false` (also `1/0`, `yes/no`, `on/off`) | `true` | `Repro.command_line` capture; `false` stores only the executable name and the argument count | built (`settings.py` parses it; `api.init` passes it to `capture_repro`; tests cover both values) |
-| `CVPILOT_SERVER_URL` | `https://host[:port]` | none (sync disabled) | sync client, `gate --from-server` | planned |
-| `CVPILOT_TOKEN` | per-project token | none | sync client, CLI calls to the server; sent as `Authorization: Bearer` | planned, secret |
-| `CVPILOT_CHECKPOINT_DIR` | directory path | none | `CheckpointManager` default `dir`, `resume_path`, CLI | built |
-| `CVPILOT_CHECKPOINT_REMOTE` | `s3://`, `gs://` or `az://` URL (no credentials) | none | `CheckpointManager` default `remote` | built |
-| `CVPILOT_CKPT_KEY` | secret, 32 to 1024 bytes (for example `openssl rand -hex 32`) | none (no tags) | HMAC tags on manifests and pointers; verified on restore; never logged or stored | built, secret |
-| `CVPILOT_CKPT_REQUIRE_TRUST` | `any`, `anchored`, `authenticated` | `any` | minimum trust level a restore accepts; `authenticated` needs `CVPILOT_CKPT_KEY`; recommended for any shared or bucket-backed directory | built |
-| `CVPILOT_CKPT_ALLOW_PT` | `true`, `false` (also `1/0`) | `false` | allows the pickle-based `pt` checkpoint format (needs the framework at 2.6 or newer) | built |
-| `CVPILOT_FORWARD_TO` | comma-separated forwarder names `[a-z][a-z0-9_-]{0,31}`, at most 8, no repeats | empty | `init()` default `forward_to`; an unknown name or a missing extra fails `init()` before a run exists | built (`settings.py` parses it, `init` passes it to the fan-out; tests run it through the real `init` path) |
-| `CVPILOT_FORWARD_HOSTS` | comma-separated lower-case host names (no wildcards), at most 32 | empty (no restriction) | forwarders: only these hosts may be tracker endpoints; Trackio refuses to run with it set | built (parsed in `settings.py`, passed to every adapter by `init`; tests cover the real path) |
-| `RANK`, `LOCAL_RANK` | integers set by a distributed launcher | unset | `init`: a non-zero value starts no forwarder (`forward_skipped_rank`) | built |
-| `CVPILOT_ALERTS` | path of a JSON file | none | `init()` default `alerts`; an invalid file, an unknown channel or a channel with a missing or unsafe address fails `init()` before a run exists | built |
-| `CVPILOT_ALERT_WEBHOOK_URL`, `CVPILOT_ALERT_WEBHOOK_TOKEN` | https URL; bearer token of 8 to 512 safe characters | none | `webhook` channel | built, secret |
-| `CVPILOT_ALERT_SLACK_URL` | https URL | none | `slack` channel (the URL is the credential) | built, secret |
-| `CVPILOT_ALERT_TELEGRAM_TOKEN`, `CVPILOT_ALERT_TELEGRAM_CHAT` | bot token; numeric chat id or `@name` | none | `telegram` channel | built, secret |
-| `CVPILOT_SERVER_DATABASE_URL` | SQLAlchemy URL | `sqlite:////data/cvpilot.sqlite` | server only | planned |
-| `CVPILOT_SERVER_TOKEN_HASHES` | path to a file of `project:sha256(token)` lines | `/data/tokens` | server only | planned |
+All configuration is environment variables with the `CVPILOT_` prefix, read once at start by
+`settings.py`. An invalid value is reported on `stderr` with exit 2 before logging starts. An
+explicit function argument or CLI option beats the variable, which beats the default. There is no
+configuration file. Every variable is in the [settings reference](../reference/settings.md). Two
+more are read: `RANK` and `LOCAL_RANK`, set by distributed launchers. A non-zero rank starts no
+forwarder and sends no alerts.
 
 ## Secrets
 
 | Secret | May live in | Must never appear in |
 |---|---|---|
-| `CVPILOT_TOKEN` (project token) | environment of the training process and CI (CI secret store), the `Authorization` header over TLS | logs, `Repro.command_line`, `Repro.config`, reports, the run store, URLs, `doctor` output |
-| Server token hashes | the file named by `CVPILOT_SERVER_TOKEN_HASHES` (SHA-256 of the token only) | the server database in clear text, logs, HTTP responses |
-| Telegram bot token, Slack and webhook URLs and token | environment of the training process (client-side delivery), read once when the channel is built | logs, alert messages, error text, `repr`, the run store, the alert configuration file |
-| Tracker credentials (`MLFLOW_TRACKING_TOKEN`, `WANDB_API_KEY`, the tracker's own variables) | the training process's environment, read by the tracker SDK only | CV-Pilot configuration, logs (exception text of an adapter is never logged, only its type), the run store, URLs |
-| Cloud credentials for fsspec | the backend's own mechanism (instance role, `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`) | CV-Pilot configuration, logs, manifests |
-| Share links | server database (random 32-byte token, expiry ≤ 7 days) | logs |
+| `CVPILOT_CKPT_KEY` | The process environment, a CI secret | Logs, manifests, errors, the run store |
+| Alert URLs and tokens | The process environment, read once when the channel is built | Logs, alert text, `repr`, the run store, the alert config file |
+| Tracker credentials (`MLFLOW_TRACKING_TOKEN`, `WANDB_API_KEY`, ...) | The environment, read by the tracker SDK only | CV-Pilot settings, logs, the run store, URLs |
+| Cloud credentials | The backend's own mechanism (instance role, `AWS_*`) | CV-Pilot settings, logs, manifests |
 
-Key-based redaction in `logging.py` already covers keys ending in `token`, `password`,
-`api_key`, `jwt`, `authorization`. The alert channels never put a URL or a token into a field at all (events carry the channel name, the rule and the run id), so redaction by key is a second line of defence. Free-text
-fields are never used for secrets.
+Logging also redacts keys ending in `token`, `password`, `api_key`, `jwt` and `authorization`. That is
+a second line of defence: alert channels never put a URL or token into a field at all.
 
-## Optional extras
+## Extras and hardware
 
-| Extra | Unlocks | Dependencies added | Hardware |
-|---|---|---|---|
-| `cvpilot[lightning]` | Lightning logger and callback hook (`autolog(trainer, ...)`) | `lightning` (brings `torch`) | GPU recommended for training; CPU works for tests |
-| `cvpilot[safetensors]` | save and load checkpoints (the default format) | `safetensors` | none |
-| `cvpilot[remote-s3]`, `cvpilot[remote-gcs]`, `cvpilot[remote-azure]` | checkpoint mirror to object storage for that scheme | `fsspec` and `s3fs`, `gcsfs` or `adlfs` | none |
-| `cvpilot[remote]` | the `fsspec` library only, for a backend you install yourself | `fsspec` | none |
-| `cvpilot[mlflow]`, `cvpilot[wandb]`, `cvpilot[trackio]` | forwarder to that tracker (`init(forward_to=["mlflow"])`) | `mlflow-skinny`, `wandb`, `trackio` | none |
-| `cvpilot[hf]` | Hugging Face `Trainer` callback (`autolog(trainer, ...)`): `train/` and `eval/` scalars, saves as events, the end of training | `transformers[torch]` (brings `torch`) | GPU recommended |
-| `cvpilot[mmengine]` | MMEngine `Runner` hook (`autolog(runner, ...)` or `MMEngineHook(interval=...).attach(runner, run)`): `train/` scalars every `interval` iterations, `val/` and `test/` metrics, the end of the run; no resume helper | `mmengine` (needs `torch` and `opencv-python`) | GPU recommended |
-| `cvpilot[rfdetr]` | RF-DETR hook (`autolog(model, ...)` on an `RFDETRNano`, `RFDETRBase`, ...): every scalar the framework logs, the end of `train`; no resume helper | `rfdetr` (Apache-2.0) and its training dependencies (`pytorch-lightning`, `torchmetrics`, `peft`, COCO evaluators, `scipy`, `simplejpeg`, `torch-hungarian`; `supervision` brings PyAV, whose wheels bundle FFmpeg under the LGPL), without the framework's `roboflow` upload client | GPU recommended; the published weights are downloaded by the framework (Nano: Apache-2.0) |
-| `cvpilot[ultralytics]` | Ultralytics callbacks (`autolog(YOLO(...))`), scalars and per-class AP; `resume_arguments(point)` for the `resume=` target of a verified `pt` file (experimental: the framework's own `last.pt` is refused by the strict scan, see ADR-0010; confusion capture is planned) | `ultralytics` (AGPL-3.0, brings `torch`) | GPU recommended |
-
-The alert channels need no extra (they use the standard library). Planned, and deliberately not published as extras until they install something: the server (`fastapi`, `uvicorn`, `sqlalchemy`,
-`asyncpg`). A test fails if a published extra is empty or if the documentation tells you to install
-an extra that does not exist.
-
-Notice for `cvpilot[ultralytics]`: `ultralytics` is AGPL-3.0. It is imported only inside
-`hooks/ultralytics.py`, and that module does not import it at all: the hook receives the model
-through `add_callback`. No Ultralytics code is vendored. Installing and using this extra makes
-the user's combined work subject to AGPL-3.0; the notice is repeated in the hook docstring and
-in the `license_notice` field of the `hook_attached` event that `autolog` logs. The core package and every other extra
-stay Apache-2.0.
-
-The eval engine runs on CPU with the core package (`numpy`, `pyarrow`; `pycocotools` only for
-parity tests); checkpoints need the optional `safetensors` (`cvpilot[safetensors]`), the mirror `fsspec` (`cvpilot[remote]`); verifying a checkpoint (size, structure, SHA-256, chain) needs neither. The framework
-is needed only for the opt-in `pt` format and is never imported on the safetensors path.
-GPU telemetry requires an NVIDIA driver and `pynvml`; without them the sampler logs
-`nvml_unavailable` once at `INFO` and stays idle.
+The evaluation engine runs on CPU with the core package. Checkpoints need `cvpilot[safetensors]`.
+Verifying a checkpoint (size, structure, SHA-256, chain) needs no extra, and the framework is needed
+only for the opt-in `pt` format. The extras are listed on the [install page](../guide/install.md#extras).
+GPU hooks need a GPU for training and nothing else from CV-Pilot.
