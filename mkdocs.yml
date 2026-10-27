@@ -45,19 +45,19 @@ nav:
       - Alerts: guide/alerts.md
       - Spot instances with SkyPilot: guide/skypilot.md
   - Tutorial: tutorial.md
-  - What is built and planned: status.md
+  - Project status: status.md
   - Reference:
       - Command line: reference/cli.md
       - Python API: reference/api.md
       - Settings and exit codes: reference/settings.md
   - Architecture:
       - Overview: architecture/README.md
-      - Context and scope: architecture/01-overview.md
+      - Scope and context: architecture/01-overview.md
       - Components: architecture/02-components.md
       - Data model: architecture/03-data-model.md
       - Flows: architecture/04-flows.md
-      - Runtime and configuration: architecture/05-runtime.md
-      - Cross-cutting concerns: architecture/06-cross-cutting.md
+      - Runtime: architecture/05-runtime.md
+      - Cross-cutting: architecture/06-cross-cutting.md
   - Decisions:
       - ADR template: adr/0000-template.md
       - ADR-0001 Scope and license: adr/0001-scope-and-license.md

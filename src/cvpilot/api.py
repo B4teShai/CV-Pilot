@@ -313,7 +313,7 @@ def autolog(
 
     ``init_kwargs`` are passed to :func:`init` (``task`` is required). The hook's callbacks never
     raise into or block the framework. The YOLO framework's hook is an AGPL-3.0 extra: the notice is
-    in the ``hook_attached`` event and in docs/architecture/05-runtime.md.
+    in the ``hook_attached`` event and in docs/guide/install.md.
 
     Raises:
         HookNotFoundError: no installed hook matches ``type(target)``.

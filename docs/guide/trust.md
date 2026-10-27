@@ -96,12 +96,11 @@ A gate that reads a store a pull request controls is only as strong as that stor
 baselines carry hashes checked on every read, but nothing is signed. The outside anchor is
 `--expect-baseline-chain`. See [Gating in CI](gating-ci.md).
 
-## What is proven
+## What has been checked
 
-Checked on files from real training runs: size and SHA-256 checks with refusal of a flipped byte, a
-truncation and a foreign file; the `anchored` and `authenticated` levels; and the strict reader.
-Experimental, never run against the real thing: the S3, GCS and Azure mirror, the AWS and GCP
-preemption pollers, `local_chain_only` on real framework files and network file systems.
+Size and SHA-256 checks, the `anchored` and `authenticated` levels and the strict reader were run on
+files from real training runs, including refusal of a flipped byte, a truncation and a foreign file.
+The [status page](../status.md) says which parts have not met a real service or file system.
 
 ## Appendix: error codes
 

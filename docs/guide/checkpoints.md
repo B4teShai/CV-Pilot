@@ -157,7 +157,7 @@ by `close()`.
 save verified: data first, size and SHA-256 read back, the manifest last. TLS is on, timeouts are
 bounded, and credentials come from the backend's own environment, never from the URL. A failed
 upload is logged (`checkpoint_upload_failed`) and retried by a later save. It never stops training.
-This path is [experimental](../status.md).
+How well it has been tested is on the [status page](../status.md).
 
 ## Frameworks that write their own files
 

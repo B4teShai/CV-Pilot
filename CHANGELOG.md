@@ -5,6 +5,21 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation rewritten to be shorter and readable by someone who has never used the tool: about
+  58,000 words became about 38,000. The glossary in `docs/guide/concepts.md` defines each term once,
+  `docs/status.md` is the only page that says what is built, the architecture pages answer one
+  question each, and the components and context diagrams are rewritten (the containers,
+  system-context and runtime diagrams were dropped). The built site now renders code blocks that
+  carry test markers (`notest`, `file=`, `expect`).
+- Measured numbers that used to sit in `docs/architecture/01-overview.md`: evaluation parity with
+  pycocotools had a maximum difference of 0 on the 12 summary metrics and on per-class AP, AP50 and
+  AR100. Evaluating 5,000 images with 100,000 detections took 0.67 s (1,000 bootstrap resamples added
+  2.1 s on 4 threads) and `cvpilot eval` end to end took 3.4 s. `cvpilot gate` took 0.27 s with 81 MB
+  peak memory on a 5,000-image snapshot. Logging 50 scalars took 0.17 ms at p95, and 100,000 points
+  took 0.5 s. All on macOS arm64; the checkpoint save numbers are in ADR-0010.
+
 ### Added (Phase 7: works from a clone, crash safety under real kills, RF-DETR)
 
 - Install from a clone: the README quick start and the install guide no longer say `pip install

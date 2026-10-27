@@ -6,7 +6,7 @@ This package stays Apache-2.0 because it neither contains nor imports framework 
 only receives the framework's own objects through ``add_callback`` and never imports the package
 (an import, if one is ever needed, belongs inside a function of this module and nowhere else).
 The notice is repeated in ``LICENSE_NOTICE``, in the ``hook_attached`` event and in
-docs/architecture/05-runtime.md.
+docs/guide/install.md.
 
 ``YoloHook.attach(model, sink)`` registers ``on_fit_epoch_end`` (scalars and per-class AP
 of the epoch, step = epoch; metrics only for epochs in which ``on_val_end`` fired, because the
