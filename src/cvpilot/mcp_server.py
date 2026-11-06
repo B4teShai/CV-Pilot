@@ -159,7 +159,11 @@ def comparison_summary(cmp: Comparison, top_k: int) -> dict[str, Any]:
     """Bounded view of a comparison: refs, every headline delta, the worst classes and slices."""
     from cvpilot.compare.report import report_dict
 
-    full = report_dict(cmp)
+    return report_summary(report_dict(cmp), top_k)
+
+
+def report_summary(full: dict[str, Any], top_k: int) -> dict[str, Any]:
+    """The same bounded view from a ``--json`` report of ``cvpilot compare`` or ``gate``."""
     per_class = [row for rows in full["per_class"].values() for row in rows]
     confusion = full.get("confusion") or {}
     return {
@@ -187,6 +191,52 @@ def _cli(args: list[str], settings: Settings) -> tuple[int, str, str]:
         env={**os.environ, "CVPILOT_LOG_LEVEL": "WARNING"},
     )
     return done.returncode, done.stdout, done.stderr
+
+
+def _gate_recompute(
+    settings: Settings,
+    project: str,
+    run_id: str,
+    baseline: str,
+    gt: Path,
+    classes: Path,
+    max_drop: list[str],
+    per_class_max_drop: list[str] | None,
+    slice_max_drop: list[str] | None,
+    min_images: int,
+    skip_small_slices: bool,
+    max_skipped: int,
+    eval_set: str | None,
+    step: int | None,
+    top_k: int,
+) -> dict[str, Any]:
+    """``cvpilot gate --recompute --json`` in a child process; exit 1 is a verdict, 2 a refusal."""
+    args = ["gate", run_id, "--project", project, "--baseline", baseline, "--recompute",
+            "--gt", str(gt), "--classes", str(classes), "--min-images", str(min_images),
+            "--max-skipped", str(max_skipped), "--json"]  # fmt: skip
+    for flag, values in (("--max-drop", max_drop), ("--per-class-max-drop", per_class_max_drop),
+                         ("--slice-max-drop", slice_max_drop)):  # fmt: skip
+        for value in values or []:
+            args += [flag, value]
+    if skip_small_slices:
+        args.append("--skip-small-slices")
+    if eval_set:
+        args += ["--eval-set", eval_set]
+    if step is not None:
+        args += ["--step", str(step)]
+    code, out, err = _cli(args, settings)
+    report = None
+    for line in reversed(out.splitlines()):
+        if line.startswith("{"):
+            report = json.loads(line)
+            break
+    if code not in (0, 1) or report is None or report.get("gate") is None:
+        reason = err.strip().splitlines()[-1] if err.strip() else f"exit {code}"
+        raise Refused(scrub(safe_text(reason, 300)))
+    verdict = report["gate"]
+    verdict["violations"] = verdict["violations"][:MAX_LIMIT]
+    return {"passed": bool(verdict["passed"]), "gate": verdict,
+            "comparison": report_summary(report, top_k)}  # fmt: skip
 
 
 def _register_read(server: MCPServer, paths: Paths, read: ToolAnnotations) -> None:
@@ -368,15 +418,18 @@ def _register_read(server: MCPServer, paths: Paths, read: ToolAnnotations) -> No
                 skip_small_slices=skip_small_slices,
                 max_skipped=max_skipped,
             )
-            spec = None
+            name = _project(settings, project)
             if gt is not None and classes is not None:
-                from cvpilot.compare.recompute import RecomputeSpec
-                from cvpilot.eval.files import read_class_names
-
-                spec = RecomputeSpec(paths.existing(gt), read_class_names(paths.existing(classes)))
+                # Re-evaluating loads the ground truth: run it as the command line does, in a child
+                # process under the CLI's memory ceiling, never inside this long-lived server.
+                return _gate_recompute(
+                    settings, name, run_id.upper(), baseline, paths.existing(gt),
+                    paths.existing(classes), max_drop, per_class_max_drop, slice_max_drop,
+                    min_images, skip_small_slices, max_skipped, eval_set, step, top_k,
+                )  # fmt: skip
             outcome = service.run_gate(
-                _project(settings, project), run_id.upper(), baseline, thresholds,
-                eval_set=eval_set, step=step, store_dir=settings.store_dir, recompute=spec,
+                name, run_id.upper(), baseline, thresholds,
+                eval_set=eval_set, step=step, store_dir=settings.store_dir,
             )  # fmt: skip
             service.log_gate(outcome)
             verdict = gate_dict(outcome.result, thresholds)

@@ -256,3 +256,35 @@ def test_the_command_serves_the_server(invoke: Invoke, monkeypatch: pytest.Monke
     served: list[bool] = []
     monkeypatch.setattr("cvpilot.mcp_server.main", lambda: served.append(True))
     assert invoke("mcp").code == 0 and served == [True]
+
+
+def test_a_recompute_gate_runs_in_a_child_process_under_the_cli_memory_limit(
+    server: Any,
+    invoke: Invoke,
+    store_root: Path,
+    tmp_path: Path,
+    baseline_run: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-evaluation loads the ground truth: it must never run inside the long-lived server."""
+    import cvpilot.compare.service as service
+
+    def in_process(*a: Any, **kw: Any) -> None:
+        if kw.get("recompute") is not None:
+            raise AssertionError("recompute ran inside the server process")
+
+    monkeypatch.setattr(service, "run_gate", in_process)  # the child process imports its own copy
+    same = evaluate_into(invoke, store_root, tmp_path / "same")
+    gts, classes = tmp_path / "same" / "g.parquet", tmp_path / "same" / "c.txt"
+    assert gts.is_file() and classes.is_file()
+    error, out = call(
+        server, "gate", run_id=same, baseline="tag:prod", max_drop=["mAP50_95=0.5"],
+        min_images=20, gt=str(gts), classes=str(classes),
+    )  # fmt: skip
+    assert not error, out
+    assert out["passed"] is True and out["comparison"]["candidate"]["run_id"] == same
+    error, text = call(
+        server, "gate", run_id=same, baseline="tag:missing", max_drop=["mAP50_95=0.5"],
+        gt=str(gts), classes=str(classes),
+    )  # fmt: skip
+    assert error  # the child's refusal (exit 2 or no report) is a tool error
