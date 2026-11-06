@@ -62,13 +62,53 @@ def test_a_url_or_path_name_is_kept_as_given_and_never_read() -> None:
         ("", DIGEST, "must name the dataset"),
         ("x" * 1025, DIGEST, "longer than"),
         ("fridge\n@1.4.0", DIGEST, "control characters"),
-        ("https://user:pw@example.com/fridge@1.4.0", DIGEST, "credentials"),
-        ("s3://key@bucket/fridge", DIGEST, "credentials"),
+        ("https://user:pw@example.com/fridge@1.4.0", DIGEST, "user information"),
+        ("s3://key@bucket/fridge", DIGEST, "user information"),
+        ("//user:pass@host/x", DIGEST, "user information"),  # scheme-relative
+        ("//user@host/x", DIGEST, "user information"),
+        ("duvas://studio-skus@1.1.0", DIGEST, "scheme://name/version"),  # ambiguous: refused
+        ("alice@fileserver:/datasets/fridge", DIGEST, "login"),  # scp-style user@host
+        ("ssh://alice@fileserver/datasets/fridge", DIGEST, "user information"),
+        (
+            "https://bucket.s3.amazonaws.com/m.parquet?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=AKIDEXAMPLE%2F20261106&X-Amz-Signature=deadbeef"
+            "&X-Amz-Security-Token=FAKE",
+            DIGEST,
+            "query or fragment",
+        ),
+        (
+            "https://storage.googleapis.com/b/m.parquet?X-Goog-Algorithm=GOOG4-RSA-SHA256"
+            "&X-Goog-Signature=0f0f",
+            DIGEST,
+            "query or fragment",
+        ),
+        (
+            "https://acct.blob.core.windows.net/c/m.parquet?sp=r&se=2026-12-01&sig=FAKE%3D",
+            DIGEST,
+            "query or fragment",
+        ),
+        ("https://example.com/fridge#sig=FAKE", DIGEST, "query or fragment"),
+        ("https://example.com/fridge?", DIGEST, "query or fragment"),
+        ("http://[::1/x", DIGEST, "not a valid URL"),
     ],
 )
 def test_invalid_external_identities_are_refused(uri: str | None, digest: str, match: str) -> None:
     with pytest.raises(ValueError, match=match):
         external_dataset(uri, digest)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "studio-skus@1.1.0",  # the registry's own name@version form
+        "duvas://studio-skus/1.1.0",  # a URL spelling: the version is in the path
+        "s3://bucket/datasets/fridge@1.4.0",  # '@' in the path, not in the authority
+        "/data/fridge-sku/1.4.0",
+        "alice@fileserver",  # a name; it holds no secret and is no login without :path
+    ],
+)
+def test_clean_names_are_kept_as_given(uri: str) -> None:
+    assert external_dataset(uri, DIGEST) == (uri, DIGEST)
 
 
 def test_init_refuses_an_invalid_identity_before_creating_a_run(tmp_path: Path) -> None:

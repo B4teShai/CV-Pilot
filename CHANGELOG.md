@@ -21,7 +21,10 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 - `init(dataset_uri="fridge-sku@1.4.0", dataset_hash="sha256:<hex>")` records a dataset identity
   computed by another tool (for example the SHA-256 of a registry's `manifest.parquet`) without
   reading anything; `Repro` and checkpoint manifests accept `sha256:<64 hex>` next to `dcp:` and
-  `merkle:`.
+  `merkle:`. The name is refused when it could hold a secret: URL user information (scheme-relative
+  `//` included, checked with `urlsplit`), a URL query or fragment (presigned S3, GCS and Azure SAS
+  URLs) or an scp-style `user@host:path`. A URL spelling of `name@version` is
+  `scheme://name/version`.
 - `Run.task`. The YOLO hook refuses to attach a model whose task contradicts the run's (an `obb`
   model in a `detection` run).
 

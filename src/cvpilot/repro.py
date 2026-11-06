@@ -12,6 +12,7 @@ import shlex
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
+from urllib.parse import urlsplit
 
 from cvpilot.core.hashing import dataset_hash as compute_dataset_hash
 from cvpilot.core.jsonable import to_jsonable
@@ -22,19 +23,50 @@ from cvpilot.runs.queries import RunView
 _EMPTY_DATASET_HASH = "merkle:" + hashlib.sha256(b"").hexdigest()
 MAX_DATASET_URI = 1024
 """Longest ``dataset_uri`` recorded with an externally computed ``dataset_hash``."""
-_USERINFO = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@")
+_REMOTE_SPEC = re.compile(r"^[^/@:\s]+@[^/:\s]+:")
+"""``user@host:path`` (scp style): a login, not a dataset name."""
+
+
+def _check_dataset_name(uri: str) -> None:
+    """Refuse a dataset name that could carry a credential.
+
+    A URL (``scheme://...`` or scheme-relative ``//...``) must have no user information in its
+    authority and no query or fragment: presigned and SAS URLs carry their signature there, and a
+    dataset identity needs neither. ``name@version`` without a scheme is a name; a URL spelling of
+    it must put the version in the path (``duvas://fridge-sku/1.4.0``), because
+    ``duvas://fridge-sku@1.4.0`` cannot be told apart from ``scheme://user@host``.
+    """
+    if "://" in uri or uri.startswith("//"):
+        try:
+            parts = urlsplit(uri)
+            has_user = parts.username is not None or parts.password is not None
+        except ValueError:
+            raise ValueError("dataset_uri is not a valid URL") from None
+        if has_user or "@" in parts.netloc:
+            raise ValueError(
+                "dataset_uri must not carry user information (user@ or user:password@); "
+                "write a versioned name as name@version or scheme://name/version"
+            )
+        if parts.query or parts.fragment or "?" in uri or "#" in uri:
+            raise ValueError(
+                "dataset_uri must not carry a query or fragment (signed URLs keep their "
+                "credentials there); name the dataset without them"
+            )
+    elif _REMOTE_SPEC.match(uri):
+        raise ValueError("dataset_uri must not carry a login (user@host:path)")
 
 
 def external_dataset(dataset_uri: str | None, dataset_hash: str) -> tuple[str, str]:
     """Check a dataset identity computed outside CV-Pilot and return ``(uri, hash)``.
 
     ``dataset_hash`` must be ``sha256:<64 lower-case hex>`` (for example the SHA-256 of a dataset
-    registry's manifest file); ``dataset_uri`` names the dataset (``fridge-sku@1.4.0``, a URL, a
-    path) and is recorded as given, not read.
+    registry's manifest file); ``dataset_uri`` names the dataset (``fridge-sku@1.4.0``,
+    ``duvas://fridge-sku/1.4.0``, a URL without credentials or query, a path) and is recorded as
+    given, not read. Nothing in it is redacted: a value that could hold a secret is refused.
 
     Raises:
         ValueError: the hash is not ``sha256:<hex>``, or the name is missing, too long, holds
-            control characters or carries credentials in a URL.
+            control characters, user information, a login, or a URL query or fragment.
     """
     if not dataset_hash.startswith("sha256:"):
         raise ValueError('an external dataset_hash must be "sha256:<64 lower-case hex>"')
@@ -45,8 +77,7 @@ def external_dataset(dataset_uri: str | None, dataset_hash: str) -> tuple[str, s
         raise ValueError(f"dataset_uri is longer than {MAX_DATASET_URI} characters")
     if any(ord(c) < 32 or ord(c) == 127 for c in dataset_uri):
         raise ValueError("dataset_uri contains control characters")
-    if _USERINFO.match(dataset_uri):
-        raise ValueError("dataset_uri must not carry credentials (user@ or user:password@)")
+    _check_dataset_name(dataset_uri)
     return dataset_uri, dataset_hash
 
 

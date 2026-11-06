@@ -95,9 +95,12 @@ run = cvpilot.init("fridge-sku", task="obb", dataset_uri="fridge-sku@1.4.0",
                    dataset_hash="sha256:" + manifest_sha256)   # 64 lower-case hex characters
 ```
 
-`dataset_hash` must then be `sha256:<64 hex>`, and `dataset_uri` must name the dataset (at most
-1,024 characters, no control characters, no credentials in a URL). The pair is copied into every
-checkpoint manifest of the run.
+`dataset_hash` must then be `sha256:<64 hex>`, and `dataset_uri` must name the dataset: at most
+1,024 characters, no control characters, no `user@host:path` login, and as a URL no user
+information and no query or fragment (signed S3, GCS and Azure URLs keep their credentials there, so
+they are refused, never stored). Write a versioned name as `fridge-sku@1.4.0` or, as a URL,
+`duvas://fridge-sku/1.4.0`: `duvas://fridge-sku@1.4.0` is refused because it reads as
+`scheme://user@host`. The pair is copied into every checkpoint manifest of the run.
 
 ## Trackers and training frameworks
 
