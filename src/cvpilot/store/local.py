@@ -162,9 +162,15 @@ class LocalRunStore:
         except sqlite3.Error as exc:
             raise StoreError(f"cannot open {db} read-only: {exc}") from exc
         target = _migrations.discover()[-1].version if _migrations.discover() else 0
-        if version != target:
+        if version > target:
             conn.close()
             raise StoreVersionError(version, target)
+        if version < target:
+            conn.close()
+            raise StoreError(
+                f"store schema version {version} is older than {target}; open the project once "
+                "with a command that writes (any run or eval) to migrate it"
+            )
         return cls(path, conn, version)
 
     @staticmethod
@@ -216,6 +222,10 @@ class LocalRunStore:
 
     @staticmethod
     def _migrate(conn: sqlite3.Connection, available: list[_migrations.Migration]) -> int:
+        """Apply the pending migrations in one transaction. Foreign keys are not enforced while
+        they run (a table rebuild drops and renames a parent table), and checked before the
+        commit: any dangling reference rolls everything back."""
+        conn.execute("PRAGMA foreign_keys=OFF")  # a no-op inside a transaction: set before it
         conn.execute("BEGIN IMMEDIATE")
         try:
             current = LocalRunStore._read_version(conn)  # another process may have migrated
@@ -238,10 +248,14 @@ class LocalRunStore:
                     (str(step.version),),
                 )
                 current = step.version
+            if conn.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise StoreError("a migration left rows that reference a missing run")
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")
             raise
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
         return current
 
     @property

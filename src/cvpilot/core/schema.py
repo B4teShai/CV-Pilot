@@ -33,10 +33,21 @@ from cvpilot.core.uri import parse_remote_uri
 if TYPE_CHECKING:
     import numpy as np
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+"""The store schema this library writes: the latest migration in ``store/migrations``."""
 
 RunStatus = Literal["running", "resumed", "finished", "failed", "preempted"]
-Task = Literal["detection", "classification"]
+Task = Literal["detection", "classification", "obb"]
+"""``obb``: oriented bounding boxes (four corners), evaluated like detection (ADR-0013)."""
+IouType = Literal["box", "polygon", "probiou"]
+"""How detections and boxes are overlapped: ``box`` (axis-aligned, detection and
+classification), ``polygon`` (exact polygon IoU) or ``probiou`` (probabilistic IoU) for ``obb``."""
+IOU_TYPES: dict[str, tuple[str, ...]] = {
+    "detection": ("box",),
+    "classification": ("box",),
+    "obb": ("polygon", "probiou"),
+}
+"""The IoU types each task accepts; the first is the default."""
 ArtifactKind = Literal[
     "checkpoint", "report", "predictions", "confusion", "config", "env", "image", "diff"
 ]

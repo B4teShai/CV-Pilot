@@ -35,6 +35,7 @@ from cvpilot.core.errors import (
 )
 from cvpilot.core.schema import (
     MAX_STEP,
+    SCHEMA_VERSION,
     Alert,
     Artifact,
     ArtifactKind,
@@ -581,7 +582,7 @@ def resume_from(parent: RunMeta, *, run_id: str, host: str, name: str | None) ->
         framework=parent.framework,
         host=host,
         started_at=max(datetime.now(timezone.utc), parent.started_at),
-        schema_version=parent.schema_version,
+        schema_version=SCHEMA_VERSION,  # the row is written now, by this library
     )
 
 

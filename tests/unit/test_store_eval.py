@@ -199,7 +199,7 @@ def test_stores_from_before_eval_get_the_table_on_open_and_keep_their_version(
     s.close()
     again = open_store("p", tmp_path)
     try:
-        assert again.schema_version == 1
+        assert again.schema_version == SCHEMA_VERSION
         assert again._conn.execute("SELECT COUNT(*) FROM eval_snapshot").fetchone() == (0,)
     finally:
         again.close()

@@ -120,13 +120,13 @@ def weights(seed: str, step: int, width: int) -> Any:
 def new_run(store: Path) -> Any:
     from cvpilot import runs
     from cvpilot.core.hashing import new_run_id
-    from cvpilot.core.schema import Repro, RunMeta
+    from cvpilot.core.schema import SCHEMA_VERSION, Repro, RunMeta
 
     run_id = new_run_id()
     meta = RunMeta(
         run_id=run_id, project=PROJECT, name="chaos", status="running", task="detection",
         framework="python==3.12.1", host="h", started_at=datetime.now(timezone.utc),
-        schema_version=1,
+        schema_version=SCHEMA_VERSION,
     )  # fmt: skip
     repro = Repro(
         run_id=run_id, git_dirty=False, packages_lock_sha256="0" * 64, python_version="3",

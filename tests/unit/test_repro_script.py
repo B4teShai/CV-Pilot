@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from cvpilot.core.hashing import new_run_id
-from cvpilot.core.schema import MetricStats, Repro, RunMeta
+from cvpilot.core.schema import SCHEMA_VERSION, MetricStats, Repro, RunMeta
 from cvpilot.repro import script
 from cvpilot.runs.queries import RunView
 
@@ -25,7 +25,7 @@ def view(tmp_path: Path, **repro_over: Any) -> RunView:
         host="h",
         started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         ended_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
-        schema_version=1,
+        schema_version=SCHEMA_VERSION,
     )
     base: dict[str, Any] = {
         "run_id": rid,
