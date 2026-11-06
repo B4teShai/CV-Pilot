@@ -5,7 +5,8 @@ ids out of range, mismatched image sets, boxes outside the image, slice cardinal
 or oversized Parquet), the snapshot already exists or the store cannot be written; 2 usage or
 configuration error (no project, malformed run id, missing file, bad ``--slices`` syntax or a
 number out of range). Snapshots are immutable: repeating an evaluation of the same set at the
-same ``--step`` fails. File formats: see ``cvpilot.eval.files``.
+same ``--step`` fails. File formats: see ``cvpilot.eval.files``. ``--iou-type`` applies to runs
+of task ``obb`` only (``polygon`` by default, or ``probiou``); a detection run refuses it.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json
 import re
 import sys
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
@@ -21,6 +23,12 @@ import typer
 
 from cvpilot.cli.runs_cmds import JsonOpt, ProjectOpt, RunIdArg, _project
 from cvpilot.core.schema import MAX_RESAMPLES, MAX_STEP, EvalSnapshot
+
+
+class IouTypeOption(str, Enum):
+    polygon = "polygon"
+    probiou = "probiou"
+
 
 DEFAULT_MAX_MEMORY_MB = 8192
 """Default address-space ceiling of ``cvpilot eval`` (8 GiB); ``0`` turns it off."""
@@ -97,6 +105,8 @@ def _headline(snapshot: EvalSnapshot) -> list[str]:
         f"step: {snapshot.step}",
         f"n_images: {snapshot.n_images}",
     ]
+    if snapshot.task == "obb" and snapshot.params is not None:
+        lines.append(f"iou_type: {snapshot.params.iou_type}")
     for name, value in snapshot.metrics.items():
         interval = snapshot.ci.get(name)
         suffix = f" [{interval[0]:.4f}, {interval[1]:.4f}]" if interval else ""
@@ -166,6 +176,13 @@ def eval_command(
     git_commit: Annotated[
         str | None, typer.Option("--git-commit", callback=_commit, help="Commit of the code.")
     ] = None,
+    iou_type: Annotated[
+        IouTypeOption | None,
+        typer.Option(
+            "--iou-type",
+            help="Oriented boxes (task obb): polygon IoU (default) or probiou.",
+        ),
+    ] = None,
     as_json: JsonOpt = False,
 ) -> None:
     """Evaluate Parquet files into a run and store an immutable snapshot."""
@@ -186,6 +203,7 @@ def eval_command(
         allow_closed=allow_closed,
         provenance={"checkpoint_sha256": checkpoint_sha256, "git_commit": git_commit},
         store_dir=ctx.obj.store_dir,
+        iou_type=None if iou_type is None else iou_type.value,
     )
     if as_json:
         typer.echo(json.dumps(json.loads(snapshot.model_dump_json())))

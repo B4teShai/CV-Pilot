@@ -93,12 +93,14 @@ class Run:
         seed: int = 0,
         level: float = 0.95,
         provenance: Mapping[str, str | None] | None = None,
+        iou_type: str | None = None,
     ) -> EvalSnapshot:
         """Evaluate predictions against ground truth and store an immutable snapshot.
 
         Args:
             preds, gts: ``cvpilot.eval.PredictionTable`` and ``AnnotationTable``; the run's
-                task decides between detection and top-1 classification.
+                task decides between detection, oriented boxes (``obb``, four corners per
+                box) and top-1 classification.
             step: the training step the predictions come from.
             class_names: names by class id; when omitted, ``["0", "1", ...]`` up to the largest
                 ground-truth class id (predictions with a higher id are rejected).
@@ -106,6 +108,9 @@ class Run:
             n_resamples, seed, level: bootstrap intervals over images (``0`` turns them off).
             provenance: optional ``{"checkpoint_sha256": ..., "git_commit": ...}`` stored in
                 the snapshot.
+            iou_type: for ``obb`` runs, ``"polygon"`` (exact polygon IoU, the default) or
+                ``"probiou"`` (the probabilistic IoU the YOLO-OBB validator matches with).
+                Snapshots with different IoU types are never compared.
 
         Raises:
             EvalInputError: the inputs fail validation.
@@ -122,6 +127,7 @@ class Run:
             seed=seed,
             level=level,
             provenance=provenance,
+            iou_type=iou_type,
         )
 
     def finish(self, status: Literal["finished", "failed", "preempted"] = "finished") -> None:
@@ -173,7 +179,7 @@ def init(
     Args:
         project: store directory name, ``[a-z0-9][a-z0-9_-]{0,63}``; defaults to
             ``CVPILOT_PROJECT``.
-        task: ``"detection"`` or ``"classification"``.
+        task: ``"detection"``, ``"obb"`` (oriented boxes) or ``"classification"``.
         config: resolved training config; secrets are redacted by key before storage.
         dataset_uri: local dataset directory hashed into ``Repro.dataset_hash``; with
             ``dataset_hash`` it only names the dataset (``fridge-sku@1.4.0``, a URL) and is
@@ -447,6 +453,7 @@ def log_eval(
     seed: int = 0,
     level: float = 0.95,
     provenance: Mapping[str, str | None] | None = None,
+    iou_type: str | None = None,
 ) -> EvalSnapshot:
     """Evaluate and store a snapshot on the active run; see :meth:`Run.log_eval`."""
     return _require_active().log_eval(
@@ -459,6 +466,7 @@ def log_eval(
         seed=seed,
         level=level,
         provenance=provenance,
+        iou_type=iou_type,
     )
 
 

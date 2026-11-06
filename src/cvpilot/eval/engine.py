@@ -1,6 +1,8 @@
 """``evaluate``: validated inputs in, an :class:`EvalResult` out. Deterministic and CPU-only.
 
 Detection follows the COCO protocol (``cvpilot.core.metrics``); classification is top-1.
+Oriented boxes (task ``obb``) follow the same protocol with the IoU type recorded in the
+parameters: exact polygon IoU (default) or probabilistic IoU (``cvpilot.core.obb``, ADR-0013).
 Metric values are fractions in ``[0, 1]``. Undefined metrics are left out of the result.
 """
 
@@ -13,11 +15,20 @@ import numpy as np
 
 from cvpilot.core import confusion as cf
 from cvpilot.core import metrics as m
+from cvpilot.core import obb
 from cvpilot.core.errors import EvalInputError
 from cvpilot.core.hashing import eval_set_hash as _hash
 from cvpilot.core.hashing import slice_hash as _slice_hash
 from cvpilot.core.metrics import I64, BoolArray
-from cvpilot.core.schema import BootstrapInfo, CiStatus, EvalParams, EvalSnapshot, Task
+from cvpilot.core.schema import (
+    IOU_TYPES,
+    BootstrapInfo,
+    CiStatus,
+    EvalParams,
+    EvalSnapshot,
+    IouType,
+    Task,
+)
 from cvpilot.eval import bootstrap as bs
 from cvpilot.eval import slices as sl
 from cvpilot.eval import tables as t
@@ -132,6 +143,28 @@ def _thresholds(values: Sequence[float] | None) -> m.F64:
     return arr
 
 
+def resolve_iou_type(task: Task, iou_type: str | None) -> IouType:
+    """The IoU type of an evaluation: the task's default when ``None``.
+
+    Raises:
+        EvalInputError: the task is unknown or does not accept ``iou_type``.
+    """
+    allowed = IOU_TYPES.get(task)
+    if allowed is None:
+        raise EvalInputError(f"unknown task {task!r}")
+    chosen = allowed[0] if iou_type is None else iou_type
+    if chosen not in allowed:
+        raise EvalInputError(
+            f"iou_type {chosen!r} does not apply to task {task}; use one of {', '.join(allowed)}"
+        )
+    return chosen  # type: ignore[return-value]
+
+
+def geometry_for(iou_type: IouType) -> m.BoxGeometry:
+    """The box geometry that measures overlaps of ``iou_type``."""
+    return {"polygon": obb.POLYGON, "probiou": obb.PROBIOU}.get(iou_type, m.AXIS_ALIGNED)
+
+
 def _is_coco_grid(thresholds: m.F64) -> bool:
     return thresholds.size == 10 and bool(np.allclose(thresholds, m.coco_iou_thresholds()))
 
@@ -172,13 +205,15 @@ def evaluate(
     seed: int = 0,
     level: float = 0.95,
     workers: int = bs.DEFAULT_WORKERS,
+    iou_type: str | None = None,
 ) -> EvalResult:
     """Evaluate predictions against ground truth.
 
     Args:
         preds: detections (``image_id, class_id, score, boxes``) or top-1 labels.
         gts: ground-truth boxes or labels, with the image list.
-        task: ``"detection"`` or ``"classification"``.
+        task: ``"detection"``, ``"obb"`` (oriented boxes, four corners) or
+            ``"classification"``.
         class_names: names indexed by class id.
         slices: slice key -> image metadata column; each distinct value is one slice (bounded,
             see ``cvpilot.eval.slices``).
@@ -187,12 +222,15 @@ def evaluate(
         n_resamples: bootstrap resamples over images for the headline intervals (0 turns them
             off; at most ``MAX_RESAMPLES``); ``seed`` seeds them, ``level`` is the coverage and
             ``workers`` the threads (the result does not depend on it).
+        iou_type: ``"polygon"`` (default) or ``"probiou"`` for ``obb``; ``"box"`` otherwise.
+            Recorded in the parameters: snapshots with different IoU types never compare.
 
     Raises:
         EvalInputError: any input fails validation (see ``cvpilot.eval.validate``) or the set
             has no ground-truth objects to score.
     """
     names = t.check_class_names(class_names)
+    kind = resolve_iou_type(task, iou_type)
     thresholds = _thresholds(iou_thresholds)
     if not (0.0 < confusion_iou <= 1.0) or not (0.0 <= confusion_score <= 1.0):
         raise EvalInputError("confusion_iou must be in (0, 1] and confusion_score in [0, 1]")
@@ -206,7 +244,7 @@ def evaluate(
     if n_resamples != 0:
         bs.check_settings(n_resamples, level, seed)
     gt = prepare_ground_truth(gts, len(names), task)
-    if gt.n_images == 0 or (task == "detection" and not bool((~gt.ann_crowd).any())):
+    if gt.n_images == 0 or (task != "classification" and not bool((~gt.ann_crowd).any())):
         raise EvalInputError("no ground-truth objects to evaluate")
     plan = sl.plan_slices(slices, gt, len(preds) + len(gts))  # bounded before any metric
     pr = prepare_predictions(preds, gt, len(names), task)
@@ -226,7 +264,7 @@ def evaluate(
             )
     else:
         metrics, per_class, confusion, match = _detection(
-            gt, pr, names, thresholds, confusion_iou, confusion_score
+            gt, pr, names, thresholds, confusion_iou, confusion_score, geometry_for(kind)
         )
         ap_label = "mAP50_95" if _is_coco_grid(thresholds) else "mAP"
         for part in plan:
@@ -252,6 +290,7 @@ def evaluate(
         iou_thresholds=[float(v) for v in thresholds],
         confusion_iou=confusion_iou,
         confusion_score=confusion_score,
+        iou_type=kind,
     )
     membership = _slice_hash(dict(slices or {}), gt.image_ids.tolist(), gt.meta) if plan else None
     return EvalResult(
@@ -267,6 +306,7 @@ def _detection(
     thresholds: m.F64,
     confusion_iou: float,
     confusion_score: float,
+    geometry: m.BoxGeometry = m.AXIS_ALIGNED,
 ) -> tuple[dict[str, float], dict[str, dict[str, float]], I64, m.MatchResult]:
     n_classes = len(names)
     match = m.match_detections(
@@ -281,6 +321,7 @@ def _detection(
         n_classes=n_classes,
         iou_thresholds=thresholds,
         iscrowd=gt.ann_crowd,
+        geometry=geometry,
     )
     curves = m.accumulate(match)
     summary = m.summarize(curves, thresholds)
@@ -319,6 +360,7 @@ def _detection(
         iscrowd=gt.ann_crowd,
         iou=confusion_iou,
         score=confusion_score,
+        geometry=geometry,
     )
     return metrics, per_class, confusion, match
 

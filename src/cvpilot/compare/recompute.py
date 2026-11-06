@@ -115,6 +115,7 @@ def verify(store: RunStore, snapshot: EvalSnapshot, spec: RecomputeSpec) -> None
         confusion_iou=params.confusion_iou,
         confusion_score=params.confusion_score,
         n_resamples=0,
+        iou_type=params.iou_type,
     )
     if fresh.n_images != snapshot.n_images:
         raise _fail(snapshot, "n_images", "the image count differs")

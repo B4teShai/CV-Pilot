@@ -4,8 +4,11 @@ Checks, in the order they run: row counts, image ids (non-empty, short, no contr
 unique in the image list), every annotation and prediction image is part of the evaluation set,
 class ids inside ``[0, C)``, finite scores, finite ordered boxes, ground-truth boxes inside the
 image (when sizes are known), bounded boxes per image, and one label per image for
-classification. Each failure raises :class:`EvalInputError` naming the column and the first
-offending value (truncated).
+classification. Oriented boxes (task ``obb``) must have eight corner coordinates forming a convex
+quadrilateral, carry no ``iscrowd`` flag, and are stored in one canonical corner order
+(``cvpilot.core.obb.canonical``), so the order a tool writes corners in changes nothing. Each
+failure raises :class:`EvalInputError` naming the column and the first offending value
+(truncated).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from cvpilot.core import obb
 from cvpilot.core.errors import EvalInputError
 from cvpilot.core.metrics import F64, I64, BoolArray, max_int
 from cvpilot.core.schema import Task
@@ -129,6 +133,31 @@ def _check_boxes(boxes: F64, what: str, *, low: float, high: float) -> None:
         raise _fail(f"{what} has boxes with x2 < x1 or y2 < y1")
 
 
+def _with_width(boxes: F64, task: Task, what: str) -> F64:
+    """``boxes`` with the column count of ``task``; an empty table may come in either shape."""
+    width = len(t.box_columns(task))
+    if boxes.shape[1] == width:
+        return boxes
+    if boxes.shape[0] == 0:
+        return np.zeros((0, width), dtype=np.float64)
+    raise _fail(f"{what} boxes need {width} coordinates for task {task}, got {boxes.shape[1]}")
+
+
+def _check_obb(boxes: F64, what: str, *, low: float, high: float) -> F64:
+    """Validated oriented boxes in canonical corner order."""
+    if not bool(np.isfinite(boxes).all()):
+        raise _fail(f"{what} has non-finite box coordinates")
+    if bool((boxes < low).any()) or bool((boxes > high).any()):
+        raise _fail(f"{what} has box coordinates outside [{low:g}, {high:g}]")
+    bad = ~obb.convex(boxes)
+    if bool(bad.any()):
+        raise _fail(
+            f"{what} has {int(bad.sum())} oriented boxes whose corners are not a convex "
+            "quadrilateral in order around the box"
+        )
+    return obb.canonical(boxes)
+
+
 def prepare_ground_truth(gts: t.AnnotationTable, n_classes: int, task: Task) -> GroundTruth:
     """Validate ground truth and index its images (sorted by id)."""
     if len(gts) > t.MAX_ANNOTATIONS:
@@ -178,8 +207,25 @@ def prepare_ground_truth(gts: t.AnnotationTable, n_classes: int, task: Task) -> 
             raise _fail("classification ground truth needs exactly one label per image")
         boxes: F64 = np.zeros((len(gts), 4))
         crowd: BoolArray = np.zeros(len(gts), dtype=bool)
+    elif task == "obb":
+        crowd = gts.iscrowd
+        if bool(crowd.any()):
+            raise _fail("iscrowd is not supported for oriented boxes (task obb)")
+        boxes = _check_obb(
+            _with_width(gts.boxes, task, "ground truth"),
+            "ground truth",
+            low=-t.BOUNDS_TOLERANCE,
+            high=t.MAX_COORDINATE,
+        )
+        if sizes_known:
+            w, h = width[ann_image][:, None], height[ann_image][:, None]
+            if bool((boxes[:, 0::2] > w + t.BOUNDS_TOLERANCE).any()) or bool(
+                (boxes[:, 1::2] > h + t.BOUNDS_TOLERANCE).any()
+            ):
+                raise _fail("ground truth has boxes outside the image")
     else:
         boxes, crowd = gts.boxes, gts.iscrowd
+        boxes = _with_width(boxes, task, "ground truth")
         _check_boxes(boxes, "ground truth", low=-t.BOUNDS_TOLERANCE, high=t.MAX_COORDINATE)
         if sizes_known:
             w, h = width[ann_image], height[ann_image]
@@ -205,7 +251,14 @@ def prepare_predictions(
         if image.size and max_int(np.bincount(image)) > 1:
             raise _fail("classification needs at most one prediction per image (top-1)")
         boxes = preds.boxes
+    elif task == "obb":
+        boxes = _check_obb(
+            _with_width(preds.boxes, task, "predictions"),
+            "predictions",
+            low=-t.MAX_COORDINATE,
+            high=t.MAX_COORDINATE,
+        )
     else:
-        boxes = preds.boxes
+        boxes = _with_width(preds.boxes, task, "predictions")
         _check_boxes(boxes, "predictions", low=-t.MAX_COORDINATE, high=t.MAX_COORDINATE)
     return Predictions(image, preds.class_id, preds.score, boxes)

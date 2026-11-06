@@ -359,6 +359,8 @@ class EvalParams(_Model):
     confusion_iou: float = Field(gt=0.0, le=1.0)
     confusion_score: float = Field(ge=0.0, le=1.0)
     max_dets: StrictInt = Field(default=100, ge=1, le=10_000)
+    iou_type: IouType = "box"
+    """Snapshots written before oriented boxes existed have none and read as ``box``."""
 
     @field_validator("iou_thresholds")
     @classmethod
@@ -483,6 +485,8 @@ class EvalSnapshot(_Model):
             raise ValueError("bootstrap is set exactly when ci is non-empty")
         if bool(self.ci) != (self.ci_status == "computed"):
             raise ValueError('ci_status is "computed" exactly when ci is non-empty')
+        if self.params is not None and self.params.iou_type not in IOU_TYPES[self.task]:
+            raise ValueError(f"iou_type {self.params.iou_type!r} does not apply to {self.task}")
         if len(self.slice_spec) > MAX_SLICE_ENTRIES:
             raise ValueError("too many slice_spec entries")
         for key, column in self.slice_spec.items():
