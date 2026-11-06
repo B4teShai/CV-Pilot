@@ -42,6 +42,7 @@ cvpilot/core/errors.py
 cvpilot/core/hashing.py
 cvpilot/core/jsonable.py
 cvpilot/core/metrics.py
+cvpilot/core/obb.py
 cvpilot/core/redact.py
 cvpilot/core/schema.py
 cvpilot/core/text.py

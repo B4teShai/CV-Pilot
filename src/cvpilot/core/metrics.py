@@ -19,12 +19,16 @@ reads a stored ``area``); across images, tied scores are ordered by image index,
 order of sorted image ids. ``accumulate`` also takes per-image weights so that bootstrap
 resampling and slices reuse one matching pass: a weight ``w`` counts an image ``w`` times, and
 ``0`` removes it.
+
+Oriented boxes (``cvpilot.core.obb``) go through the same matching and accumulation with another
+:class:`BoxGeometry`: their IoU definition and polygon area replace the axis-aligned ones.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -92,6 +96,53 @@ def iou_matrix(dets: F64, gts: F64, iscrowd: BoolArray | None = None) -> F64:
     return result
 
 
+class BoxGeometry(Protocol):
+    """How boxes of one kind are measured: their area and the IoU between them.
+
+    ``width`` is the number of coordinates per box and ``budget`` the largest padded
+    ``groups x detections x boxes`` block matched at once.
+    """
+
+    @property
+    def width(self) -> int: ...
+
+    @property
+    def budget(self) -> int: ...
+
+    def areas(self, boxes: F64) -> F64:
+        """Areas of ``(n, width)`` boxes."""
+        ...
+
+    def grid(self, dets: F64, gts: F64, crowd: BoolArray) -> F64:
+        """IoU of ``(..., D, width)`` detections against ``(..., G, width)`` boxes as
+        ``(..., D, G)``; against a box whose ``crowd`` flag ``(..., G)`` is set, the
+        intersection over the detection area."""
+        ...
+
+
+@dataclass(frozen=True)
+class AxisAligned:
+    """Axis-aligned ``x1, y1, x2, y2`` boxes (the COCO definition)."""
+
+    width: int = 4
+    budget: int = MATCH_BUDGET
+
+    def areas(self, boxes: F64) -> F64:
+        return box_areas(boxes)
+
+    def grid(self, dets: F64, gts: F64, crowd: BoolArray) -> F64:
+        inter, det_area = _pairwise(dets[..., :, None, :], gts[..., None, :, :])
+        union = det_area + box_areas(gts.reshape(-1, 4)).reshape(gts.shape[:-1])[..., None, :]
+        union = union - inter
+        union = np.where(crowd[..., None, :], det_area, union)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            result: F64 = inter / union
+        return result
+
+
+AXIS_ALIGNED = AxisAligned()
+
+
 @dataclass(frozen=True)
 class MatchResult:
     """Outcome of matching, for the detections that survived the per-group cap.
@@ -139,8 +190,8 @@ def _group_bounds(keys: I64) -> tuple[I64, I64]:
     return starts, sizes
 
 
-def _chunks(dcount: I64, gcount: I64) -> list[I64]:
-    """Index blocks of groups whose padded ``B x D x G`` size stays within ``MATCH_BUDGET``."""
+def _chunks(dcount: I64, gcount: I64, budget: int = MATCH_BUDGET) -> list[I64]:
+    """Index blocks of groups whose padded ``B x D x G`` size stays within ``budget``."""
     if dcount.size == 0:
         return []
     dpow = np.ceil(np.log2(np.maximum(dcount, 1))).astype(np.int64)
@@ -152,7 +203,7 @@ def _chunks(dcount: I64, gcount: I64) -> list[I64]:
     for start, size in zip(starts, sizes, strict=True):
         members = order[start : start + size]
         per = max(1, max_int(dcount[members]) * max_int(gcount[members]))
-        step = max(1, MATCH_BUDGET // per)
+        step = max(1, budget // per)
         out.extend(members[i : i + step] for i in range(0, members.size, step))
     return out
 
@@ -172,12 +223,14 @@ def match_detections(
     iscrowd: BoolArray | None = None,
     max_dets: int = MAX_DETS[-1],
     area_ranges: Sequence[tuple[str, float, float]] = AREA_RANGES,
+    geometry: BoxGeometry = AXIS_ALIGNED,
 ) -> MatchResult:
     """Greedy COCO matching of detections to ground truth, per image, class and IoU threshold.
 
     Inputs must already be validated (finite, ordered boxes, indices in range); see
     ``cvpilot.eval``. ``pred_image`` and ``gt_image`` are image indices ``< n_images`` and
-    classes are indices ``< n_classes``.
+    classes are indices ``< n_classes``. ``geometry`` measures the boxes (axis-aligned by
+    default; ``cvpilot.core.obb`` has the oriented ones); everything after the IoU is shared.
     """
     ranges = tuple(area_ranges)
     thresholds = np.asarray(iou_thresholds, dtype=np.float64)
@@ -194,13 +247,13 @@ def match_detections(
     det_image, det_cls = pred_image[keep], pred_cls[keep]
     det_score, det_boxes = pred_scores[keep], pred_boxes[keep]
     det_key = pkey[keep]
-    det_area = box_areas(det_boxes)
+    det_area = geometry.areas(det_boxes)
     n_det = keep.size
 
     gsort = np.argsort(gt_image * n_classes + gt_cls, kind="stable")
     gkey = (gt_image * n_classes + gt_cls)[gsort]
     g_boxes, g_crowd = gt_boxes[gsort], crowd[gsort]
-    g_area = box_areas(g_boxes)
+    g_area = geometry.areas(g_boxes)
     n_area, n_thr = len(ranges), thresholds.size
     lows = np.array([r[1] for r in ranges])[:, None]
     highs = np.array([r[2] for r in ranges])[:, None]
@@ -216,7 +269,7 @@ def match_detections(
     gstart = np.searchsorted(gkey, ukeys, side="left")
     gcount = np.searchsorted(gkey, ukeys, side="right") - gstart
     has_gt = gcount > 0
-    blocks = _chunks(dcount[has_gt], gcount[has_gt])
+    blocks = _chunks(dcount[has_gt], gcount[has_gt], geometry.budget)
     group_ids = np.flatnonzero(has_gt)
     eff = np.minimum(thresholds, 1 - 1e-10)
     for block in blocks:
@@ -228,14 +281,13 @@ def match_detections(
             gstart,
             gcount,
             det_boxes,
-            det_area,
             g_boxes,
-            g_area,
             g_crowd,
             g_ignore,
             eff,
             matched,
             ignored,
+            geometry,
         )
 
     gt_image_s = gt_image[gsort]
@@ -270,14 +322,13 @@ def _match_block(
     gstart: I64,
     gcount: I64,
     det_boxes: F64,
-    det_area: F64,
     g_boxes: F64,
-    g_area: F64,
     g_crowd: BoolArray,
     g_ignore: BoolArray,
     eff: F64,
     matched: BoolArray,
     ignored: BoolArray,
+    geometry: BoxGeometry,
 ) -> None:
     """Match one padded block of (image, class) groups; writes into ``matched``/``ignored``."""
     nd, ng = dcount[gi], gcount[gi]
@@ -289,11 +340,7 @@ def _match_block(
     dpos = np.where(dvalid, dpos, 0)
     gpos = np.where(gvalid, gpos, 0)
     gcrowd = g_crowd[gpos] & gvalid
-    inter, _ = _pairwise(det_boxes[dpos][:, :, None, :], g_boxes[gpos][:, None, :, :])
-    union = det_area[dpos][:, :, None] + g_area[gpos][:, None, :] - inter
-    union = np.where(gcrowd[:, None, :], det_area[dpos][:, :, None], union)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        iou = inter / union
+    iou = geometry.grid(det_boxes[dpos], g_boxes[gpos], gcrowd)
     n_thr = eff.size
     for a in range(g_ignore.shape[0]):
         ign = g_ignore[a][gpos] & gvalid
