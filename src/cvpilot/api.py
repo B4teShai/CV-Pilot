@@ -160,6 +160,7 @@ def init(
     name: str | None = None,
     config: Mapping[str, Any] | None = None,
     dataset_uri: str | Path | None = None,
+    dataset_hash: str | None = None,
     seed: int | None = None,
     framework: str | None = None,
     resume_from: str | None = None,
@@ -174,7 +175,11 @@ def init(
             ``CVPILOT_PROJECT``.
         task: ``"detection"`` or ``"classification"``.
         config: resolved training config; secrets are redacted by key before storage.
-        dataset_uri: local dataset directory hashed into ``Repro.dataset_hash``.
+        dataset_uri: local dataset directory hashed into ``Repro.dataset_hash``; with
+            ``dataset_hash`` it only names the dataset (``fridge-sku@1.4.0``, a URL) and is
+            recorded as given.
+        dataset_hash: ``"sha256:<64 hex>"`` of a dataset manifest hashed by another tool (a
+            dataset registry); the dataset is then not hashed by CV-Pilot.
         framework: ``"<name>==<version>"``; defaults to the running Python.
         resume_from: run id of a ``preempted`` or ``failed`` run to continue.
         store_dir: overrides ``CVPILOT_STORE_DIR`` (default ``~/.cvpilot``).
@@ -192,6 +197,7 @@ def init(
         RunAlreadyActiveError: another run of this process is still active.
         InvalidResumeError, RunNotFoundError: ``resume_from`` cannot be resumed or is unknown.
         FileNotFoundError, NotADirectoryError: ``dataset_uri`` is unusable.
+        ValueError: ``dataset_hash`` is not ``sha256:<hex>`` or ``dataset_uri`` cannot name it.
         StoreError: the store cannot be created or written.
         UnknownPluginError, MissingExtraError: a forwarder or channel is not registered or its
             extra is missing (raised before any run is created).
@@ -234,6 +240,7 @@ def init(
             config,
             seed,
             store_command_line=settings.store_command_line,
+            dataset_hash=dataset_hash,
         )
         framework = framework or f"python=={platform.python_version()}"
         started = datetime.now(timezone.utc)

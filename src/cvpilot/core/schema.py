@@ -110,6 +110,27 @@ def _no_control_chars(value: str, what: str) -> str:
     return value
 
 
+DATASET_HASH_FORMS = ('"dcp:<version>"', '"merkle:<hex>"', '"sha256:<64 hex>"')
+
+
+def check_dataset_hash(value: str) -> str:
+    """``value`` when it is a dataset identity CV-Pilot accepts, else ``ValueError``.
+
+    ``dcp:<version>`` (a DataCopilot manifest), ``merkle:<hex>`` (CV-Pilot hashed the folder) or
+    ``sha256:<64 lower-case hex>``: the SHA-256 of a manifest file hashed by another tool (for
+    example a dataset registry that names the dataset ``<name>@<version>`` in ``dataset_uri``).
+    """
+    prefix, _, rest = value.partition(":")
+    ok = (prefix in ("dcp", "merkle") and bool(rest)) or (
+        prefix == "sha256" and _SHA256.fullmatch(rest) is not None
+    )
+    if not ok:
+        raise ValueError(
+            f"must be {', '.join(DATASET_HASH_FORMS[:-1])} or {DATASET_HASH_FORMS[-1]}"
+        )
+    return value
+
+
 class _Model(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -209,10 +230,7 @@ class Repro(_Model):
     @field_validator("dataset_hash")
     @classmethod
     def _dataset_hash(cls, value: str) -> str:
-        prefix, _, rest = value.partition(":")
-        if prefix not in ("dcp", "merkle") or not rest:
-            raise ValueError('must be "dcp:<version>" or "merkle:<hex>"')
-        return value
+        return check_dataset_hash(value)
 
     @field_validator("config", mode="before")
     @classmethod
@@ -656,10 +674,9 @@ class CheckpointManifest(_Model):
     @field_validator("dataset_hash")
     @classmethod
     def _dataset_hash(cls, value: str) -> str:
-        prefix, _, rest = value.partition(":")
-        if prefix not in ("dcp", "merkle") or not rest or len(value) > 200:
-            raise ValueError('must be "dcp:<version>" or "merkle:<hex>"')
-        return value
+        if len(value) > 200:
+            raise ValueError("dataset_hash is longer than 200 characters")
+        return check_dataset_hash(value)
 
     @field_validator("uri")
     @classmethod

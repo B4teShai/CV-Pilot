@@ -13,13 +13,41 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from cvpilot.core.hashing import dataset_hash
+from cvpilot.core.hashing import dataset_hash as compute_dataset_hash
 from cvpilot.core.jsonable import to_jsonable
-from cvpilot.core.schema import Repro
+from cvpilot.core.schema import Repro, check_dataset_hash
 from cvpilot.registry import capturers
 from cvpilot.runs.queries import RunView
 
 _EMPTY_DATASET_HASH = "merkle:" + hashlib.sha256(b"").hexdigest()
+MAX_DATASET_URI = 1024
+"""Longest ``dataset_uri`` recorded with an externally computed ``dataset_hash``."""
+_USERINFO = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@")
+
+
+def external_dataset(dataset_uri: str | None, dataset_hash: str) -> tuple[str, str]:
+    """Check a dataset identity computed outside CV-Pilot and return ``(uri, hash)``.
+
+    ``dataset_hash`` must be ``sha256:<64 lower-case hex>`` (for example the SHA-256 of a dataset
+    registry's manifest file); ``dataset_uri`` names the dataset (``fridge-sku@1.4.0``, a URL, a
+    path) and is recorded as given, not read.
+
+    Raises:
+        ValueError: the hash is not ``sha256:<hex>``, or the name is missing, too long, holds
+            control characters or carries credentials in a URL.
+    """
+    if not dataset_hash.startswith("sha256:"):
+        raise ValueError('an external dataset_hash must be "sha256:<64 lower-case hex>"')
+    check_dataset_hash(dataset_hash)
+    if not dataset_uri:
+        raise ValueError("dataset_uri must name the dataset when dataset_hash is given")
+    if len(dataset_uri) > MAX_DATASET_URI:
+        raise ValueError(f"dataset_uri is longer than {MAX_DATASET_URI} characters")
+    if any(ord(c) < 32 or ord(c) == 127 for c in dataset_uri):
+        raise ValueError("dataset_uri contains control characters")
+    if _USERINFO.match(dataset_uri):
+        raise ValueError("dataset_uri must not carry credentials (user@ or user:password@)")
+    return dataset_uri, dataset_hash
 
 
 class Captured(NamedTuple):
@@ -39,18 +67,29 @@ def capture_repro(
     store_command_line: bool = True,
     argv: Sequence[str] | None = None,
     cwd: Path | None = None,
+    dataset_hash: str | None = None,
 ) -> Captured:
     """Capture git, environment, dataset hash and the (redacted) command line.
 
     Args:
         dataset_uri: local dataset directory, or None when the run has no dataset (recorded as
-            the empty set).
+            the empty set). With ``dataset_hash`` it is only a name (see
+            :func:`external_dataset`).
+        dataset_hash: ``sha256:<hex>`` computed by another tool; the dataset is then not hashed
+            here.
         store_command_line: pass ``Settings.store_command_line``; when False only the
             executable name and argument count are stored.
 
     Raises:
-        FileNotFoundError, NotADirectoryError, ValueError: the dataset path is unusable.
+        FileNotFoundError, NotADirectoryError, ValueError: the dataset path is unusable, or the
+            external dataset identity is invalid.
     """
+    if dataset_hash is not None:
+        uri, digest = external_dataset(dataset_uri, dataset_hash)
+    elif dataset_uri is None:
+        uri, digest = "", _EMPTY_DATASET_HASH
+    else:
+        uri, digest = dataset_uri, compute_dataset_hash(dataset_uri)
     git = capturers.get("git")(cwd=cwd)
     packages = capturers.get("packages")(cwd=cwd)
     python = capturers.get("python")()
@@ -67,8 +106,8 @@ def capture_repro(
         python_version=python["python_version"],
         cuda=gpu["cuda"],
         gpu_names=gpu["gpu_names"],
-        dataset_uri="" if dataset_uri is None else dataset_uri,
-        dataset_hash=_EMPTY_DATASET_HASH if dataset_uri is None else dataset_hash(dataset_uri),
+        dataset_uri=uri,
+        dataset_hash=digest,
         config=to_jsonable(dict(config or {})),
         seed=seed,
         command_line=command["command_line"],
