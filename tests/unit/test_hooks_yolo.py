@@ -186,3 +186,58 @@ def test_autolog_without_the_package_names_the_extra_and_starts_no_run(
     with pytest.raises(MissingExtraError, match=rf"cvpilot\[{yh.FRAMEWORK}\]"):
         api.autolog(FakeYoloModel(), project="proj", task="detection")
     assert api._active is None
+
+
+class TaskSink(Sink):
+    def __init__(self, task: str) -> None:
+        super().__init__()
+        self.task = task
+
+
+@pytest.mark.parametrize(
+    ("model_task", "run_task", "refused"),
+    [
+        ("obb", "detection", True),
+        ("detect", "obb", True),
+        ("classify", "detection", True),
+        ("obb", "obb", False),
+        ("detect", "detection", False),
+        ("segment", "detection", False),  # no CV-Pilot task to compare with
+        (None, "obb", False),
+    ],
+)
+def test_attach_refuses_a_model_whose_task_contradicts_the_run(
+    model_task: str | None, run_task: str, refused: bool
+) -> None:
+    model = FakeYoloModel()
+    if model_task is not None:
+        model.task = model_task  # type: ignore[attr-defined]
+    hook = yh.YoloHook()
+    if refused:
+        with pytest.raises(HookAttachError, match="task"):
+            hook.attach(model, TaskSink(run_task))
+        assert model.callbacks == {}
+    else:
+        hook.attach(model, TaskSink(run_task))
+        assert set(model.callbacks) == set(yh.EVENTS)
+
+
+def test_autolog_of_an_obb_model_into_a_detection_run_fails_that_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import importlib.metadata as md
+
+    monkeypatch.setattr(md, "version", lambda dist: "8.4.0")
+    model = FakeYoloModel()
+    model.task = "obb"  # type: ignore[attr-defined]
+    with pytest.raises(HookAttachError, match="task='obb'"):
+        api.autolog(model, project="proj", task="detection")
+    assert api._active is None
+    listed = runs.list_runs("proj", store_dir=tmp_path / "store")
+    assert [r.status for r in listed] == ["failed"]
+    run = api.autolog(model, project="proj", task="obb")
+    model.fire("on_val_end", make_yolo_trainer(epoch=0))
+    model.fire("on_fit_epoch_end", make_yolo_trainer(epoch=0))
+    model.fire("on_train_end", make_yolo_trainer())
+    view = runs.get_run_view("proj", run.run_id, store_dir=tmp_path / "store")
+    assert view.meta.task == "obb" and view.meta.status == "finished" and view.stats.n_points > 0

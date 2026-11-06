@@ -71,6 +71,11 @@ class Run:
     def status(self) -> str:
         return self._handle.status
 
+    @property
+    def task(self) -> str:
+        """The run's task: ``"detection"``, ``"obb"`` or ``"classification"``."""
+        return self._handle.meta.task
+
     def log(self, points: Mapping[str, float], *, step: int, epoch: int | None = None) -> None:
         """Buffer scalar metrics at ``step``; see :meth:`cvpilot.runs.RunHandle.log`."""
         self._handle.log(points, step=step, epoch=epoch)

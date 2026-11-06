@@ -27,9 +27,10 @@
         "handle": "property",
         "log": "(self, points: 'Mapping[str, float]', *, step: 'int', epoch: 'int | None' = None) -> 'None'",
         "log_artifact": "(self, path: 'str | Path', *, kind: 'ArtifactKind', meta: 'Mapping[str, Any] | None' = None) -> 'Artifact'",
-        "log_eval": "(self, preds: 'PredictionTable', gts: 'AnnotationTable', *, step: 'int', class_names: 'Sequence[str] | None' = None, slices: 'Mapping[str, str] | None' = None, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, provenance: 'Mapping[str, str | None] | None' = None) -> 'EvalSnapshot'",
+        "log_eval": "(self, preds: 'PredictionTable', gts: 'AnnotationTable', *, step: 'int', class_names: 'Sequence[str] | None' = None, slices: 'Mapping[str, str] | None' = None, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, provenance: 'Mapping[str, str | None] | None' = None, iou_type: 'str | None' = None) -> 'EvalSnapshot'",
         "run_id": "property",
-        "status": "property"
+        "status": "property",
+        "task": "property"
       }
     },
     "__version__": {
@@ -45,7 +46,7 @@
     },
     "init": {
       "kind": "function",
-      "signature": "(project: 'str | None' = None, *, task: 'Task', name: 'str | None' = None, config: 'Mapping[str, Any] | None' = None, dataset_uri: 'str | Path | None' = None, seed: 'int | None' = None, framework: 'str | None' = None, resume_from: 'str | None' = None, store_dir: 'str | Path | None' = None, forward_to: 'Sequence[str] | None' = None, alerts: 'str | Path | Mapping[str, Any] | None' = None) -> 'Run'"
+      "signature": "(project: 'str | None' = None, *, task: 'Task', name: 'str | None' = None, config: 'Mapping[str, Any] | None' = None, dataset_uri: 'str | Path | None' = None, dataset_hash: 'str | None' = None, seed: 'int | None' = None, framework: 'str | None' = None, resume_from: 'str | None' = None, store_dir: 'str | Path | None' = None, forward_to: 'Sequence[str] | None' = None, alerts: 'str | Path | Mapping[str, Any] | None' = None) -> 'Run'"
     },
     "log": {
       "kind": "function",
@@ -57,7 +58,7 @@
     },
     "log_eval": {
       "kind": "function",
-      "signature": "(preds: 'PredictionTable', gts: 'AnnotationTable', *, step: 'int', class_names: 'Sequence[str] | None' = None, slices: 'Mapping[str, str] | None' = None, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, provenance: 'Mapping[str, str | None] | None' = None) -> 'EvalSnapshot'"
+      "signature": "(preds: 'PredictionTable', gts: 'AnnotationTable', *, step: 'int', class_names: 'Sequence[str] | None' = None, slices: 'Mapping[str, str] | None' = None, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, provenance: 'Mapping[str, str | None] | None' = None, iou_type: 'str | None' = None) -> 'EvalSnapshot'"
     },
     "resume_path": {
       "kind": "function",
@@ -576,7 +577,7 @@
     },
     "evaluate": {
       "kind": "function",
-      "signature": "(preds: 't.PredictionTable', gts: 't.AnnotationTable', *, task: 'Task', class_names: 'Sequence[str]', slices: 'Mapping[str, str] | None' = None, iou_thresholds: 'Sequence[float] | None' = None, confusion_iou: 'float' = 0.5, confusion_score: 'float' = 0.25, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, workers: 'int' = 4) -> 'EvalResult'"
+      "signature": "(preds: 't.PredictionTable', gts: 't.AnnotationTable', *, task: 'Task', class_names: 'Sequence[str]', slices: 'Mapping[str, str] | None' = None, iou_thresholds: 'Sequence[float] | None' = None, confusion_iou: 'float' = 0.5, confusion_score: 'float' = 0.25, n_resamples: 'int' = 1000, seed: 'int' = 0, level: 'float' = 0.95, workers: 'int' = 4, iou_type: 'str | None' = None) -> 'EvalResult'"
     }
   }
 }
