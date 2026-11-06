@@ -43,6 +43,7 @@ nav:
       - Gating in CI: guide/gating-ci.md
       - Trust model: guide/trust.md
       - Alerts: guide/alerts.md
+      - MCP server: guide/mcp.md
       - Spot instances with SkyPilot: guide/skypilot.md
   - Tutorial: tutorial.md
   - Project status: status.md

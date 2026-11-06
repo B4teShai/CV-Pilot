@@ -20,6 +20,7 @@ behaviour that exists, unless it says otherwise.
 | Copy checkpoints to S3, GCS or Azure | Experimental | Tested on an in-memory filesystem, never a real bucket. |
 | Resuming a framework's own checkpoint file | Built for Lightning | Ultralytics has a helper, but its real `last.pt` is refused: Experimental. MMEngine, Hugging Face and RF-DETR: not built. |
 | Spot instances with SkyPilot | Experimental | Never run on SkyPilot or a real spot instance. [SkyPilot](guide/skypilot.md) |
+| MCP server for coding agents (`cvpilot mcp`, extra `mcp`) | Built | Read-only tools over runs, baselines, compare, gate, checkpoint and alert checks; `baseline_set` only when enabled. [MCP server](guide/mcp.md) |
 | Server, remote monitoring and sync | Planned | A read-only server is designed, not built. |
 
 CV-Pilot installs from a git clone on Python 3.10 to 3.14. Nothing is published on a package

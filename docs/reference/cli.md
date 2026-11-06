@@ -113,6 +113,20 @@ Gate a run against a baseline; exit 1 on a regression or any unverifiable check.
 | `--force` | flag |  | Replace a report file that cvpilot did not create. |
 | `--json` | flag |  | Print JSON instead of text. |
 
+## `cvpilot mcp`
+
+```text
+cvpilot mcp [OPTIONS]
+```
+
+Serve runs, baselines, comparisons and gates to a coding agent over MCP (stdio).
+
+Needs the extra cvpilot[mcp]. Read-only unless CVPILOT_MCP_ALLOW_WRITE=1, which adds
+baseline_set (pins a baseline, never deletes one). Path arguments must lie under
+CVPILOT_MCP_ROOTS (os.pathsep-separated; default: the working directory).
+
+Exit codes: 0 the client disconnected; 2 the extra is not installed.
+
 ## `cvpilot doctor`
 
 ```text
