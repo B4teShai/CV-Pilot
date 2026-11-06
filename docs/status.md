@@ -11,6 +11,7 @@ behaviour that exists, unless it says otherwise.
 |---|---|---|
 | Record runs, local store, `runs list`, `runs show`, `repro` | Built | [Concepts](guide/concepts.md) |
 | Evaluation of detection and classification, per class and per slice | Built | [Gating in CI](guide/gating-ci.md) |
+| Evaluation of oriented boxes (task `obb`), polygon IoU and probabilistic IoU | Experimental | Matches pycocotools with a shapely IoU and with the YOLO framework's `batch_probiou` (difference 0), and the framework's own matching; never run on a real OBB model's predictions. The YOLO hook logs scalars only. [Oriented boxes](guide/gating-ci.md#oriented-boxes-task-obb) |
 | Baselines, `compare`, `gate`, HTML and JSON reports, GitHub Action | Built | [Gating in CI](guide/gating-ci.md) |
 | Hooks for Lightning, Hugging Face, Ultralytics, MMEngine, RF-DETR | Built | Each ran on a real training run. |
 | Send metrics to MLflow, Weights & Biases, Trackio | Built | Tested with fake tracker libraries, never a live service. |

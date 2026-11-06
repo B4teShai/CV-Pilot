@@ -5,6 +5,35 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Added (oriented boxes)
+
+- Task `obb`: oriented bounding boxes as four corners (`x1, y1, ..., x4, y4` in pixels, any corner
+  order) through `cvpilot eval`, `log_eval`, slices, bootstrap intervals, the confusion matrix,
+  `--recompute`, `compare` and `gate`, with the detection metric names (ADR-0013). `--iou-type
+  polygon` (default, exact polygon IoU) or `probiou` (the YOLO-OBB validator's probabilistic IoU) is
+  recorded in `EvalParams.iou_type`; snapshots with different IoU types are refused as not
+  comparable (reason `iou_type`). `cvpilot.core.obb` converts `xywhr` to corners and back.
+- Parity: `tests/parity/test_obb_parity.py` compares both modes with pycocotools whose IoU is
+  replaced by shapely (polygon) and by the framework's `batch_probiou` (probiou): difference 0 on
+  40 random cases. The framework's `match_predictions` flags the same true positives; its printed
+  mAP differs by 0.002 on average (0.007 at most) because it integrates AP with the trapezoidal rule.
+  `shapely` joins the dev dependency group (tests only).
+- `init(dataset_uri="fridge-sku@1.4.0", dataset_hash="sha256:<hex>")` records a dataset identity
+  computed by another tool (for example the SHA-256 of a registry's `manifest.parquet`) without
+  reading anything; `Repro` and checkpoint manifests accept `sha256:<64 hex>` next to `dcp:` and
+  `merkle:`.
+- `Run.task`. The YOLO hook refuses to attach a model whose task contradicts the run's (an `obb`
+  model in a `detection` run).
+
+### Changed (oriented boxes)
+
+- Store schema 2: migration `obb_task` rebuilds `run_meta` so `task` accepts `obb`. Opening a store
+  with this release migrates it (backup `runs.sqlite.bak-1`); older releases then refuse it. Foreign
+  keys are not enforced while migrations run and are checked before they commit. A resumed run is
+  written with the current schema version, not its parent's.
+- `EvalParams` has `iou_type` (`box` for detection and classification); snapshots written before
+  read as `box`, so they stay comparable with new detection snapshots.
+
 ### Changed
 
 - Documentation rewritten to be shorter and readable by someone who has never used the tool: about

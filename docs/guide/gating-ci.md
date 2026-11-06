@@ -33,6 +33,58 @@ cvpilot.finish()
 A [snapshot](concepts.md#glossary) is never edited. Metric values are fractions in [0, 1]. Evaluating
 into a finished run needs `--allow-closed`.
 
+### Oriented boxes (task `obb`)
+
+A run started with `task="obb"` evaluates oriented boxes (design:
+[ADR-0013](../adr/0013-oriented-bounding-boxes.md)). Each box is four corners in pixels:
+predictions `image_id, cls, score, x1, y1, x2, y2, x3, y3, x4, y4`, ground truth `image_id, cls,
+x1, ..., y4` plus the optional `width`, `height` and metadata columns (no `iscrowd`). The corners go
+around the box in either direction, from any corner, and must form a convex quadrilateral. Boxes in
+`xywhr` form (centre, size, rotation in radians, the YOLO-OBB convention) convert with
+`cvpilot.core.obb.xywhr_to_corners`.
+
+```bash notest
+cvpilot eval <RUN_ID> --preds p.parquet --gts g.parquet --classes names.txt --step 10   # polygon IoU
+cvpilot eval <RUN_ID> --preds p.parquet --gts g.parquet --classes names.txt --step 10 \
+  --iou-type probiou                                                                   # YOLO-OBB matching
+```
+
+`--iou-type` (or `log_eval(..., iou_type=...)`) picks how boxes overlap: `polygon` (the default) is
+the exact IoU of the two polygons, as DOTA evaluates; `probiou` is the probabilistic IoU the YOLO-OBB
+validator matches with. The metric names are the detection ones (`mAP50_95`, `mAP50`, per class
+`AP50_95` ...), so the same gate limits apply. Two snapshots with different IoU types are never
+compared: `compare` and `gate` refuse them (reason `iou_type`, exit 1), so pin the baseline with the
+IoU type the candidates use.
+
+AP follows the COCO rule in both modes. The YOLO framework integrates its precision curve
+differently, so its printed mAP differs from `mAP50_95` by up to about 0.01 even with `probiou`
+(the matches are the same; `tests/parity/test_obb_parity.py` measures both). Gate against CV-Pilot
+baselines, not against numbers copied from a training log.
+
+The YOLO hook logs the training scalars of an `obb` model (same names as detection) and no snapshot,
+and it refuses an `obb` model in a `detection` run. For a snapshot, write the model's predictions
+on the evaluation images to Parquet and run `cvpilot eval`:
+
+```python notest
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+from ultralytics import YOLO  # AGPL-3.0: your script imports it, CV-Pilot never does
+
+names = ("image_id", "cls", "score", "x1", "y1", "x2", "y2", "x3", "y3", "x4", "y4")
+rows = {name: [] for name in names}
+for result in YOLO("best.pt").predict("images/val", stream=True, conf=0.001, max_det=300):
+    corners = result.obb.xyxyxyxy.cpu().numpy().reshape(-1, 8)   # pixels, 4 corners per box
+    for box, cls, score in zip(corners, result.obb.cls.tolist(), result.obb.conf.tolist()):
+        rows["image_id"].append(Path(result.path).stem)
+        rows["cls"].append(int(cls))
+        rows["score"].append(float(score))
+        for name, value in zip(names[3:], box.tolist()):
+            rows[name].append(value)
+pq.write_table(pa.table(rows), "p.parquet")
+```
+
 ## 2. Pin a baseline, compare and gate
 
 A baseline must come from a `finished` run, whether you pin it with `baseline set` or name it by run
@@ -63,7 +115,8 @@ The gate is [fail-closed](concepts.md#glossary). It exits `1` when:
 - a slice is missing or too small;
 - there are fewer than `--min-images` images (default 30);
 - a threshold gated nothing, or an integrity check failed, or the tag is unknown;
-- the [eval set hash](concepts.md#glossary), task, class list or evaluation setting differs.
+- the [eval set hash](concepts.md#glossary), task, class list or evaluation setting (IoU type
+  included) differs.
 
 With no threshold at all it is a usage error (exit `2`). `--skip-small-slices` is the one opt-in,
 capped by `--max-skipped` (default 0).

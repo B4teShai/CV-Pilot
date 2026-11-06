@@ -46,6 +46,10 @@ directories are not committed.
 
 - Parity tests pin the reference implementation's version and record the tolerance in the
   test. A tolerance change is a reviewed decision.
+- Oriented boxes (`tests/parity/test_obb_parity.py`) use pycocotools with its IoU replaced: by
+  shapely for `polygon`, by the YOLO framework's `batch_probiou` for `probiou`. The framework parts
+  skip when that AGPL-3.0 extra is not installed (the module name is spelled in parts there, as in
+  the hook, because the QA gate scans source text); run them with the extra installed.
 - Chaos tests kill real processes with `SIGKILL` inside a save and check that a fresh process
   restores a whole checkpoint and never a partial file. `tests/chaos/test_ckpt_kill_points.py` does
   this 200 times in each of four groups of places inside a save (11 named places in all, each hit at

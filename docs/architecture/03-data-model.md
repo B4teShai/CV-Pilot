@@ -20,7 +20,7 @@ one.
 | `name` | Human label; defaults to `<framework>-<date>`. |
 | `status` | `running`, `resumed`, `finished`, `failed` or `preempted`. |
 | `parent_run_id` | The preempted or failed run this one continues, or none. |
-| `task` | `detection` or `classification`. |
+| `task` | `detection`, `obb` (oriented boxes, [ADR-0013](../adr/0013-oriented-bounding-boxes.md)) or `classification`. |
 | `framework`, `host` | `"<name>==<version>"`; hostname only, never user name or IP. |
 | `started_at`, `ended_at` | `ended_at` is set by `finish`. |
 | `schema_version` | The store schema the row was written with. |
@@ -34,7 +34,7 @@ How to reproduce the run, captured once at `init`. One-to-one with `RunMeta`.
 | `git_commit`, `git_dirty`, `git_diff_sha256` | Commit, uncommitted changes, and the diff's content address. |
 | `packages_lock_sha256` | Hash of `uv.lock`, `poetry.lock` or `pip freeze`. |
 | `python_version`, `cuda`, `gpu_names` | Environment; empty on CPU. |
-| `dataset_uri`, `dataset_hash` | Where the data was read, and `dcp:<version>` or `merkle:<hex>`. |
+| `dataset_uri`, `dataset_hash` | Where the data was read, and `dcp:<version>` or `merkle:<hex>`; or a dataset name such as `fridge-sku@1.4.0` with `sha256:<hex>` computed by another tool. |
 | `config`, `seed` | The resolved training config (redacted) and seed. |
 | `command_line` | `sys.argv` with secrets redacted. |
 
@@ -61,7 +61,7 @@ One evaluation of one run on one evaluation set at one step. Key:
 | `per_class` | Class name to `{AP50_95, AP50, AR100, support}`. |
 | `slices` | `"camera=cam03"` to `{mAP50_95, n_images}`. |
 | `ci`, `bootstrap`, `ci_status` | [Bootstrap intervals](../guide/concepts.md#glossary), and the seed, resample count and level that made them. |
-| `params` | IoU grid and confusion settings, so `compare` can refuse snapshots made differently. |
+| `params` | IoU grid, confusion settings and `iou_type` (`box`; `polygon` or `probiou` for `obb`), so `compare` can refuse snapshots made differently. |
 | `provenance` | Optional `{checkpoint_sha256, git_commit}` from the caller. |
 | `slice_spec`, `slice_hash` | Slice key to metadata column, and a hash of every slice column's values. |
 | `confusion_sha256`, `predictions_sha256` | Artifacts holding the confusion matrix and the predictions. |
@@ -144,9 +144,11 @@ one snapshot.
 9. `parent_run_id` is set exactly when the run was created by `resume_from`. The parent is
    `preempted` or `failed`, and the parent chain has no cycle.
 10. A baseline's run has a snapshot with the pinned `eval_set_hash` and `step`, or pinning is refused.
-11. `dataset_hash` starts with `dcp:` when the dataset folder has a DataCopilot manifest, otherwise
-    `merkle:`.
+11. `dataset_hash` starts with `dcp:` when the dataset folder has a DataCopilot manifest, `sha256:`
+    when the caller passed an externally computed digest, otherwise `merkle:`.
 12. `command_line` and `config` hold no value whose key matches the redaction list.
+13. A snapshot's `params.iou_type` suits its task: `box` for `detection` and `classification`,
+    `polygon` or `probiou` for `obb`.
 
 ## On-disk layout
 
@@ -177,13 +179,18 @@ at most an unindexed file that readers ignore. Reports are written only to the p
 - **File hashes** (`Artifact.sha256`, `CheckpointManifest.sha256`) are SHA-256 over the bytes.
 - **`dataset_hash`** is `dcp:<version>` copied from `dataset.dcp/manifest.json` (a regular file of at
   most 1 MiB, a version of at most 190 characters from `A-Za-z0-9._-`), or `merkle:<hex>` over the
-  sorted relative paths, sizes and modification times of the folder's files. Neither checks the
+  sorted relative paths, sizes and modification times of the folder's files, or `sha256:<64 hex>`
+  passed to `init(dataset_uri=..., dataset_hash=...)` by a caller whose dataset registry hashed a
+  manifest itself (CV-Pilot records it as given and reads nothing). Neither of the first two checks the
   file contents.
 - **`eval_set_hash`** is SHA-256 over canonical JSON of the class names and, per image, the id, size
-  and sorted boxes (coordinates rounded to 2 decimals, `iscrowd` included). It depends on the ground
+  and sorted boxes (coordinates rounded to 2 decimals, `iscrowd` included; oriented boxes as eight
+  corner coordinates in canonical order). It depends on the ground
   truth only, so two machines scoring the same set agree. It ignores file paths and times.
 - **`schema_version`** lives in `runs.sqlite` and in each Parquet file's metadata. Migrations are
   forward-only and run when a newer library opens the store, after copying `runs.sqlite` to
   `runs.sqlite.bak-<version>`. A store newer than the library is refused (`store_version_unsupported`,
-  exit 1). Adding a nullable field or table keeps the version. Renaming or removing a field raises it
-  and needs an ADR note.
+  exit 1). Adding a nullable field or table keeps the version. Renaming or removing a field, or
+  accepting a value older libraries cannot read, raises it and needs an ADR note. Version 2 (ADR-0013)
+  widened `run_meta.task` to accept `obb`; foreign keys are not enforced while a migration runs and
+  are checked before it commits.

@@ -22,7 +22,9 @@ run = cvpilot.autolog(trainer_or_model, project="proj", task="detection")
 
 `init` raises `RunAlreadyActiveError` while another run of the process is active; `Run` can be
 used as a context manager (`failed` on an exception). `PredictionTable` and `AnnotationTable`
-come from `cvpilot.eval`.
+come from `cvpilot.eval`. A run of `task="obb"` takes boxes as `(N, 8)` corner arrays and
+`log_eval(..., iou_type="polygon" | "probiou")`; `init(dataset_uri=NAME, dataset_hash="sha256:<hex>")`
+records a dataset identity hashed by another tool.
 
 ## Checkpoints
 

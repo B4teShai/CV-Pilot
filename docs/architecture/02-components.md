@@ -93,7 +93,10 @@ JSON, `engine.py` holds the rules and rate limits, and `replay.py` is the dry ru
 `Artifact`, `CheckpointManifest`, `Baseline`), the protocols the adapters implement (`MetricSink`,
 `RunStore`, `Hook`, `Forwarder`, `Channel`), hashing, ULIDs, redaction and the typed errors the CLI
 boundary reports. `core/metrics.py` and `core/confusion.py` are pure NumPy functions with no I/O.
-Parity with pycocotools is tested in `tests/parity/`.
+They measure boxes through a `BoxGeometry` (area and pairwise IoU): axis-aligned by default, and
+`core/obb.py` for oriented boxes with polygon or probabilistic IoU
+([ADR-0013](../adr/0013-oriented-bounding-boxes.md)); the matching and AP code is shared. Parity
+with pycocotools is tested in `tests/parity/`.
 
 ## Infrastructure layer
 
@@ -123,7 +126,7 @@ errors.
 |---|---|---|
 | Lightning | Scalars through a logger and a callback, rank zero only | Yes |
 | Hugging Face | `train/` and `eval/` metrics, saves as events | No |
-| Ultralytics | Losses, mAP, per-class AP per epoch | A helper exists, but a real `last.pt` is refused |
+| Ultralytics | Losses, mAP, per-class AP per epoch (detection and `obb` models); refuses a model whose task contradicts the run's | A helper exists, but a real `last.pt` is refused |
 | MMEngine | `train/`, `val/` and `test/` metrics at `runner.iter` | No |
 | RF-DETR | Every scalar the framework logs | No |
 

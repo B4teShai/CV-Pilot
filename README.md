@@ -68,8 +68,8 @@ steps: 0..2
 ## What you can do
 
 - Record runs and reproduce them: `cvpilot.init`, `cvpilot.log`, `cvpilot repro`.
-- Measure detection and classification quality per class: `cvpilot eval`, `cvpilot.log_eval`. They
-  read Parquet files of predictions and ground-truth boxes ([format](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/gating-ci.md)).
+- Measure detection (axis-aligned or oriented boxes) and classification quality per class:
+  `cvpilot eval`, `cvpilot.log_eval`. They read Parquet files of predictions and ground-truth boxes ([format](https://github.com/B4teShai/CV-Pilot/blob/main/docs/guide/gating-ci.md)).
 - Compare a new model with your current best and fail CI on a drop: `cvpilot gate`, `cvpilot compare`.
 - Run that check on every pull request with the GitHub Action.
 - Send metrics to MLflow, W&B or Trackio: `cvpilot.init(forward_to=["mlflow"])`.
