@@ -89,6 +89,29 @@ def _run_doctor() -> None:
 
 
 @app.command()
+def mcp() -> None:
+    """Serve runs, baselines, comparisons and gates to a coding agent over MCP (stdio).
+
+    Needs the extra cvpilot[mcp]. Read-only unless CVPILOT_MCP_ALLOW_WRITE=1, which adds
+    baseline_set (pins a baseline, never deletes one). Path arguments must lie under
+    CVPILOT_MCP_ROOTS (os.pathsep-separated; default: the working directory).
+
+    Exit codes: 0 the client disconnected; 2 the extra is not installed.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("mcp") is None:
+        typer.echo(
+            'error: the MCP server needs the extra "cvpilot[mcp]" (uv sync --extra mcp)', err=True
+        )
+        raise typer.Exit(2)
+    from cvpilot.mcp_server import main as serve
+
+    clear_request_context()  # each tool call binds its own request id
+    serve()
+
+
+@app.command()
 def doctor() -> None:
     """Check that the installation works."""
     _run_doctor()

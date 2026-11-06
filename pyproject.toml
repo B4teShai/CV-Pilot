@@ -74,6 +74,8 @@ mlflow = ["mlflow-skinny>=2.14"]
 wandb = ["wandb>=0.17"]
 trackio = ["trackio>=0.2"]
 safetensors = ["safetensors>=0.4"]
+# MCP server (`cvpilot mcp`): the official MIT-licensed SDK and its web stack; never core
+mcp = ["mcp>=2.3,<3"]
 remote = ["fsspec>=2024.2"]  # the library only: add the backend of your scheme, or use remote-*
 remote-s3 = ["fsspec>=2024.2", "s3fs>=2024.2"]
 remote-gcs = ["fsspec>=2024.2", "gcsfs>=2024.2"]
@@ -155,6 +157,7 @@ dev = [
     "hatchling>=1.27",
     "tomli>=2; python_version < '3.11'",
     "twine==7.0.0",
+    "mcp>=2.3,<3",  # tests/unit/test_mcp_server.py
 ]
 docs = [
     "mkdocs==1.6.1",

@@ -5,6 +5,13 @@ versions follow semantic versioning. Before 1.0, minor versions may break the pu
 
 ## [Unreleased]
 
+### Added
+
+- `cvpilot mcp`: an MCP server over stdio (extra `mcp`) with read-only tools (`runs_list`, `run_show`,
+  `baselines_list`, `baseline_show`, `compare`, `gate`, `ckpt_verify`, `alerts_check`) and, only with
+  `CVPILOT_MCP_ALLOW_WRITE=1`, `baseline_set`. Path arguments are confined to `CVPILOT_MCP_ROOTS`;
+  results are bounded summaries.
+
 ### Changed
 
 - Documentation rewritten to be shorter and readable by someone who has never used the tool: about

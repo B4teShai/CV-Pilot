@@ -72,6 +72,7 @@ cvpilot/hooks/mmengine.py
 cvpilot/hooks/rfdetr.py
 cvpilot/hooks/ultralytics.py
 cvpilot/logging.py
+cvpilot/mcp_server.py
 cvpilot/notify/__init__.py
 cvpilot/notify/_channel.py
 cvpilot/notify/_http.py
