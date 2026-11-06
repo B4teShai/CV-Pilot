@@ -73,6 +73,7 @@ nav:
       - ADR-0010 Real checkpoint files and MMEngine: adr/0010-real-checkpoint-files-and-mmengine.md
       - ADR-0011 A minimal read-only server: adr/0011-minimal-read-only-server.md
       - ADR-0012 Chaos, RF-DETR and the spot recipe: adr/0012-chaos-rfdetr-and-spot-recipe.md
+      - ADR-0013 Oriented bounding boxes: adr/0013-oriented-bounding-boxes.md
   - Engineering:
       - Overview: engineering/README.md
       - Standards: engineering/standards.md

@@ -18,7 +18,7 @@ from cvpilot.ckpt import fsops
 from cvpilot.ckpt.directory import RunCheckpoints
 from cvpilot.ckpt.manager import CheckpointManager
 from cvpilot.core.hashing import new_run_id
-from cvpilot.core.schema import Repro, RunMeta
+from cvpilot.core.schema import SCHEMA_VERSION, Repro, RunMeta
 
 STALL_STEP = 3
 
@@ -39,7 +39,7 @@ def main(root: str, store: str, point: str, megabytes: float) -> None:
         framework="python==3.12.1",
         host="h",
         started_at=datetime.now(timezone.utc),
-        schema_version=1,
+        schema_version=SCHEMA_VERSION,
     )
     repro = Repro(
         run_id=run_id,

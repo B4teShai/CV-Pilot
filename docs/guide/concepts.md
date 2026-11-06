@@ -87,6 +87,21 @@ version DataCopilot gave the dataset, copied from `dataset.dcp/manifest.json` an
 against the files. `merkle:<hex>` means CV-Pilot hashed the folder's file names, sizes and times
 itself, because no usable version was there. The two packages do not depend on each other.
 
+A dataset registry that names its versions itself (for example `<name>@<semver>` plus the SHA-256
+of a `manifest.parquet`) passes both, and CV-Pilot records them as given without reading anything:
+
+```python notest
+run = cvpilot.init("fridge-sku", task="obb", dataset_uri="fridge-sku@1.4.0",
+                   dataset_hash="sha256:" + manifest_sha256)   # 64 lower-case hex characters
+```
+
+`dataset_hash` must then be `sha256:<64 hex>`, and `dataset_uri` must name the dataset: at most
+1,024 characters, no control characters, no `user@host:path` login, and as a URL no user
+information and no query or fragment (signed S3, GCS and Azure URLs keep their credentials there, so
+they are refused, never stored). Write a versioned name as `fridge-sku@1.4.0` or, as a URL,
+`duvas://fridge-sku/1.4.0`: `duvas://fridge-sku@1.4.0` is refused because it reads as
+`scheme://user@host`. The pair is copied into every checkpoint manifest of the run.
+
 ## Trackers and training frameworks
 
 ```python notest

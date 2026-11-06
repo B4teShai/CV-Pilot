@@ -150,6 +150,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pycocotools==2.0.11",
+    "shapely>=2.0",  # BSD-3-Clause; independent polygon IoU oracle for the obb parity tests
     "pyyaml>=6",
     "safetensors>=0.4",
     "fsspec>=2024.2",

@@ -26,7 +26,7 @@ from cvpilot.core.errors import (
     StoreVersionError,
 )
 from cvpilot.core.hashing import new_run_id
-from cvpilot.core.schema import MetricPoint, Repro, RunMeta
+from cvpilot.core.schema import SCHEMA_VERSION, MetricPoint, Repro, RunMeta
 from cvpilot.store.local import LocalRunStore, open_store
 
 T0 = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
@@ -44,7 +44,7 @@ def make_run(project: str = "p", **over: Any) -> tuple[RunMeta, Repro]:
         "framework": "python==3.12.1",
         "host": "h",
         "started_at": T0,
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
     }
     base.update(over)
     meta = RunMeta(**base)
@@ -95,8 +95,11 @@ def test_open_creates_layout_in_wal_mode(tmp_path: Path) -> None:
         assert s.path == (tmp_path / "proj").resolve()
         db = sqlite3.connect(s.path / "runs.sqlite")
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        assert db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == ("1",)
-        assert db.execute("SELECT version, name FROM migrations").fetchall() == [(1, "initial")]
+        assert db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == ("2",)
+        assert db.execute("SELECT version, name FROM migrations").fetchall() == [
+            (1, "initial"),
+            (2, "obb_task"),
+        ]
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {"run_meta", "repro", "artifact", "metric_files", "meta", "migrations"} <= tables
         db.close()
@@ -132,9 +135,9 @@ def test_newer_schema_version_is_refused(tmp_path: Path) -> None:
     db.close()
     with pytest.raises(StoreVersionError) as exc:
         open_store("p", tmp_path)
-    assert (exc.value.store_version, exc.value.library_version) == (99, 1)
+    assert (exc.value.store_version, exc.value.library_version) == (99, SCHEMA_VERSION)
     assert exc.value.event == "store_version_unsupported"
-    assert exc.value.log_fields() == {"store_version": 99, "library_version": 1}
+    assert exc.value.log_fields() == {"store_version": 99, "library_version": SCHEMA_VERSION}
 
 
 def test_forward_migration_backs_up_then_applies(tmp_path: Path) -> None:
@@ -142,18 +145,19 @@ def test_forward_migration_backs_up_then_applies(tmp_path: Path) -> None:
 
     open_store("p", tmp_path).close()
 
-    second = ModuleType("0002_extra")
-    second.VERSION = 2  # type: ignore[attr-defined]
+    nxt = SCHEMA_VERSION + 1
+    second = ModuleType("000N_extra")
+    second.VERSION = nxt  # type: ignore[attr-defined]
     second.NAME = "extra"  # type: ignore[attr-defined]
     second.upgrade = lambda conn: conn.execute("CREATE TABLE extra (x INTEGER)")  # type: ignore[attr-defined]
-    available = [*migrations.discover(), migrations.Migration(2, "extra", second.upgrade)]  # type: ignore[attr-defined]
+    available = [*migrations.discover(), migrations.Migration(nxt, "extra", second.upgrade)]  # type: ignore[attr-defined]
 
     s = LocalRunStore.open("p", tmp_path, migrations=available)
     try:
-        assert (tmp_path / "p" / "runs.sqlite.bak-1").exists()
-        assert s.schema_version == 2
+        assert (tmp_path / "p" / f"runs.sqlite.bak-{SCHEMA_VERSION}").exists()
+        assert s.schema_version == nxt
         names = [r[0] for r in s._conn.execute("SELECT name FROM migrations ORDER BY version")]
-        assert names == ["initial", "extra"]
+        assert names == ["initial", "obb_task", "extra"]
         s._conn.execute("SELECT * FROM extra")
     finally:
         s.close()
@@ -168,17 +172,17 @@ def test_failed_migration_rolls_back(tmp_path: Path) -> None:
         conn.execute("CREATE TABLE half (x INTEGER)")
         raise RuntimeError("boom")
 
-    available = [*migrations.discover(), migrations.Migration(2, "bad", boom)]
-    with pytest.raises(StoreError, match="migration 2"):
+    nxt = SCHEMA_VERSION + 1
+    available = [*migrations.discover(), migrations.Migration(nxt, "bad", boom)]
+    with pytest.raises(StoreError, match=f"migration {nxt}"):
         LocalRunStore.open("p", tmp_path, migrations=available)
     s = open_store("p", tmp_path)
-    assert s.schema_version == 1
+    assert s.schema_version == SCHEMA_VERSION
     assert not s._conn.execute("SELECT 1 FROM sqlite_master WHERE name='half'").fetchall()
     s.close()
 
 
 def test_library_schema_constant_matches_latest_migration() -> None:
-    from cvpilot.core.schema import SCHEMA_VERSION
     from cvpilot.store import migrations
 
     assert max(m.version for m in migrations.discover()) == SCHEMA_VERSION
@@ -262,7 +266,7 @@ def test_resumed_run_requires_existing_parent(store: LocalRunStore, run: RunMeta
 
 
 def test_put_run_rejects_foreign_schema_version(store: LocalRunStore) -> None:
-    meta, repro = make_run(schema_version=2)
+    meta, repro = make_run(schema_version=SCHEMA_VERSION + 1)
     with pytest.raises(StoreError, match="schema_version"):
         store.put_run(meta, repro)
 

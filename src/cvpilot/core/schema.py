@@ -33,10 +33,21 @@ from cvpilot.core.uri import parse_remote_uri
 if TYPE_CHECKING:
     import numpy as np
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+"""The store schema this library writes: the latest migration in ``store/migrations``."""
 
 RunStatus = Literal["running", "resumed", "finished", "failed", "preempted"]
-Task = Literal["detection", "classification"]
+Task = Literal["detection", "classification", "obb"]
+"""``obb``: oriented bounding boxes (four corners), evaluated like detection (ADR-0013)."""
+IouType = Literal["box", "polygon", "probiou"]
+"""How detections and boxes are overlapped: ``box`` (axis-aligned, detection and
+classification), ``polygon`` (exact polygon IoU) or ``probiou`` (probabilistic IoU) for ``obb``."""
+IOU_TYPES: dict[str, tuple[str, ...]] = {
+    "detection": ("box",),
+    "classification": ("box",),
+    "obb": ("polygon", "probiou"),
+}
+"""The IoU types each task accepts; the first is the default."""
 ArtifactKind = Literal[
     "checkpoint", "report", "predictions", "confusion", "config", "env", "image", "diff"
 ]
@@ -96,6 +107,27 @@ def _utc(value: datetime) -> datetime:
 def _no_control_chars(value: str, what: str) -> str:
     if not value or any(ord(c) < 32 or ord(c) == 127 for c in value):
         raise ValueError(f"{what} must be non-empty and contain no control characters")
+    return value
+
+
+DATASET_HASH_FORMS = ('"dcp:<version>"', '"merkle:<hex>"', '"sha256:<64 hex>"')
+
+
+def check_dataset_hash(value: str) -> str:
+    """``value`` when it is a dataset identity CV-Pilot accepts, else ``ValueError``.
+
+    ``dcp:<version>`` (a DataCopilot manifest), ``merkle:<hex>`` (CV-Pilot hashed the folder) or
+    ``sha256:<64 lower-case hex>``: the SHA-256 of a manifest file hashed by another tool (for
+    example a dataset registry that names the dataset ``<name>@<version>`` in ``dataset_uri``).
+    """
+    prefix, _, rest = value.partition(":")
+    ok = (prefix in ("dcp", "merkle") and bool(rest)) or (
+        prefix == "sha256" and _SHA256.fullmatch(rest) is not None
+    )
+    if not ok:
+        raise ValueError(
+            f"must be {', '.join(DATASET_HASH_FORMS[:-1])} or {DATASET_HASH_FORMS[-1]}"
+        )
     return value
 
 
@@ -198,10 +230,7 @@ class Repro(_Model):
     @field_validator("dataset_hash")
     @classmethod
     def _dataset_hash(cls, value: str) -> str:
-        prefix, _, rest = value.partition(":")
-        if prefix not in ("dcp", "merkle") or not rest:
-            raise ValueError('must be "dcp:<version>" or "merkle:<hex>"')
-        return value
+        return check_dataset_hash(value)
 
     @field_validator("config", mode="before")
     @classmethod
@@ -330,6 +359,8 @@ class EvalParams(_Model):
     confusion_iou: float = Field(gt=0.0, le=1.0)
     confusion_score: float = Field(ge=0.0, le=1.0)
     max_dets: StrictInt = Field(default=100, ge=1, le=10_000)
+    iou_type: IouType = "box"
+    """Snapshots written before oriented boxes existed have none and read as ``box``."""
 
     @field_validator("iou_thresholds")
     @classmethod
@@ -454,6 +485,8 @@ class EvalSnapshot(_Model):
             raise ValueError("bootstrap is set exactly when ci is non-empty")
         if bool(self.ci) != (self.ci_status == "computed"):
             raise ValueError('ci_status is "computed" exactly when ci is non-empty')
+        if self.params is not None and self.params.iou_type not in IOU_TYPES[self.task]:
+            raise ValueError(f"iou_type {self.params.iou_type!r} does not apply to {self.task}")
         if len(self.slice_spec) > MAX_SLICE_ENTRIES:
             raise ValueError("too many slice_spec entries")
         for key, column in self.slice_spec.items():
@@ -645,10 +678,9 @@ class CheckpointManifest(_Model):
     @field_validator("dataset_hash")
     @classmethod
     def _dataset_hash(cls, value: str) -> str:
-        prefix, _, rest = value.partition(":")
-        if prefix not in ("dcp", "merkle") or not rest or len(value) > 200:
-            raise ValueError('must be "dcp:<version>" or "merkle:<hex>"')
-        return value
+        if len(value) > 200:
+            raise ValueError("dataset_hash is longer than 200 characters")
+        return check_dataset_hash(value)
 
     @field_validator("uri")
     @classmethod

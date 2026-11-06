@@ -185,7 +185,8 @@ def eval_set_hash(
     """Content hash of an evaluation set (ground truth and class list only).
 
     SHA-256 of the canonical JSON ``{"class_names": [...], "images": [[image_id, width, height,
-    [[cls, x1, y1, x2, y2, iscrowd], ...]], ...]}``: images in canonical id order,
+    [[cls, x1, y1, x2, y2, iscrowd], ...]], ...]}`` (oriented boxes carry their eight corner
+    coordinates in canonical corner order instead of four): images in canonical id order,
     annotations sorted lexicographically, coordinates rounded to two decimals, separators
     ``(",", ":")``, UTF-8.
     File paths and timestamps never enter it, so two machines evaluating the same set agree.
@@ -199,9 +200,8 @@ def eval_set_hash(
 
     n = len(image_ids)
     rounded = np.round(ann_boxes, 2) + 0.0  # + 0.0 turns -0.0 into 0.0
-    order = np.lexsort(
-        (ann_crowd, rounded[:, 3], rounded[:, 2], rounded[:, 1], rounded[:, 0], ann_cls, ann_image)
-    )
+    columns = [rounded[:, j] for j in reversed(range(rounded.shape[1]))]
+    order = np.lexsort((ann_crowd, *columns, ann_cls, ann_image))
     image_s, cls_s, box_s, crowd_s = (
         ann_image[order],
         ann_cls[order],

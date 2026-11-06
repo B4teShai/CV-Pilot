@@ -525,3 +525,49 @@ def test_cli_events_keep_the_per_invocation_request_id_and_name_the_run(
     assert main(monkeypatch, *eval_args(files, rid, "--resamples", "0")) == 0
     done = next(e for e in events(capsys.readouterr().err) if e["message"] == "eval_completed")
     assert done["run_id"] == rid and not done["request_id"].startswith(rid)  # a UUID
+
+
+def write_obb(tmp_path: Path) -> None:
+    """Two rotated boxes on one 200 x 200 image, an empty image; predictions hit both."""
+    from cvpilot.core.obb import xywhr_to_corners
+
+    boxes = xywhr_to_corners(np.array([[60, 60, 50, 20, 0.5], [140, 130, 40, 30, 2.0]]))
+    gts: dict[str, Any] = {
+        "image_id": ["i1", "i1", "i2"],
+        "cls": pa.array([0, 1, None], type=pa.int64()),
+        "width": [200, 200, 200],
+        "height": [200, 200, 200],
+    }
+    preds: dict[str, Any] = {"image_id": ["i1", "i1"], "cls": [0, 1], "score": [0.9, 0.8]}
+    for i, name in enumerate(("x1", "y1", "x2", "y2", "x3", "y3", "x4", "y4")):
+        gts[name] = pa.array([*boxes[:, i].tolist(), None])
+        preds[name] = boxes[:, (i + 2) % 8].tolist()  # starts at the second corner
+    pq.write_table(pa.table(gts), tmp_path / "g.parquet")
+    pq.write_table(pa.table(preds), tmp_path / "p.parquet")
+    classes(tmp_path / "c.txt")
+
+
+def test_obb_eval_with_each_iou_type(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    write_obb(tmp_path)
+    rid = new_run("obb")
+    capsys.readouterr()
+    assert main(monkeypatch, *eval_args(tmp_path, rid, "--resamples", "0")) == 0
+    out = capsys.readouterr().out
+    assert "mAP50_95: 1.0000" in out and "iou_type: polygon" in out
+    args = eval_args(tmp_path, rid, "--resamples", "0", "--step", "1", "--iou-type", "probiou")
+    assert main(monkeypatch, *args, "--json") == 0
+    snap = json.loads(capsys.readouterr().out)
+    assert snap["task"] == "obb" and snap["params"]["iou_type"] == "probiou"
+    assert snap["metrics"]["mAP50"] == pytest.approx(1.0)
+
+
+def test_iou_type_on_a_detection_run_is_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], files: Path
+) -> None:
+    rid = new_run()
+    capsys.readouterr()
+    assert main(monkeypatch, *eval_args(files, rid, "--iou-type", "polygon")) == 1
+    assert "does not apply to task detection" in human(capsys.readouterr().err)
+    assert main(monkeypatch, *eval_args(files, rid, "--iou-type", "box")) == 2

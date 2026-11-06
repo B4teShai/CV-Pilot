@@ -34,7 +34,7 @@ from cvpilot.core.schema import (
 )
 from cvpilot.eval import bootstrap as bs
 from cvpilot.eval import tables as t
-from cvpilot.eval.engine import EvalResult, eval_set_hash, evaluate
+from cvpilot.eval.engine import EvalResult, eval_set_hash, evaluate, resolve_iou_type
 from cvpilot.registry import tables as table_registry
 
 Emit = Callable[..., None]
@@ -69,9 +69,8 @@ def _prediction_columns(preds: t.PredictionTable, task: str) -> dict[str, np.nda
         "cls": preds.class_id,
         "score": preds.score,
     }
-    if task == "detection":
-        for i, name in enumerate(t.BOX_COLUMNS):
-            columns[name] = preds.boxes[:, i]
+    for i, name in enumerate(t.box_columns(task)):
+        columns[name] = preds.boxes[:, i]
     return columns
 
 
@@ -101,8 +100,12 @@ def record_eval(
     io: TableIO | None = None,
     allow_closed: bool = False,
     provenance: Mapping[str, str | None] | None = None,
+    iou_type: str | None = None,
 ) -> EvalSnapshot:
     """Evaluate ``preds`` against ``gts`` for the run ``meta`` and store the result.
+
+    ``iou_type`` applies to ``obb`` runs (``"polygon"``, the default, or ``"probiou"``); see
+    ``cvpilot.eval.engine.evaluate``.
 
     Raises:
         RunClosedError: the run is finished, failed or preempted and ``allow_closed`` is false.
@@ -119,6 +122,7 @@ def record_eval(
     if provenance:
         Provenance.model_validate(dict(provenance))  # fail before any work
     step = _check_step(step)
+    resolve_iou_type(meta.task, iou_type)  # fail before any work
     names = list(class_names) if class_names is not None else default_class_names(gts)
     digest = eval_set_hash(gts, names, task=meta.task)
     if store.has_snapshot(meta.run_id, digest, step):
@@ -136,6 +140,7 @@ def record_eval(
         seed=seed,
         level=level,
         workers=workers,
+        iou_type=iou_type,
     )
     snapshot = _store_result(store, meta, result, preds, step, io, provenance)
     if emit is not None:
@@ -144,6 +149,7 @@ def record_eval(
             "eval_completed",
             step=step,
             task=meta.task,
+            iou_type=None if snapshot.params is None else snapshot.params.iou_type,
             eval_set_hash=snapshot.eval_set_hash,
             n_images=snapshot.n_images,
             n_classes=len(names),

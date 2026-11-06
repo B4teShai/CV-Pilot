@@ -8,8 +8,9 @@ there); two intervals that do not overlap are a conservative sign of a real chan
 intervals are not proof of none.
 
 Snapshots are comparable only when ``eval_set_hash``, ``task``, ``class_names`` (order included)
-and the evaluation parameters are equal; anything else raises ``CompareRefusedError`` and no
-result exists. Missing parameters count as different: what cannot be checked is not comparable.
+and the evaluation parameters (IoU type included: polygon and probabilistic IoU of oriented boxes
+measure different things) are equal; anything else raises ``CompareRefusedError`` and no result
+exists. Missing parameters count as different: what cannot be checked is not comparable.
 """
 
 from __future__ import annotations
@@ -160,6 +161,7 @@ def _same_params(a: EvalParams, b: EvalParams) -> bool:
         and close(a.confusion_iou, b.confusion_iou)
         and close(a.confusion_score, b.confusion_score)
         and a.max_dets == b.max_dets
+        and a.iou_type == b.iou_type
     )
 
 
@@ -189,6 +191,15 @@ def check_comparable(candidate: EvalSnapshot, baseline: EvalSnapshot) -> None:
         raise _refuse(
             "params_missing",
             "a snapshot has no recorded evaluation parameters, so it cannot be compared",
+            candidate,
+            baseline,
+        )
+    if candidate.params.iou_type != baseline.params.iou_type:
+        raise _refuse(
+            "iou_type",
+            "IoU definitions differ: candidate "
+            f"{candidate.params.iou_type} vs baseline {baseline.params.iou_type}; evaluate both "
+            "with the same --iou-type",
             candidate,
             baseline,
         )

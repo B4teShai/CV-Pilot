@@ -71,6 +71,11 @@ class Run:
     def status(self) -> str:
         return self._handle.status
 
+    @property
+    def task(self) -> str:
+        """The run's task: ``"detection"``, ``"obb"`` or ``"classification"``."""
+        return self._handle.meta.task
+
     def log(self, points: Mapping[str, float], *, step: int, epoch: int | None = None) -> None:
         """Buffer scalar metrics at ``step``; see :meth:`cvpilot.runs.RunHandle.log`."""
         self._handle.log(points, step=step, epoch=epoch)
@@ -93,12 +98,14 @@ class Run:
         seed: int = 0,
         level: float = 0.95,
         provenance: Mapping[str, str | None] | None = None,
+        iou_type: str | None = None,
     ) -> EvalSnapshot:
         """Evaluate predictions against ground truth and store an immutable snapshot.
 
         Args:
             preds, gts: ``cvpilot.eval.PredictionTable`` and ``AnnotationTable``; the run's
-                task decides between detection and top-1 classification.
+                task decides between detection, oriented boxes (``obb``, four corners per
+                box) and top-1 classification.
             step: the training step the predictions come from.
             class_names: names by class id; when omitted, ``["0", "1", ...]`` up to the largest
                 ground-truth class id (predictions with a higher id are rejected).
@@ -106,6 +113,9 @@ class Run:
             n_resamples, seed, level: bootstrap intervals over images (``0`` turns them off).
             provenance: optional ``{"checkpoint_sha256": ..., "git_commit": ...}`` stored in
                 the snapshot.
+            iou_type: for ``obb`` runs, ``"polygon"`` (exact polygon IoU, the default) or
+                ``"probiou"`` (the probabilistic IoU the YOLO-OBB validator matches with).
+                Snapshots with different IoU types are never compared.
 
         Raises:
             EvalInputError: the inputs fail validation.
@@ -122,6 +132,7 @@ class Run:
             seed=seed,
             level=level,
             provenance=provenance,
+            iou_type=iou_type,
         )
 
     def finish(self, status: Literal["finished", "failed", "preempted"] = "finished") -> None:
@@ -160,6 +171,7 @@ def init(
     name: str | None = None,
     config: Mapping[str, Any] | None = None,
     dataset_uri: str | Path | None = None,
+    dataset_hash: str | None = None,
     seed: int | None = None,
     framework: str | None = None,
     resume_from: str | None = None,
@@ -172,9 +184,13 @@ def init(
     Args:
         project: store directory name, ``[a-z0-9][a-z0-9_-]{0,63}``; defaults to
             ``CVPILOT_PROJECT``.
-        task: ``"detection"`` or ``"classification"``.
+        task: ``"detection"``, ``"obb"`` (oriented boxes) or ``"classification"``.
         config: resolved training config; secrets are redacted by key before storage.
-        dataset_uri: local dataset directory hashed into ``Repro.dataset_hash``.
+        dataset_uri: local dataset directory hashed into ``Repro.dataset_hash``; with
+            ``dataset_hash`` it only names the dataset (``fridge-sku@1.4.0``, a URL) and is
+            recorded as given.
+        dataset_hash: ``"sha256:<64 hex>"`` of a dataset manifest hashed by another tool (a
+            dataset registry); the dataset is then not hashed by CV-Pilot.
         framework: ``"<name>==<version>"``; defaults to the running Python.
         resume_from: run id of a ``preempted`` or ``failed`` run to continue.
         store_dir: overrides ``CVPILOT_STORE_DIR`` (default ``~/.cvpilot``).
@@ -192,6 +208,7 @@ def init(
         RunAlreadyActiveError: another run of this process is still active.
         InvalidResumeError, RunNotFoundError: ``resume_from`` cannot be resumed or is unknown.
         FileNotFoundError, NotADirectoryError: ``dataset_uri`` is unusable.
+        ValueError: ``dataset_hash`` is not ``sha256:<hex>`` or ``dataset_uri`` cannot name it.
         StoreError: the store cannot be created or written.
         UnknownPluginError, MissingExtraError: a forwarder or channel is not registered or its
             extra is missing (raised before any run is created).
@@ -234,6 +251,7 @@ def init(
             config,
             seed,
             store_command_line=settings.store_command_line,
+            dataset_hash=dataset_hash,
         )
         framework = framework or f"python=={platform.python_version()}"
         started = datetime.now(timezone.utc)
@@ -440,6 +458,7 @@ def log_eval(
     seed: int = 0,
     level: float = 0.95,
     provenance: Mapping[str, str | None] | None = None,
+    iou_type: str | None = None,
 ) -> EvalSnapshot:
     """Evaluate and store a snapshot on the active run; see :meth:`Run.log_eval`."""
     return _require_active().log_eval(
@@ -452,6 +471,7 @@ def log_eval(
         seed=seed,
         level=level,
         provenance=provenance,
+        iou_type=iou_type,
     )
 
 

@@ -1,8 +1,9 @@
 """Evaluate Parquet files into an existing run (``cvpilot eval``).
 
-Predictions: ``image_id, cls, score`` and, for detection, ``x1, y1, x2, y2``.
+Predictions: ``image_id, cls, score`` and, for detection, ``x1, y1, x2, y2``; for oriented boxes
+(task ``obb``) the four corners ``x1, y1, x2, y2, x3, y3, x4, y4`` in pixels.
 
-Ground truth: ``image_id, cls`` and, for detection, ``x1, y1, x2, y2``; optional ``iscrowd``,
+Ground truth: ``image_id, cls`` and the same box columns; optional ``iscrowd`` (not for obb),
 ``width`` and ``height`` (constant per image) and any metadata columns named by ``--slices``. A
 row whose ``cls`` is null describes an image without objects (its boxes are null too), so empty
 images take part in the evaluation without a separate image list. Files and class lists are
@@ -87,7 +88,7 @@ def _integral(values: Array, what: str) -> Array:
 
 def load_predictions(path: Path, task: Task, io: TableIO) -> t.PredictionTable:
     """Read a predictions file into a table (bounded, validated on use)."""
-    boxes = list(t.BOX_COLUMNS) if task == "detection" else []
+    boxes = list(t.box_columns(task))
     cols = io.read_columns(
         path,
         required=["image_id", "cls", "score", *boxes],
@@ -110,7 +111,7 @@ def load_ground_truth(
     path: Path, task: Task, io: TableIO, slice_columns: Mapping[str, str] | None = None
 ) -> t.AnnotationTable:
     """Read a ground-truth file; rows with a null ``cls`` declare images without objects."""
-    boxes = list(t.BOX_COLUMNS) if task == "detection" else []
+    boxes = list(t.box_columns(task))
     meta_names = sorted({c.removeprefix("meta.") for c in (slice_columns or {}).values()})
     cols = io.read_columns(
         path,
@@ -165,6 +166,7 @@ def eval_file(
     seed: int = 0,
     level: float = 0.95,
     store_dir: Path | None = None,
+    iou_type: str | None = None,
 ) -> EvalSnapshot:
     """Evaluate two Parquet files into ``run_id`` and store the snapshot (``eval_completed``).
 
@@ -199,6 +201,7 @@ def eval_file(
             io=io,
             allow_closed=allow_closed,
             provenance=provenance,
+            iou_type=iou_type,
         )
     finally:
         store.close()

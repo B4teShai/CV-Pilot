@@ -16,6 +16,13 @@ so the hook sees no epoch; ``hook_no_epochs`` says so. The trainer is read throu
 ``TrainerView`` only: ``epoch``, ``metrics``, ``label_loss_items``/``tloss`` and
 ``validator.names`` / ``validator.metrics.box.maps``. Every value is converted defensively;
 callbacks never raise into the trainer (see ``cvpilot.hooks``).
+
+Oriented-box models (the framework's ``obb`` task) report the same scalar names and per-class
+``maps`` as detection models, so they are logged the same way. The hook records scalars only,
+never an evaluation snapshot: snapshots come from ``log_eval`` or ``cvpilot eval`` with exported
+predictions. ``attach`` refuses a model whose task contradicts the run's (an ``obb`` model in a
+``detection`` run, for example), so the snapshots later evaluated into that run use the right
+task.
 """
 
 from __future__ import annotations
@@ -51,6 +58,14 @@ LICENSE_NOTICE = (
 )
 EVENTS = ("on_fit_epoch_end", "on_val_end", "on_train_end")
 MAX_CLASSES = 2048
+MODEL_TASKS = {"detect": "detection", "obb": "obb", "classify": "classification"}
+"""The framework's task names that map to a CV-Pilot task (segment and pose map to none)."""
+
+
+def run_task_for(model: object) -> str | None:
+    """The CV-Pilot task of a framework model, from its ``task`` attribute; None when unknown."""
+    task = getattr(model, "task", None)
+    return MODEL_TASKS.get(task) if isinstance(task, str) else None
 
 
 class TrainerView:
@@ -178,6 +193,12 @@ class YoloHook:
         add = getattr(target, "add_callback", None)
         if not callable(add):
             raise HookAttachError("the model has no add_callback method")
+        model_task, run_task = run_task_for(target), getattr(sink, "task", None)
+        if model_task is not None and isinstance(run_task, str) and model_task != run_task:
+            raise HookAttachError(
+                f"the model's task is {model_task} but the run's task is {run_task}; "
+                f"start the run with task={model_task!r}"
+            )
         core = YoloCore(sink)
         handlers = {
             "on_fit_epoch_end": core.epoch_end,

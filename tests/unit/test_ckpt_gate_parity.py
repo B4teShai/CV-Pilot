@@ -211,6 +211,7 @@ MODULE_FUNCTIONS = {
     "cvpilot.hooks.lightning.resume_arguments": "a path from resume_path, then framework_file",
     "cvpilot.hooks.lightning.build_classes": "builds callbacks",
     f"cvpilot.hooks.{FW}.resume_arguments": "a path from resume_path, then framework_file",
+    f"cvpilot.hooks.{FW}.run_task_for": "reads the model's task name; no checkpoint state",
     "cvpilot.store.checkpoints.*": "the run store's record of manifests: evidence for the gate",
 }
 MODULES = (

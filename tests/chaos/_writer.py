@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cvpilot.core.hashing import new_run_id
-from cvpilot.core.schema import MetricPoint, Repro, RunMeta
+from cvpilot.core.schema import SCHEMA_VERSION, MetricPoint, Repro, RunMeta
 from cvpilot.store.local import open_store
 
 BATCH = 2000
@@ -23,7 +23,7 @@ def main(root: str) -> None:
         framework="python==3.12.1",
         host="h",
         started_at=datetime.now(timezone.utc),
-        schema_version=1,
+        schema_version=SCHEMA_VERSION,
     )
     repro = Repro(
         run_id=rid,

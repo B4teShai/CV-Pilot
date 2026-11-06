@@ -7,7 +7,9 @@ box bounds, id and class ranges, matching image sets, bounded counts) run in
 ``cvpilot.eval.validate`` so a table can be built cheaply and rejected with a precise message.
 
 Image ids are strings (integer ids are converted). Class ids are integers indexing
-``class_names``. Boxes are ``x1, y1, x2, y2`` in pixels.
+``class_names``. Boxes are ``x1, y1, x2, y2`` in pixels for detection, and four corners
+``x1, y1, x2, y2, x3, y3, x4, y4`` in pixels for oriented boxes (task ``obb``; see
+``cvpilot.core.obb`` to convert from ``xywhr``).
 """
 
 from __future__ import annotations
@@ -26,6 +28,14 @@ from cvpilot.core.metrics import F64, I64, BoolArray
 StrArray = npt.NDArray[np.str_]
 
 BOX_COLUMNS = ("x1", "y1", "x2", "y2")
+OBB_COLUMNS = ("x1", "y1", "x2", "y2", "x3", "y3", "x4", "y4")
+BOX_WIDTHS = (len(BOX_COLUMNS), len(OBB_COLUMNS))
+
+
+def box_columns(task: str) -> tuple[str, ...]:
+    """The box columns of a task's tables: none for classification."""
+    return {"detection": BOX_COLUMNS, "obb": OBB_COLUMNS}.get(task, ())
+
 
 MAX_IMAGES = 1_000_000
 """Most images in one evaluation set."""
@@ -168,11 +178,16 @@ def has_column(source: object, name: str) -> bool:
 def _boxes(source: object | None, n: int, what: str) -> F64:
     if source is None:
         return np.zeros((n, 4), dtype=np.float64)
-    return as_floats(source, what, width=4)
+    arr = _to_array(source, what)
+    width = arr.shape[1] if arr.ndim == 2 and arr.shape[1] in BOX_WIDTHS else 4
+    return as_floats(arr, what, width=width)
 
 
-def _box_columns(source: object) -> F64:
-    return np.column_stack([as_floats(column(source, c), c) for c in BOX_COLUMNS])
+def _box_columns(source: object, task: str) -> F64 | None:
+    names = box_columns(task)
+    if not names:
+        return None
+    return np.column_stack([as_floats(column(source, c), c) for c in names])
 
 
 def _check_lengths(n: int, **arrays: np.ndarray[Any, Any]) -> None:
@@ -222,7 +237,7 @@ class PredictionTable:
     image_id: StrArray
     class_id: I64
     score: F64
-    boxes: F64  # (N, 4); zeros for classification
+    boxes: F64  # (N, 4), (N, 8) corners for obb; zeros for classification
 
     @classmethod
     def from_columns(
@@ -238,8 +253,9 @@ class PredictionTable:
 
     @classmethod
     def from_table(cls, source: object, *, task: str = "detection") -> PredictionTable:
-        """Columns ``image_id, cls, score`` and, for detection, ``x1, y1, x2, y2``."""
-        boxes = _box_columns(source) if task == "detection" else None
+        """Columns ``image_id, cls, score`` and, for detection, ``x1, y1, x2, y2`` (for obb,
+        ``x1, y1, ..., x4, y4``)."""
+        boxes = _box_columns(source, task)
         return cls.from_columns(
             image_id=column(source, "image_id"),
             class_id=column(source, "cls"),
@@ -286,8 +302,9 @@ class AnnotationTable:
     def from_table(
         cls, source: object, *, images: ImageTable | None = None, task: str = "detection"
     ) -> AnnotationTable:
-        """Columns ``image_id, cls``, for detection ``x1..y2`` and optionally ``iscrowd``."""
-        boxes = _box_columns(source) if task == "detection" else None
+        """Columns ``image_id, cls``, for detection ``x1..y2`` (for obb ``x1..y4``) and
+        optionally ``iscrowd``."""
+        boxes = _box_columns(source, task)
         crowd = column(source, "iscrowd") if has_column(source, "iscrowd") else None
         return cls.from_columns(
             image_id=column(source, "image_id"),

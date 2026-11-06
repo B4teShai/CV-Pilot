@@ -48,6 +48,7 @@ Evaluate Parquet files into a run and store an immutable snapshot.
 | `--allow-closed` | flag |  | Allow finished, failed or preempted runs. |
 | `--checkpoint-sha256` | str |  | SHA-256 of the checkpoint. |
 | `--git-commit` | str |  | Commit of the code. |
+| `--iou-type` | one of `polygon`, `probiou` |  | Oriented boxes (task obb): polygon IoU (default) or probiou. |
 | `--json` | flag |  | Print JSON instead of text. |
 
 ## `cvpilot compare`

@@ -42,6 +42,7 @@ cvpilot/core/errors.py
 cvpilot/core/hashing.py
 cvpilot/core/jsonable.py
 cvpilot/core/metrics.py
+cvpilot/core/obb.py
 cvpilot/core/redact.py
 cvpilot/core/schema.py
 cvpilot/core/text.py
@@ -96,6 +97,7 @@ cvpilot/store/baselines.py
 cvpilot/store/checkpoints.py
 cvpilot/store/local.py
 cvpilot/store/migrations/0001_initial.py
+cvpilot/store/migrations/0002_obb_task.py
 cvpilot/store/migrations/__init__.py
 cvpilot/store/paths.py
 cvpilot/store/snapshots.py

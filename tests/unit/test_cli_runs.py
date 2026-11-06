@@ -11,6 +11,7 @@ import structlog
 from cvpilot import api, runs
 from cvpilot.cli import app as cli
 from cvpilot.core.hashing import new_run_id
+from cvpilot.core.schema import SCHEMA_VERSION
 from cvpilot.logging import clear_request_context
 
 REQUIRED = {"@timestamp", "level", "message", "service", "env", "request_id", "logger"}
@@ -235,7 +236,7 @@ def test_store_from_a_newer_library_exits_1_with_the_store_event(
     _, err = capsys.readouterr()
     (rec,) = logs(err)
     assert rec["message"] == "store_version_unsupported"
-    assert (rec["store_version"], rec["library_version"]) == (99, 1)
+    assert (rec["store_version"], rec["library_version"]) == (99, SCHEMA_VERSION)
 
 
 # --- repro ---------------------------------------------------------------------------

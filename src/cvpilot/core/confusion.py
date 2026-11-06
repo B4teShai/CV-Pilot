@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cvpilot.core.metrics import F64, I64, BoolArray, iou_matrix
+from cvpilot.core.metrics import AXIS_ALIGNED, F64, I64, BoolArray, BoxGeometry
 
 CONFUSION_MAX_DETS = 300
 """Detections per image that take part in the confusion matrix (highest scores first)."""
@@ -31,25 +31,26 @@ def _split(sorted_image: I64, n_images: int) -> I64:
 
 
 def _candidates(
-    dets: F64, gts: F64, crowd: BoolArray, iou: float
+    dets: F64, gts: F64, crowd: BoolArray, iou: float, geometry: BoxGeometry = AXIS_ALIGNED
 ) -> tuple[I64, I64, F64, BoolArray]:
     """Best matching candidates (per detection, at most ``CONFUSION_CANDIDATES`` boxes).
 
     Returns detection indices, box indices and IoUs of pairs with IoU >= ``iou`` against
     regular boxes, and a mask of detections lying on a crowd region. The IoU matrix is
-    computed in blocks of at most ``CONFUSION_CELLS`` cells.
+    computed in blocks of at most ``CONFUSION_CELLS`` cells (fewer when the geometry's matching
+    budget is smaller).
     """
     n_det, k = dets.shape[0], CONFUSION_CANDIDATES
     best: F64 = np.zeros((n_det, k))
     best_idx: I64 = np.full((n_det, k), -1, dtype=np.int64)
     on_crowd = np.zeros(n_det, dtype=bool)
-    step = max(1, CONFUSION_CELLS // max(n_det, 1))
+    step = max(1, min(CONFUSION_CELLS, geometry.budget) // max(n_det, 1))
     for lo in range(0, gts.shape[0], step):
         block, flags = gts[lo : lo + step], crowd[lo : lo + step]
-        ious = iou_matrix(dets, block)
+        ious = geometry.grid(dets, block, np.zeros(block.shape[0], dtype=bool))
         ious[:, flags] = 0.0
         if flags.any():
-            ioa = iou_matrix(dets, block, flags)[:, flags]
+            ioa = geometry.grid(dets, block, flags)[:, flags]
             on_crowd |= (ioa >= iou).any(axis=1)
         ids = np.broadcast_to(np.arange(lo, lo + block.shape[0]), ious.shape)
         merged = np.concatenate([best, np.where(ious >= iou, ious, 0.0)], axis=1)
@@ -75,6 +76,7 @@ def confusion_matrix(
     iscrowd: BoolArray | None = None,
     iou: float = 0.5,
     score: float = 0.25,
+    geometry: BoxGeometry = AXIS_ALIGNED,
 ) -> I64:
     """``(C + 1, C + 1)`` detection confusion counts; see the module docstring.
 
@@ -112,7 +114,9 @@ def confusion_matrix(
         d_used = np.zeros(p1 - p0, dtype=bool)
         g_used = gcrowd.copy()  # crowd boxes never take part in one-to-one matching
         if p1 > p0 and g1 > g0:
-            di, gi, ious, on_crowd = _candidates(pred_boxes[p0:p1], gt_boxes[g0:g1], gcrowd, iou)
+            di, gi, ious, on_crowd = _candidates(
+                pred_boxes[p0:p1], gt_boxes[g0:g1], gcrowd, iou, geometry
+            )
             order = np.argsort(-ious, kind="stable")
             for d, g in zip(di[order].tolist(), gi[order].tolist(), strict=True):
                 if d_used[d] or g_used[g]:

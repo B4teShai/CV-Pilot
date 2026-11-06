@@ -35,6 +35,7 @@ from cvpilot.core.errors import (
 )
 from cvpilot.core.schema import (
     MAX_STEP,
+    SCHEMA_VERSION,
     Alert,
     Artifact,
     ArtifactKind,
@@ -314,10 +315,12 @@ class RunHandle:
         seed: int = 0,
         level: float = 0.95,
         provenance: Mapping[str, str | None] | None = None,
+        iou_type: str | None = None,
     ) -> EvalSnapshot:
         """Evaluate and store an immutable :class:`EvalSnapshot` keyed ``(run, set hash, step)``.
 
-        The run's task selects detection or classification. Buffered metric points are not
+        The run's task selects detection, oriented boxes (``iou_type`` ``"polygon"`` or
+        ``"probiou"``) or classification. Buffered metric points are not
         touched. See :func:`cvpilot.eval.record.record_eval` for the errors.
 
         Raises:
@@ -340,6 +343,7 @@ class RunHandle:
             level=level,
             emit=self.emit,
             provenance=provenance,
+            iou_type=iou_type,
         )
         if self._alerts is not None:
             self._alert(lambda alerts: alerts.on_eval(snapshot))
@@ -581,7 +585,7 @@ def resume_from(parent: RunMeta, *, run_id: str, host: str, name: str | None) ->
         framework=parent.framework,
         host=host,
         started_at=max(datetime.now(timezone.utc), parent.started_at),
-        schema_version=parent.schema_version,
+        schema_version=SCHEMA_VERSION,  # the row is written now, by this library
     )
 
 
